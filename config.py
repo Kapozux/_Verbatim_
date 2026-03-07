@@ -2,6 +2,7 @@ import os
 
 # Flask
 UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), 'uploads')
+RESULTS_FOLDER = os.path.join(os.path.dirname(__file__), 'results')
 MAX_CONTENT_LENGTH = 500 * 1024 * 1024  # 500 MB max upload
 AUDIO_EXTENSIONS = {'mp3', 'wav', 'flac', 'm4a', 'ogg', 'webm'}
 VIDEO_EXTENSIONS = {'mp4', 'mov', 'mkv', 'avi', 'm4v'}

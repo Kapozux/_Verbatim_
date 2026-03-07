@@ -8,85 +8,157 @@
 </head>
 <body>
     <div class="container">
-        <header>
-            <h1>🎙️ 音视频转文字</h1>
-            <p class="subtitle">上传音频或视频文件，自动提取音轨并转录为带时间戳的文字</p>
-        </header>
 
-        <form id="upload-form" enctype="multipart/form-data">
-            <div class="form-group">
-                <label for="audio-file" class="file-label">
-                    <span class="file-icon">📁</span>
-                    <span id="file-label-text">选择音频/视频文件</span>
-                    <span id="file-info" class="file-info"></span>
-                </label>
-                <input type="file" id="audio-file" name="audio"
-                       accept=".mp3,.wav,.flac,.m4a,.ogg,.webm,.mp4,.mov,.mkv,.avi,.m4v" required>
+        <!-- ===== Main View ===== -->
+        <div id="main-view">
+            <header>
+                <h1>🎙️ 音视频转文字</h1>
+                <p class="subtitle">上传音频或视频文件，自动提取音轨并转录为带时间戳的文字</p>
+            </header>
+
+            <form id="upload-form" enctype="multipart/form-data">
+                <div class="form-group">
+                    <div id="drop-zone" class="drop-zone">
+                        <label for="audio-file" class="file-label">
+                            <span class="file-icon">📁</span>
+                            <span id="file-label-text">选择或拖入音频/视频文件</span>
+                            <span id="file-info" class="file-info"></span>
+                        </label>
+                    </div>
+                    <input type="file" id="audio-file" name="audio"
+                           accept=".mp3,.wav,.flac,.m4a,.ogg,.webm,.mp4,.mov,.mkv,.avi,.m4v" required>
+                </div>
+
+                <div class="form-group">
+                    <label class="group-label">转写引擎</label>
+                    <div class="radio-group">
+                        <label class="radio-option">
+                            <input type="radio" name="engine" value="whisper" checked>
+                            <span class="radio-custom"></span>
+                            <span class="radio-label">
+                                <strong>Whisper</strong>
+                                <small>本地模型 · 免费 · 离线可用</small>
+                            </span>
+                        </label>
+                        <label class="radio-option">
+                            <input type="radio" name="engine" value="gemini">
+                            <span class="radio-custom"></span>
+                            <span class="radio-label">
+                                <strong>Gemini API</strong>
+                                <small>云端处理 · 需要 API Key</small>
+                            </span>
+                        </label>
+                    </div>
+                </div>
+
+                <button type="submit" id="submit-btn" class="btn-primary">
+                    开始转写
+                </button>
+            </form>
+
+            <div id="progress-section" class="hidden">
+                <div class="progress-bar">
+                    <div id="progress-fill" class="progress-fill"></div>
+                </div>
+                <p id="progress-text" class="progress-text">准备中...</p>
             </div>
 
-            <div class="form-group">
-                <label class="group-label">转写引擎</label>
-                <div class="radio-group">
-                    <label class="radio-option">
-                        <input type="radio" name="engine" value="whisper" checked>
-                        <span class="radio-custom"></span>
-                        <span class="radio-label">
-                            <strong>Whisper</strong>
-                            <small>本地模型 · 免费 · 离线可用</small>
-                        </span>
-                    </label>
-                    <label class="radio-option">
-                        <input type="radio" name="engine" value="gemini">
-                        <span class="radio-custom"></span>
-                        <span class="radio-label">
-                            <strong>Gemini API</strong>
-                            <small>云端处理 · 需要 API Key</small>
-                        </span>
-                    </label>
+            <div id="player-section" class="hidden">
+                <div class="player-card">
+                    <audio id="audio-player" controls></audio>
                 </div>
             </div>
 
-            <button type="submit" id="submit-btn" class="btn-primary">
-                开始转写
-            </button>
-        </form>
-
-        <div id="progress-section" class="hidden">
-            <div class="progress-bar">
-                <div id="progress-fill" class="progress-fill"></div>
-            </div>
-            <p id="progress-text" class="progress-text">准备中...</p>
-        </div>
-
-        <div id="summary-section" class="hidden">
-            <div class="summary-card">
-                <h2>内容总结</h2>
-                <div id="summary-overview" class="summary-overview"></div>
-                <div id="summary-sections" class="summary-sections"></div>
-            </div>
-        </div>
-
-        <div id="results-section" class="hidden">
-            <div class="results-header">
-                <h2>转写结果</h2>
-                <div class="results-actions">
-                    <button id="copy-btn" class="btn-secondary" title="复制文本">
-                        📋 复制
-                    </button>
-                    <button id="download-btn" class="btn-secondary" title="下载为TXT">
-                        💾 下载
-                    </button>
+            <div id="summary-section" class="hidden">
+                <div class="summary-card">
+                    <h2>内容总结</h2>
+                    <div id="summary-overview" class="summary-overview"></div>
+                    <div id="summary-sections" class="summary-sections"></div>
                 </div>
             </div>
-            <div id="segments-container" class="segments-container"></div>
-        </div>
 
-        <div id="error-section" class="hidden">
-            <div class="error-box">
-                <span class="error-icon">⚠️</span>
-                <span id="error-text"></span>
+            <div id="results-section" class="hidden">
+                <div class="results-header">
+                    <h2>转写结果</h2>
+                    <div class="results-actions">
+                        <button id="copy-btn" class="btn-secondary" title="复制文本">
+                            📋 复制
+                        </button>
+                        <button id="download-btn" class="btn-secondary" title="下载为TXT">
+                            💾 TXT
+                        </button>
+                        <button id="srt-btn" class="btn-secondary" title="下载字幕文件">
+                            🎬 SRT
+                        </button>
+                    </div>
+                </div>
+                <div id="segments-container" class="segments-container"></div>
+            </div>
+
+            <div id="error-section" class="hidden">
+                <div class="error-box">
+                    <span class="error-icon">⚠️</span>
+                    <span id="error-text"></span>
+                </div>
+            </div>
+
+            <div id="history-section">
+                <div class="history-card">
+                    <div class="history-header">
+                        <h2>历史记录</h2>
+                        <button id="clear-history-btn" class="btn-secondary btn-danger" title="清空历史">
+                            🗑️ 清空
+                        </button>
+                    </div>
+                    <div id="history-list" class="history-list">
+                        <p class="history-empty">暂无历史记录</p>
+                    </div>
+                </div>
             </div>
         </div>
+
+        <!-- ===== History Detail View ===== -->
+        <div id="detail-view" class="hidden">
+            <div class="detail-top-bar">
+                <button id="detail-back-btn" class="btn-secondary">← 返回</button>
+                <span id="detail-title" class="detail-title"></span>
+            </div>
+
+            <div id="detail-meta" class="detail-meta"></div>
+
+            <div id="detail-player-section" class="hidden">
+                <div class="player-card">
+                    <audio id="detail-audio-player" controls></audio>
+                </div>
+            </div>
+
+            <div id="detail-summary-section" class="hidden">
+                <div class="summary-card">
+                    <h2>内容总结</h2>
+                    <div id="detail-summary-overview" class="summary-overview"></div>
+                    <div id="detail-summary-sections" class="summary-sections"></div>
+                </div>
+            </div>
+
+            <div id="detail-results-section">
+                <div class="results-header">
+                    <h2>转写结果</h2>
+                    <div class="results-actions">
+                        <button id="detail-copy-btn" class="btn-secondary" title="复制文本">
+                            📋 复制
+                        </button>
+                        <button id="detail-download-btn" class="btn-secondary" title="下载为TXT">
+                            💾 TXT
+                        </button>
+                        <button id="detail-srt-btn" class="btn-secondary" title="下载字幕文件">
+                            🎬 SRT
+                        </button>
+                    </div>
+                </div>
+                <div id="detail-segments-container" class="segments-container"></div>
+            </div>
+        </div>
+
     </div>
 
     <script src="/static/app.js"></script>

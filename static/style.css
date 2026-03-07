@@ -60,9 +60,20 @@ form {
     margin-bottom: 12px;
 }
 
-/* File input */
+/* File input & Drag-drop */
 input[type="file"] {
     display: none;
+}
+
+.drop-zone {
+    border-radius: 10px;
+    transition: all 0.2s ease;
+}
+
+.drop-zone.drag-over .file-label {
+    border-color: #4a90d9;
+    background: #e8f0fe;
+    box-shadow: 0 0 0 3px rgba(74, 144, 217, 0.15);
 }
 
 .file-label {
@@ -214,6 +225,19 @@ input[type="file"] {
     background: #eee;
 }
 
+.btn-small {
+    padding: 5px 12px;
+    font-size: 13px;
+}
+
+.btn-danger {
+    color: #c62828;
+}
+
+.btn-danger:hover {
+    background: #fff0f0;
+}
+
 /* === Progress === */
 #progress-section {
     background: #fff;
@@ -244,6 +268,20 @@ input[type="file"] {
     font-size: 14px;
     color: #666;
     text-align: center;
+}
+
+/* === Audio Player === */
+.player-card {
+    background: #fff;
+    border-radius: 12px;
+    padding: 16px 20px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+    margin-bottom: 24px;
+}
+
+.player-card audio {
+    width: 100%;
+    border-radius: 8px;
 }
 
 /* === Summary === */
@@ -368,6 +406,24 @@ input[type="file"] {
     border-bottom: none;
 }
 
+.segment.active {
+    background: #f0f6ff;
+    border-radius: 8px;
+    padding: 10px 12px;
+    border-left: 3px solid #4a90d9;
+    margin-left: -12px;
+    padding-left: 12px;
+}
+
+.segment.active .segment-text {
+    color: #1a5fa8;
+}
+
+.segment.active .timestamp {
+    background: #4a90d9;
+    color: #fff;
+}
+
 .timestamp {
     font-family: "SF Mono", "Menlo", "Consolas", monospace;
     font-size: 13px;
@@ -380,11 +436,131 @@ input[type="file"] {
     font-weight: 500;
 }
 
+.timestamp.clickable {
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.timestamp.clickable:hover {
+    background: #4a90d9;
+    color: #fff;
+}
+
 .segment-text {
     flex: 1;
     font-size: 16px;
     line-height: 1.8;
     color: #333;
+}
+
+/* === History === */
+.history-card {
+    background: #fff;
+    border-radius: 12px;
+    padding: 24px 28px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+.history-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid #eee;
+}
+
+.history-header h2 {
+    font-size: 18px;
+    font-weight: 600;
+    color: #333;
+}
+
+.history-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+.history-empty {
+    text-align: center;
+    color: #aaa;
+    font-size: 14px;
+    padding: 20px 0;
+}
+
+.history-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 14px;
+    background: #fafbfc;
+    border-radius: 8px;
+    border: 1px solid #eef0f3;
+    transition: background 0.15s ease;
+}
+
+.history-item:hover {
+    background: #f0f6ff;
+}
+
+.history-item-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    flex: 1;
+}
+
+.history-item-name {
+    font-size: 14px;
+    font-weight: 500;
+    color: #333;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.history-item-meta {
+    font-size: 12px;
+    color: #999;
+}
+
+.history-item-actions {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+    margin-left: 12px;
+}
+
+/* === Detail View === */
+.detail-top-bar {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 20px;
+    padding: 16px 20px;
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+.detail-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: #333;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.detail-meta {
+    font-size: 13px;
+    color: #888;
+    margin-bottom: 16px;
+    padding: 0 4px;
 }
 
 /* === Error === */
@@ -415,7 +591,7 @@ input[type="file"] {
     to   { opacity: 1; transform: translateY(0); }
 }
 
-/* === Toast (copy feedback) === */
+/* === Toast === */
 .toast {
     position: fixed;
     bottom: 24px;
@@ -454,5 +630,15 @@ input[type="file"] {
         flex-direction: column;
         align-items: flex-start;
         gap: 12px;
+    }
+
+    .history-item {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+    }
+
+    .history-item-actions {
+        margin-left: 0;
     }
 }
