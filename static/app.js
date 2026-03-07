@@ -18,6 +18,10 @@ const progressText = document.getElementById('progress-text');
 const resultsSection = document.getElementById('results-section');
 const segmentsContainer = document.getElementById('segments-container');
 
+const summarySection = document.getElementById('summary-section');
+const summaryOverview = document.getElementById('summary-overview');
+const summarySections = document.getElementById('summary-sections');
+
 const errorSection = document.getElementById('error-section');
 const errorText = document.getElementById('error-text');
 
@@ -103,7 +107,14 @@ function connectSSE(taskId) {
                 appendSegment(msg);
                 break;
 
+            case 'summary':
+                renderSummary(msg);
+                break;
+
             case 'done':
+                if (msg.summary) {
+                    renderSummary(msg.summary);
+                }
                 updateProgress(100, '✅ 转写完成！');
                 submitBtn.disabled = false;
                 submitBtn.textContent = '开始转写';
@@ -158,11 +169,53 @@ function showError(message) {
     submitBtn.textContent = '开始转写';
 }
 
+function renderSummary(data) {
+    if (!data || !data.overview) return;
+
+    summarySection.classList.remove('hidden');
+    summaryOverview.textContent = data.overview;
+    summarySections.innerHTML = '';
+
+    if (data.sections && data.sections.length > 0) {
+        data.sections.forEach(sec => {
+            const block = document.createElement('div');
+            block.className = 'summary-section-item';
+
+            const header = document.createElement('div');
+            header.className = 'summary-section-header';
+
+            const title = document.createElement('span');
+            title.className = 'summary-section-title';
+            title.textContent = sec.title;
+
+            header.appendChild(title);
+
+            if (sec.time_range) {
+                const time = document.createElement('span');
+                time.className = 'summary-section-time';
+                time.textContent = sec.time_range;
+                header.appendChild(time);
+            }
+
+            const desc = document.createElement('p');
+            desc.className = 'summary-section-desc';
+            desc.textContent = sec.summary;
+
+            block.appendChild(header);
+            block.appendChild(desc);
+            summarySections.appendChild(block);
+        });
+    }
+}
+
 function resetUI() {
     errorSection.classList.add('hidden');
     resultsSection.classList.add('hidden');
+    summarySection.classList.add('hidden');
     progressSection.classList.add('hidden');
     segmentsContainer.innerHTML = '';
+    summaryOverview.textContent = '';
+    summarySections.innerHTML = '';
     progressFill.style.width = '0%';
     progressText.textContent = '准备中...';
 }

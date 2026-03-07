@@ -246,6 +246,81 @@ input[type="file"] {
     text-align: center;
 }
 
+/* === Summary === */
+#summary-section {
+    margin-bottom: 24px;
+}
+
+.summary-card {
+    background: #fff;
+    border-radius: 12px;
+    padding: 24px 28px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+    border-left: 4px solid #4a90d9;
+}
+
+.summary-card h2 {
+    font-size: 18px;
+    font-weight: 600;
+    color: #333;
+    margin-bottom: 16px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid #eee;
+}
+
+.summary-overview {
+    font-size: 15px;
+    line-height: 1.8;
+    color: #444;
+    margin-bottom: 20px;
+    padding: 14px 16px;
+    background: #f8f9ff;
+    border-radius: 8px;
+}
+
+.summary-sections {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.summary-section-item {
+    padding: 14px 16px;
+    background: #fafbfc;
+    border-radius: 8px;
+    border: 1px solid #eef0f3;
+    animation: fadeIn 0.3s ease;
+}
+
+.summary-section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
+}
+
+.summary-section-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: #333;
+}
+
+.summary-section-time {
+    font-family: "SF Mono", "Menlo", "Consolas", monospace;
+    font-size: 12px;
+    color: #4a90d9;
+    background: #f0f6ff;
+    padding: 2px 8px;
+    border-radius: 4px;
+    white-space: nowrap;
+}
+
+.summary-section-desc {
+    font-size: 14px;
+    line-height: 1.7;
+    color: #555;
+}
+
 /* === Results === */
 #results-section {
     background: #fff;

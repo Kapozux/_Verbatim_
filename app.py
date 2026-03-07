@@ -77,6 +77,27 @@ def extract_audio_from_video(video_path, output_path):
     return output_path
 
 
+def _run_summary(full_text, q):
+    """Attempt AI summarization; push progress events and return result or None."""
+    try:
+        from summarize import summarize_transcript
+
+        q.put(json.dumps({
+            'type': 'progress',
+            'percent': 95,
+            'message': '正在生成内容总结...',
+        }))
+        summary_data = summarize_transcript(full_text)
+        if summary_data:
+            q.put(json.dumps({
+                'type': 'summary',
+                **summary_data,
+            }))
+        return summary_data
+    except Exception:
+        return None
+
+
 def run_transcription(task_id, filepath, engine, q):
     """Background worker: runs transcription, pushes events to queue."""
 
@@ -126,9 +147,15 @@ def run_transcription(task_id, filepath, engine, q):
                 normalized.append(item)
                 q.put(json.dumps({'type': 'segment', **item}))
 
+            full_text = "\n".join(
+                f"[{item['timestamp']}] {item['text']}" for item in normalized
+            )
+            summary_data = _run_summary(full_text, q)
+
             q.put(json.dumps({
                 'type': 'done',
                 'segments': normalized,
+                'summary': summary_data,
             }))
 
         elif engine == 'gemini':
@@ -147,9 +174,12 @@ def run_transcription(task_id, filepath, engine, q):
             for seg in segments:
                 q.put(json.dumps({'type': 'segment', **seg}))
 
+            summary_data = _run_summary(full_text, q)
+
             q.put(json.dumps({
                 'type': 'done',
                 'segments': segments,
+                'summary': summary_data,
             }))
 
         else:
