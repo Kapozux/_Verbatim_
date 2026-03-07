@@ -1,14 +1,16 @@
 """
-AI-powered transcript summarization using Gemini.
-Produces an overall summary and structured section breakdowns.
+AI-powered transcript summarization.
+Supports Gemini and Qwen (DashScope) as backends.
 """
 
 import json
 import os
 import re
 
-from google import genai
-from config import GEMINI_API_KEY, GEMINI_MODEL
+from config import (
+    GEMINI_API_KEY, GEMINI_MODEL,
+    DASHSCOPE_API_KEY, DASHSCOPE_LLM_MODEL,
+)
 
 SUMMARY_PROMPT = """你是一个专业的内容分析助手。请对以下音频/视频转录文本进行总结分析。
 
@@ -40,44 +42,82 @@ SUMMARY_PROMPT = """你是一个专业的内容分析助手。请对以下音频
 """
 
 
-def summarize_transcript(full_text):
+def summarize_transcript(full_text, use_qwen=False):
     """
-    Summarize a transcript using Gemini API.
+    Summarize a transcript using Gemini or Qwen.
 
     Args:
         full_text: The full timestamped transcript text.
+        use_qwen: If True, use Qwen via DashScope instead of Gemini.
 
     Returns:
-        dict with keys 'overview' (str) and 'sections' (list of dicts).
-        Each section has 'title', 'time_range', 'summary'.
-        Returns None if summarization fails or no API key.
+        dict with 'overview' and 'sections', or None on failure.
     """
+    if not full_text or len(full_text.strip()) < 50:
+        return None
+
+    prompt = SUMMARY_PROMPT + full_text
+
+    if use_qwen:
+        raw = _call_qwen(prompt)
+    else:
+        raw = _call_gemini(prompt)
+
+    if not raw:
+        return None
+
+    return _parse_summary_json(raw)
+
+
+def _call_gemini(prompt):
+    """Call Gemini API and return raw response text."""
     api_key = GEMINI_API_KEY or os.environ.get('GEMINI_API_KEY', '')
     if not api_key:
         return None
 
-    if not full_text or len(full_text.strip()) < 50:
-        return None
-
-    client = genai.Client(api_key=api_key)
-
-    prompt = SUMMARY_PROMPT + full_text
-
     try:
+        from google import genai
+        client = genai.Client(api_key=api_key)
         response = client.models.generate_content(
             model=GEMINI_MODEL,
             contents=prompt,
         )
+        return response.text.strip()
+    except Exception:
+        return None
 
-        raw = response.text.strip()
-        return _parse_summary_json(raw)
 
+def _call_qwen(prompt):
+    """Call Qwen via DashScope OpenAI-compatible API."""
+    api_key = DASHSCOPE_API_KEY or os.environ.get('DASHSCOPE_API_KEY', '')
+    if not api_key:
+        return None
+
+    try:
+        import requests
+        resp = requests.post(
+            'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
+            headers={
+                'Authorization': f'Bearer {api_key}',
+                'Content-Type': 'application/json',
+            },
+            json={
+                'model': DASHSCOPE_LLM_MODEL,
+                'messages': [
+                    {'role': 'user', 'content': prompt},
+                ],
+            },
+            timeout=120,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data['choices'][0]['message']['content'].strip()
     except Exception:
         return None
 
 
 def _parse_summary_json(raw_text):
-    """Extract and parse JSON from Gemini's response."""
+    """Extract and parse JSON from LLM response."""
     json_match = re.search(r'```json\s*(.*?)\s*```', raw_text, re.DOTALL)
     if json_match:
         raw_text = json_match.group(1)

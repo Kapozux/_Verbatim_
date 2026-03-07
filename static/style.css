@@ -117,6 +117,7 @@ input[type="file"] {
 /* Radio buttons */
 .radio-group {
     display: flex;
+    flex-wrap: wrap;
     gap: 12px;
 }
 

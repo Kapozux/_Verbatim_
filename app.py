@@ -62,7 +62,7 @@ def extract_audio_from_video(video_path, output_path):
     return output_path
 
 
-def _run_summary(full_text, q):
+def _run_summary(full_text, q, use_qwen=False):
     try:
         from summarize import summarize_transcript
 
@@ -71,7 +71,7 @@ def _run_summary(full_text, q):
             'percent': 95,
             'message': '正在生成内容总结...',
         }))
-        summary_data = summarize_transcript(full_text)
+        summary_data = summarize_transcript(full_text, use_qwen=use_qwen)
         if summary_data:
             q.put(json.dumps({'type': 'summary', **summary_data}))
         return summary_data
@@ -180,6 +180,27 @@ def run_transcription(task_id, filepath, engine, original_filename, q):
                 q.put(json.dumps({'type': 'segment', **seg}))
 
             summary_data = _run_summary(full_text, q)
+
+        elif engine == 'dashscope':
+            from transcribe_dashscope import transcribe_audio
+
+            q.put(json.dumps({
+                'type': 'progress',
+                'percent': 0,
+                'message': '正在上传文件到阿里云...',
+            }))
+
+            segments = transcribe_audio(
+                input_path, progress_callback=progress_cb
+            )
+
+            for seg in segments:
+                q.put(json.dumps({'type': 'segment', **seg}))
+
+            full_text = "\n".join(
+                f"[{s['timestamp']}] {s['text']}" for s in segments
+            )
+            summary_data = _run_summary(full_text, q, use_qwen=True)
 
         else:
             q.put(json.dumps({

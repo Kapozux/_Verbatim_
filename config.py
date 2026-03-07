@@ -1,4 +1,7 @@
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Flask
 UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), 'uploads')
@@ -17,3 +20,8 @@ WHISPER_LANGUAGE = 'zh'
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
 GEMINI_MODEL = 'gemini-2.5-pro'
 GEMINI_INLINE_LIMIT = 19 * 1024 * 1024  # 19 MB, use File API above this
+
+# DashScope (阿里云百炼)
+DASHSCOPE_API_KEY = os.environ.get('DASHSCOPE_API_KEY', '')
+DASHSCOPE_ASR_MODEL = 'paraformer-v2'
+DASHSCOPE_LLM_MODEL = 'qwen-plus'
