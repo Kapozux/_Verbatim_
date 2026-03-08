@@ -4,3 +4,5 @@ uploads/
 results/
 __pycache__/
 *.pyc
+server.log
+*.command
