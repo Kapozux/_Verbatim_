@@ -1,0 +1,130 @@
+"""
+AI 卡片元数据生成：给每条转写生成「标题 + 一句话简介 + 标签」，
+让历史列表不点开就能看懂每条是什么。
+
+输入优先用已有的 summary overview（短、便宜），没有才退回转写正文开头。
+模型用 Gemini Flash（快、便宜），失败静默返回 None，不影响主流程。
+"""
+
+import json
+import os
+import re
+
+from config import GEMINI_API_KEY, GEMINI_ENRICH_MODEL
+
+ENRICH_PROMPT = """根据下面这条音频转写的信息，生成用于列表卡片展示的元数据。
+
+文件名：{filename}
+内容摘要或正文开头：
+{content}
+
+严格按以下 JSON 格式输出，不要输出其他任何内容：
+{{
+  "title": "不超过18个字的标题，说清这条内容是什么，别照抄文件名",
+  "one_line": "一句话简介，不超过40字，让人不点开就知道大致内容",
+  "tags": ["2到4个简短标签，如：访谈、课堂、播客、情感短剧、时政评论、英语、会议"]
+}}
+
+要求：中文输出；标题要具体（宁可写"杜甫生平纪录片解说"也不要写"历史内容"）；
+若内容明显是废稿/空白/无意义，title 写"（内容为空或无效）"。"""
+
+
+def generate_card_meta(filename, content):
+    """生成 {title, one_line, tags}；失败返回 None（调用方自行兜底）。"""
+    api_key = GEMINI_API_KEY or os.environ.get('GEMINI_API_KEY', '')
+    if not api_key or not content or len(content.strip()) < 10:
+        return None
+
+    # 控制输入长度：overview 本来就短；退回正文时只取开头
+    content = content.strip()[:3000]
+
+    try:
+        from google import genai
+        client = genai.Client(api_key=api_key)
+        resp = client.models.generate_content(
+            model=GEMINI_ENRICH_MODEL,
+            contents=ENRICH_PROMPT.format(filename=filename, content=content),
+        )
+        raw = (resp.text or '').strip()
+    except Exception:
+        return None
+
+    return _parse_json(raw)
+
+
+def _parse_json(raw):
+    m = re.search(r'```json\s*(.*?)\s*```', raw, re.DOTALL)
+    if m:
+        raw = m.group(1)
+    raw = raw.strip()
+    if not raw.startswith('{'):
+        start = raw.find('{')
+        if start != -1:
+            raw = raw[start:]
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+
+    title = str(data.get('title', '')).strip()
+    if not title:
+        return None
+    tags = data.get('tags', [])
+    if not isinstance(tags, list):
+        tags = []
+    return {
+        'title': title[:30],
+        'one_line': str(data.get('one_line', '')).strip()[:60],
+        'tags': [str(t).strip()[:10] for t in tags if str(t).strip()][:4],
+    }
+
+
+def enrich_content_for(task_dir):
+    """给某条结果挑选 enrich 输入：优先 summary overview，退回 transcript 开头。"""
+    summary_path = os.path.join(task_dir, 'summary.json')
+    if os.path.isfile(summary_path):
+        try:
+            with open(summary_path, 'r', encoding='utf-8') as f:
+                s = json.load(f)
+            parts = [s.get('overview', '')]
+            for sec in s.get('sections', [])[:6]:
+                parts.append(f"- {sec.get('title', '')}：{sec.get('summary', '')}")
+            text = '\n'.join(p for p in parts if p).strip()
+            if len(text) >= 20:
+                return text
+        except Exception:
+            pass
+
+    transcript_path = os.path.join(task_dir, 'transcript.json')
+    if os.path.isfile(transcript_path):
+        try:
+            with open(transcript_path, 'r', encoding='utf-8') as f:
+                segs = json.load(f)
+            return '\n'.join(s.get('text', '') for s in segs[:40])
+        except Exception:
+            pass
+    return ''
+
+
+def enrich_task(task_dir):
+    """对单条结果生成并写入 ai_title/ai_one_line/ai_tags。返回 True=成功。"""
+    meta_path = os.path.join(task_dir, 'meta.json')
+    if not os.path.isfile(meta_path):
+        return False
+    try:
+        with open(meta_path, 'r', encoding='utf-8') as f:
+            meta = json.load(f)
+    except Exception:
+        return False
+
+    content = enrich_content_for(task_dir)
+    card = generate_card_meta(meta.get('filename', ''), content)
+    if not card:
+        return False
+
+    meta['ai_title'] = card['title']
+    meta['ai_one_line'] = card['one_line']
+    meta['ai_tags'] = card['tags']
+    with open(meta_path, 'w', encoding='utf-8') as f:
+        json.dump(meta, f, ensure_ascii=False, indent=2)
+    return True

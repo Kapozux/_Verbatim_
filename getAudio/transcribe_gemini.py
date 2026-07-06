@@ -13,21 +13,66 @@ from google import genai
 from google.genai import types
 from config import GEMINI_API_KEY, GEMINI_MODEL, GEMINI_INLINE_LIMIT
 
-TRANSCRIPTION_PROMPT = """请将这段音频精确转录为中文文本。
+TRANSCRIPTION_PROMPT = """请对这段音频进行精确的逐字转录。
 
 要求：
-1. 每隔约30秒插入一个时间戳，格式为 [HH:MM:SS]
-2. 时间戳放在新一行的开头
-3. 保持原始语言（中文），不要翻译
-4. 包含标点符号
-5. 如果有英文专有名词，保留英文
+1. 严格保留音频原始语言，绝对不要翻译：中文就输出中文，英文就输出英文，日文就输出日文，多语种混杂则按说话人实际使用的语言原样转录。
+2. 每隔约 30 秒在新一行的开头插入一个时间戳，格式为 [HH:MM:SS]（例如 [00:00:00]、[00:01:45]）。
+3. 完整保留标点符号和说话人的语气。
+4. 专有名词、人名、地名、品牌名保留原文拼写，不要音译。
+5. 不要输出任何解释、说明、或 Markdown 包裹，只输出纯转录文本。
 
-输出格式示例：
+输出格式示例（示例仅用于展示格式，请按音频实际语言输出）：
 [00:00:00] 大家好，欢迎来到今天的节目。
-[00:00:32] 今天我们要讨论的话题是人工智能。
+[00:00:32] Today we are going to talk about artificial intelligence.
 """
 
 CHUNK_DURATION_SECONDS = 15 * 60
+
+# 单次 generate_content 调用的重试策略：总共最多尝试 MAX_ATTEMPTS 次，
+# 第 n 次失败后等待 RETRY_BACKOFF_SECONDS[n-1] 秒再重试。
+MAX_ATTEMPTS = 3
+RETRY_BACKOFF_SECONDS = [2, 5, 10]
+
+# 这些 finish_reason 表示内容被模型侧确定性拦截（安全策略/背诵/敏感信息等），
+# 重试不会有任何改变，直接失败并把原因报清楚。
+_NON_RETRYABLE_FINISH_REASONS = {
+    'SAFETY', 'RECITATION', 'PROHIBITED_CONTENT', 'BLOCKLIST', 'SPII',
+}
+
+
+class _ContentBlocked(Exception):
+    """Gemini 确定性拒绝（安全过滤等），重试无意义。"""
+
+
+def _diagnose_empty_response(response):
+    """空文本时诊断真实原因，返回 (人类可读原因, 是否值得重试)。"""
+    try:
+        pf = getattr(response, 'prompt_feedback', None)
+        block_reason = getattr(pf, 'block_reason', None) if pf else None
+        if block_reason:
+            return f'提示词被拦截 (block_reason={block_reason})', False
+
+        candidates = getattr(response, 'candidates', None) or []
+        if not candidates:
+            return '无候选内容返回', True
+
+        finish_reason = getattr(candidates[0], 'finish_reason', None)
+        fr_name = getattr(finish_reason, 'name', None) or str(finish_reason or '')
+        if fr_name in _NON_RETRYABLE_FINISH_REASONS:
+            return f'内容被安全过滤拦截 (finish_reason={fr_name})', False
+        if fr_name == 'MAX_TOKENS':
+            return '输出超长被截断 (MAX_TOKENS)', False
+        if fr_name:
+            return f'finish_reason={fr_name}', True
+        return '未知原因（无 finish_reason）', True
+    except Exception:
+        return '未知原因', True
+
+
+def _is_rate_limit_error(err):
+    msg = str(err).lower()
+    return '429' in msg or 'resource_exhausted' in msg or 'quota' in msg or 'rate' in msg
 
 
 def transcribe_audio(filepath, progress_callback=None):
@@ -47,7 +92,15 @@ def transcribe_audio(filepath, progress_callback=None):
             "Gemini API Key not set. Please set GEMINI_API_KEY environment variable."
         )
 
-    client = genai.Client(api_key=api_key)
+    # 给底层 HTTP 调用设 10 分钟超时，防止代理 / Gemini 侧 socket 挂起后永远不 return。
+    # 老版本 SDK 不支持 HttpOptions 就回退到默认。
+    try:
+        client = genai.Client(
+            api_key=api_key,
+            http_options=types.HttpOptions(timeout=600_000),
+        )
+    except Exception:
+        client = genai.Client(api_key=api_key)
     temp_dir = None
 
     try:
@@ -98,7 +151,11 @@ def transcribe_audio(filepath, progress_callback=None):
 
 
 def _transcribe_single_file(client, filepath, progress_callback=None):
-    """Transcribe one audio file with Gemini and return raw timestamped text."""
+    """Transcribe one audio file with Gemini and return raw timestamped text.
+
+    使用非流式 generate_content：比流式更抗代理/网络抖动。
+    对瞬时失败做自动重试（指数退避），重试时文件不需要重新上传。
+    """
     file_size = os.path.getsize(filepath)
 
     # Determine MIME type from extension
@@ -128,7 +185,7 @@ def _transcribe_single_file(client, filepath, progress_callback=None):
             )
 
         if progress_callback:
-            progress_callback(20)
+            progress_callback(30)
         content_parts = [TRANSCRIPTION_PROMPT, uploaded]
     else:
         with open(filepath, 'rb') as f:
@@ -138,24 +195,48 @@ def _transcribe_single_file(client, filepath, progress_callback=None):
             types.Part.from_bytes(data=audio_bytes, mime_type=mime_type),
         ]
         if progress_callback:
-            progress_callback(20)
+            progress_callback(30)
 
-    full_text = ""
-    chunk_count = 0
-    for chunk in client.models.generate_content_stream(
-        model=GEMINI_MODEL,
-        contents=content_parts,
-    ):
-        if chunk.text:
-            full_text += chunk.text
-            chunk_count += 1
+    last_err = None
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        try:
             if progress_callback:
-                pct = min(90, 20 + chunk_count * 3)
-                progress_callback(pct)
-    if progress_callback:
-        progress_callback(100)
+                # 本次尝试的进度区间：30 -> 95。重试会从 30 重新开始，体现"再试一次"
+                progress_callback(min(95, 30 + attempt * 10))
 
-    return full_text
+            response = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=content_parts,
+            )
+            text = response.text or ""
+            if not text.strip():
+                reason, retryable = _diagnose_empty_response(response)
+                if not retryable:
+                    # 安全过滤等确定性拒绝，重试无意义，直接报明原因
+                    raise _ContentBlocked(reason)
+                raise RuntimeError(f"Gemini 返回空文本（{reason}）")
+
+            if progress_callback:
+                progress_callback(100)
+            return text
+        except _ContentBlocked as e:
+            raise RuntimeError(f"Gemini 未返回文本：{e}（重试无效，可换阿里云或 Whisper 引擎）") from e
+        except Exception as e:
+            last_err = e
+            if attempt >= MAX_ATTEMPTS:
+                break
+            backoff = RETRY_BACKOFF_SECONDS[min(attempt - 1, len(RETRY_BACKOFF_SECONDS) - 1)]
+            # 命中速率限制时退避更久，给并发中的其它请求让路
+            if _is_rate_limit_error(e):
+                backoff *= 3
+            time.sleep(backoff)
+
+    hint = ''
+    if _is_rate_limit_error(last_err):
+        hint = '（疑似并发过高被限流，可调低 config.ENGINE_CONCURRENCY["gemini"]）'
+    raise RuntimeError(
+        f"Gemini 转写失败（已重试 {MAX_ATTEMPTS} 次）: {last_err}{hint}"
+    ) from last_err
 
 
 def _can_split_audio():

@@ -6,3 +6,17 @@ __pycache__/
 *.pyc
 server.log
 *.command
+
+# 运行时数据
+*.log
+tasks.db
+tasks.db-shm
+tasks.db-wal
+.claude/
+.DS_Store
+
+# 内容产物（体积大 / 涉及具体人物，不入公开仓库）
+getAudio/立党_观点分析/
+getAudio/立党_转写文本/
+getAudio/立党_议题综合看法_总文档.md
+getAudio/合并文本_短剧CP系列.txt

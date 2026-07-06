@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>音视频转文字</title>
+    <title>Verbatim</title>
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -12,123 +12,206 @@
         <!-- ===== Main View ===== -->
         <div id="main-view">
             <header>
-                <h1>🎙️ 音视频转文字</h1>
-                <p class="subtitle">上传音频或视频文件，自动提取音轨并转录为带时间戳的文字</p>
+                <div class="topbar">
+                    <div class="brand"><span class="dot"></span>Verbatim</div>
+                    <div class="tagline">Audio → transcript → insight · local</div>
+                </div>
+                <nav class="main-nav">
+                    <button class="nav-tab active" data-tab="transcribe">Transcribe</button>
+                    <button class="nav-tab" data-tab="chain">Pipeline</button>
+                    <button class="nav-tab" data-tab="library">Library</button>
+                </nav>
             </header>
 
-            <form id="upload-form" enctype="multipart/form-data">
-                <div class="form-group">
-                    <div id="drop-zone" class="drop-zone">
-                        <label for="audio-file" class="file-label">
-                            <span class="file-icon">📁</span>
-                            <span id="file-label-text">选择或拖入音频/视频文件</span>
-                            <span id="file-info" class="file-info"></span>
+            <!-- ===== Tab: Transcribe ===== -->
+            <section id="tab-transcribe" class="tab-panel active">
+                <div class="hero">
+                    <h1>Transcribe<span class="accent">.</span></h1>
+                    <p>Drop audio or video files — Verbatim extracts the audio and turns it into timestamped text.</p>
+                </div>
+
+                <form id="upload-form" enctype="multipart/form-data">
+                    <div class="form-group">
+                        <div id="drop-zone" class="drop-zone">
+                            <label for="audio-file" class="file-label">
+                                <span class="file-icon">📁</span>
+                                <span id="file-label-text">Choose or drop audio / video files (multiple ok)</span>
+                                <span id="file-info" class="file-info"></span>
+                            </label>
+                        </div>
+                        <input type="file" id="audio-file" name="audio" multiple
+                               accept=".mp3,.wav,.flac,.m4a,.ogg,.webm,.mp4,.mov,.mkv,.avi,.m4v" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="group-label">Engine</label>
+                        <div class="radio-group">
+                            <label class="radio-option">
+                                <input type="radio" name="engine" value="whisper" checked>
+                                <span class="radio-custom"></span>
+                                <span class="radio-label">
+                                    <strong>Whisper</strong>
+                                    <small>Local · free · offline</small>
+                                </span>
+                            </label>
+                            <label class="radio-option">
+                                <input type="radio" name="engine" value="gemini">
+                                <span class="radio-custom"></span>
+                                <span class="radio-label">
+                                    <strong>Gemini</strong>
+                                    <small>Cloud · needs API key</small>
+                                </span>
+                            </label>
+                            <label class="radio-option">
+                                <input type="radio" name="engine" value="dashscope">
+                                <span class="radio-custom"></span>
+                                <span class="radio-label">
+                                    <strong>DashScope</strong>
+                                    <small>Paraformer ASR · cheap · Chinese-tuned</small>
+                                </span>
+                            </label>
+                            <label class="radio-option">
+                                <input type="radio" name="engine" value="precise">
+                                <span class="radio-custom"></span>
+                                <span class="radio-label">
+                                    <strong>Precise</strong>
+                                    <small>Gemini text + DashScope diarization · slow</small>
+                                </span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="form-group hidden" id="speaker-count-group">
+                        <label class="group-label" for="speaker-count">
+                            Expected speakers <small class="hint">(optional — improves accuracy; leave blank to auto-detect)</small>
                         </label>
+                        <input type="number" id="speaker-count" name="speaker_count"
+                               min="1" max="20" step="1" placeholder="blank = auto"
+                               class="number-input">
                     </div>
-                    <input type="file" id="audio-file" name="audio"
-                           accept=".mp3,.wav,.flac,.m4a,.ogg,.webm,.mp4,.mov,.mkv,.avi,.m4v" required>
+
+                    <button type="submit" id="submit-btn" class="btn-primary">
+                        Transcribe
+                    </button>
+                </form>
+
+                <div id="batch-section" class="hidden">
+                    <div class="batch-header">
+                        <h2>Queue</h2>
+                        <span id="batch-progress" class="batch-progress"></span>
+                    </div>
+                    <div id="batch-list" class="batch-list"></div>
                 </div>
 
-                <div class="form-group">
-                    <label class="group-label">转写引擎</label>
-                    <div class="radio-group">
-                        <label class="radio-option">
-                            <input type="radio" name="engine" value="whisper" checked>
-                            <span class="radio-custom"></span>
-                            <span class="radio-label">
-                                <strong>Whisper</strong>
-                                <small>本地模型 · 免费 · 离线可用</small>
-                            </span>
-                        </label>
-                    <label class="radio-option">
-                        <input type="radio" name="engine" value="gemini">
-                        <span class="radio-custom"></span>
-                        <span class="radio-label">
-                            <strong>Gemini API</strong>
-                            <small>云端处理 · 需要 API Key</small>
-                        </span>
-                    </label>
-                    <label class="radio-option">
-                        <input type="radio" name="engine" value="dashscope">
-                        <span class="radio-custom"></span>
-                        <span class="radio-label">
-                            <strong>阿里云百炼</strong>
-                            <small>Paraformer ASR · 便宜 · 中文优化</small>
-                        </span>
-                    </label>
+                <div id="error-section" class="hidden">
+                    <div class="error-box">
+                        <span class="error-icon">⚠️</span>
+                        <span id="error-text"></span>
                     </div>
                 </div>
+            </section>
 
-                <button type="submit" id="submit-btn" class="btn-primary">
-                    开始转写
-                </button>
-            </form>
-
-            <div id="progress-section" class="hidden">
-                <div class="progress-bar">
-                    <div id="progress-fill" class="progress-fill"></div>
+            <!-- ===== Tab: Pipeline ===== -->
+            <section id="tab-chain" class="tab-panel">
+                <div class="hero">
+                    <h1>Analyze a <span class="accent">creator.</span></h1>
+                    <p>Paste a channel, playlist, or video. Verbatim downloads the audio, transcribes every
+                       episode, writes a per-episode analysis, and synthesizes one document.</p>
                 </div>
-                <p id="progress-text" class="progress-text">准备中...</p>
-            </div>
 
-            <div id="player-section" class="hidden">
-                <div class="player-card">
-                    <audio id="audio-player" controls></audio>
+                <form class="chain-form-shell">
+                    <div class="chain-form">
+                        <input type="url" id="chain-url" class="search-input"
+                               placeholder="https://www.youtube.com/@creator/videos  ·  or a single video">
+                        <div class="chain-form-row">
+                            <input type="text" id="chain-author" class="search-input chain-small"
+                                   placeholder="Author (optional)">
+                            <input type="number" id="chain-max" class="search-input chain-small"
+                                   min="1" max="300" placeholder="Max videos">
+                            <select id="chain-engine" class="search-input chain-small">
+                                <option value="gemini">Gemini (recommended)</option>
+                                <option value="dashscope">DashScope</option>
+                                <option value="whisper">Whisper (local)</option>
+                            </select>
+                            <label class="chain-check">
+                                <input type="checkbox" id="chain-analyze" checked>
+                                Analyze &amp; synthesize
+                            </label>
+                            <button id="chain-start" type="button" class="btn-primary chain-btn">Start</button>
+                        </div>
+                    </div>
+                    <p class="chain-hint">YouTube tip: use <code>channel/videos</code>. Bilibili &amp; other
+                       yt-dlp sites work too.</p>
+                </form>
+
+                <div id="chain-list" class="chain-list"></div>
+            </section>
+
+            <!-- ===== Tab: Library ===== -->
+            <section id="tab-library" class="tab-panel">
+                <div class="hero">
+                    <h1>Library<span class="accent">.</span></h1>
+                    <p>Every transcript and analysis document, searchable in one place.</p>
                 </div>
-            </div>
 
-            <div id="summary-section" class="hidden">
-                <div class="summary-card">
-                    <h2>内容总结</h2>
-                    <div id="summary-overview" class="summary-overview"></div>
-                    <div id="summary-sections" class="summary-sections"></div>
+                <div class="lib-subnav">
+                    <button class="sub-tab active" data-lib="transcripts">Transcripts</button>
+                    <button class="sub-tab" data-lib="docs">Analyses</button>
                 </div>
-            </div>
 
-            <div id="results-section" class="hidden">
-                <div class="results-header">
-                    <h2>转写结果</h2>
-                    <div class="results-actions">
-                        <button id="copy-btn" class="btn-secondary" title="复制文本">
-                            📋 复制
-                        </button>
-                        <button id="download-btn" class="btn-secondary" title="下载为TXT">
-                            💾 TXT
-                        </button>
-                        <button id="srt-btn" class="btn-secondary" title="下载字幕文件">
-                            🎬 SRT
-                        </button>
+                <!-- Transcripts -->
+                <div id="lib-transcripts" class="lib-panel active">
+                    <div id="history-section">
+                        <div class="history-card">
+                            <div class="history-header">
+                                <h2>History <span id="history-count" class="history-count"></span></h2>
+                                <div class="history-header-actions">
+                                    <button id="enrich-btn" class="btn-secondary" title="Use AI to add titles &amp; tags to untitled records">
+                                        Auto-title
+                                    </button>
+                                    <button id="clear-history-btn" class="btn-secondary btn-danger" title="Clear all history">
+                                        Clear
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="history-toolbar">
+                                <input type="search" id="search-input" class="search-input"
+                                       placeholder="Search titles, filenames, or transcript text…">
+                                <div id="engine-filters" class="filter-chips">
+                                    <button class="chip active" data-engine="">All</button>
+                                    <button class="chip" data-engine="gemini">Gemini</button>
+                                    <button class="chip" data-engine="dashscope">DashScope</button>
+                                    <button class="chip" data-engine="precise">Precise</button>
+                                    <button class="chip" data-engine="whisper">Whisper</button>
+                                </div>
+                            </div>
+                            <div id="history-list" class="history-list">
+                                <p class="history-empty">No transcripts yet</p>
+                            </div>
+                        </div>
                     </div>
                 </div>
-                <div id="segments-container" class="segments-container"></div>
-            </div>
 
-            <div id="error-section" class="hidden">
-                <div class="error-box">
-                    <span class="error-icon">⚠️</span>
-                    <span id="error-text"></span>
-                </div>
-            </div>
-
-            <div id="history-section">
-                <div class="history-card">
-                    <div class="history-header">
-                        <h2>历史记录</h2>
-                        <button id="clear-history-btn" class="btn-secondary btn-danger" title="清空历史">
-                            🗑️ 清空
-                        </button>
-                    </div>
-                    <div id="history-list" class="history-list">
-                        <p class="history-empty">暂无历史记录</p>
+                <!-- Analyses -->
+                <div id="lib-docs" class="lib-panel">
+                    <div class="history-card">
+                        <div class="history-header">
+                            <h2>Analyses</h2>
+                            <button id="docs-refresh" class="btn-secondary" title="Refresh">Refresh</button>
+                        </div>
+                        <p class="chain-hint">Documents produced by the Pipeline. Click to read — no download needed.</p>
+                        <div id="docs-list" class="docs-list">
+                            <p class="history-empty">No analysis documents yet — run a Pipeline</p>
+                        </div>
                     </div>
                 </div>
-            </div>
+            </section>
         </div>
 
-        <!-- ===== History Detail View ===== -->
+        <!-- ===== Transcript Detail View ===== -->
         <div id="detail-view" class="hidden">
             <div class="detail-top-bar">
-                <button id="detail-back-btn" class="btn-secondary">← 返回</button>
+                <button id="detail-back-btn" class="btn-secondary">← Back</button>
                 <span id="detail-title" class="detail-title"></span>
             </div>
 
@@ -142,7 +225,7 @@
 
             <div id="detail-summary-section" class="hidden">
                 <div class="summary-card">
-                    <h2>内容总结</h2>
+                    <h2>Summary</h2>
                     <div id="detail-summary-overview" class="summary-overview"></div>
                     <div id="detail-summary-sections" class="summary-sections"></div>
                 </div>
@@ -150,23 +233,60 @@
 
             <div id="detail-results-section">
                 <div class="results-header">
-                    <h2>转写结果</h2>
+                    <h2>Transcript</h2>
                     <div class="results-actions">
-                        <button id="detail-copy-btn" class="btn-secondary" title="复制文本">
-                            📋 复制
-                        </button>
-                        <button id="detail-download-btn" class="btn-secondary" title="下载为TXT">
-                            💾 TXT
-                        </button>
-                        <button id="detail-srt-btn" class="btn-secondary" title="下载字幕文件">
-                            🎬 SRT
-                        </button>
+                        <button id="detail-copy-btn" class="btn-secondary" title="Copy text">Copy</button>
+                        <button id="detail-download-btn" class="btn-secondary" title="Download as TXT">TXT</button>
+                        <button id="detail-srt-btn" class="btn-secondary" title="Download subtitles">SRT</button>
                     </div>
                 </div>
                 <div id="detail-segments-container" class="segments-container"></div>
             </div>
         </div>
 
+        <!-- ===== Chain Detail View (episode grid) ===== -->
+        <div id="chain-detail-view" class="hidden">
+            <div class="detail-top-bar">
+                <button id="chain-detail-back" class="btn-secondary">← Back</button>
+                <span id="chain-detail-title" class="detail-title"></span>
+            </div>
+            <div id="chain-detail-meta" class="detail-meta"></div>
+            <div id="chain-detail-grid" class="video-grid"></div>
+        </div>
+
+        <!-- ===== Analysis Doc Reading View ===== -->
+        <div id="doc-view" class="hidden">
+            <div class="detail-top-bar">
+                <button id="doc-back-btn" class="btn-secondary">← Back</button>
+                <span id="doc-title" class="detail-title"></span>
+                <button id="doc-download-btn" class="btn-secondary" title="Download the Markdown file">Download .md</button>
+            </div>
+            <div id="doc-content" class="md-body"></div>
+        </div>
+
+    </div>
+
+    <!-- ===== 左下角个人数据展板 ===== -->
+    <div id="stats-fab" class="stats-fab">
+        <div id="stats-panel" class="stats-panel hidden">
+            <div class="stats-head">Your library</div>
+            <div class="stats-nums">
+                <div class="stat-num"><b id="stat-hours">—</b><span>hours transcribed</span></div>
+                <div class="stat-num"><b id="stat-chars">—</b><span>characters</span></div>
+                <div class="stat-num"><b id="stat-count">—</b><span>transcripts</span></div>
+            </div>
+            <div class="stats-block">
+                <div class="stats-label">Cumulative hours</div>
+                <div id="stats-chart"></div>
+            </div>
+            <div class="stats-block">
+                <div class="stats-label">Fields you follow</div>
+                <div id="stats-tags"></div>
+            </div>
+        </div>
+        <button id="stats-toggle" class="stats-toggle" title="Your stats">
+            <span class="stats-dot"></span><span>Your stats</span>
+        </button>
     </div>
 
     <script src="/static/app.js"></script>

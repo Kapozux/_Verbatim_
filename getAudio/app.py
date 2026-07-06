@@ -7,14 +7,26 @@ Persists results (audio + transcript + summary) to disk for history playback.
 import json
 import os
 import queue
+import re
 import shutil
 import subprocess
 import threading
+import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 
 from flask import Flask, Response, jsonify, render_template, request, send_file
 
 import config
+import taskdb
+
+
+# task_id 从 URL 直接拼到 os.path.join，必须严格校验防止路径穿越
+_TASK_ID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+
+
+def _is_valid_task_id(task_id):
+    return bool(task_id) and bool(_TASK_ID_RE.match(task_id))
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = config.UPLOAD_FOLDER
@@ -23,7 +35,61 @@ app.config['MAX_CONTENT_LENGTH'] = config.MAX_CONTENT_LENGTH
 os.makedirs(config.UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(config.RESULTS_FOLDER, exist_ok=True)
 
+taskdb.init()
+
 tasks = {}
+
+
+# ========== 可选鉴权 ==========
+# 不设置 GETAUDIO_TOKEN（默认）时下面两个钩子等于不存在，本地使用完全无感。
+# 设置后：首次访问带 ?token=xxx 或 Authorization: Bearer xxx，之后走 cookie。
+
+_AUTH_COOKIE = 'getaudio_token'
+
+
+@app.before_request
+def _check_auth():
+    if not config.AUTH_TOKEN:
+        return None
+    if request.path.startswith('/static/'):
+        return None
+
+    supplied = (
+        request.cookies.get(_AUTH_COOKIE)
+        or request.args.get('token')
+        or request.headers.get('Authorization', '').replace('Bearer ', '', 1).strip()
+    )
+    if supplied == config.AUTH_TOKEN:
+        return None
+    return jsonify({'error': 'unauthorized：请在 URL 加 ?token=你的令牌'}), 401
+
+
+@app.after_request
+def _persist_auth_cookie(resp):
+    # 通过 ?token= 验证成功的请求，把令牌种进 cookie，后续请求免带参数
+    if config.AUTH_TOKEN and request.args.get('token') == config.AUTH_TOKEN:
+        resp.set_cookie(
+            _AUTH_COOKIE, config.AUTH_TOKEN,
+            max_age=30 * 24 * 3600, httponly=True, samesite='Lax',
+        )
+    return resp
+
+# 批量转录：所有任务都提交到同一个线程池，池子开得足够大（不成为瓶颈），
+# 真正的并发上限由每个引擎各自的信号量控制（见 config.ENGINE_CONCURRENCY）。
+# 这样用户可以一次丢进很多文件——云引擎几乎同时开跑，本地 Whisper 自动排队。
+_pool_size = max(sum(config.ENGINE_CONCURRENCY.values()), 4)
+executor = ThreadPoolExecutor(max_workers=_pool_size)
+_engine_semaphores = {
+    engine: threading.Semaphore(n)
+    for engine, n in config.ENGINE_CONCURRENCY.items()
+}
+
+# 链条的全局限流闸（所有链条共享，不按每条链条算）——见 config 里的说明。
+# 无论开多少条链，下载/分析对外部的瞬时压力都封顶，不会"并行叠并行"打爆。
+_chain_download_sem = threading.Semaphore(config.CHAIN_DOWNLOAD_CONCURRENCY)
+_chain_analysis_sem = threading.Semaphore(config.CHAIN_ANALYSIS_CONCURRENCY)
+# 下载本身也丢进一个线程池并发跑（受上面的信号量真正限流）
+_download_executor = ThreadPoolExecutor(max_workers=config.CHAIN_DOWNLOAD_CONCURRENCY)
 
 
 def allowed_file(filename):
@@ -45,6 +111,33 @@ def is_video_file(filepath):
 
 def resolve_ffmpeg_binary():
     return shutil.which('ffmpeg') or '/opt/homebrew/bin/ffmpeg'
+
+
+def resolve_ffprobe_binary():
+    return shutil.which('ffprobe') or '/opt/homebrew/bin/ffprobe'
+
+
+def probe_audio_duration_seconds(filepath):
+    """Return audio duration in seconds, or None if ffprobe unavailable / failed."""
+    ffprobe_bin = resolve_ffprobe_binary()
+    if not os.path.exists(ffprobe_bin):
+        return None
+    try:
+        result = subprocess.run(
+            [
+                ffprobe_bin, '-v', 'error',
+                '-show_entries', 'format=duration',
+                '-of', 'default=noprint_wrappers=1:nokey=1',
+                filepath,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        return float(result.stdout.strip())
+    except (subprocess.SubprocessError, ValueError):
+        return None
 
 
 def extract_audio_from_video(video_path, output_path):
@@ -89,13 +182,17 @@ def _save_results(task_id, original_filename, engine, audio_source_path,
     audio_dest = os.path.join(task_dir, f"audio{ext}")
     shutil.copy2(audio_source_path, audio_dest)
 
+    duration = probe_audio_duration_seconds(audio_dest)
+
     meta = {
         'id': task_id,
-        'filename': original_filename,
+        'filename': os.path.basename(original_filename or ''),
         'engine': engine,
         'date': __import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         'audio_ext': ext,
         'segment_count': len(segments),
+        'duration_seconds': round(duration, 2) if duration else None,
+        'has_summary': bool(summary),
     }
     with open(os.path.join(task_dir, 'meta.json'), 'w', encoding='utf-8') as f:
         json.dump(meta, f, ensure_ascii=False, indent=2)
@@ -108,8 +205,13 @@ def _save_results(task_id, original_filename, engine, audio_source_path,
             json.dump(summary, f, ensure_ascii=False, indent=2)
 
 
-def run_transcription(task_id, filepath, engine, original_filename, q):
-    """Background worker: runs transcription, saves results, pushes events."""
+def run_transcription(task_id, filepath, engine, original_filename, q,
+                      speaker_count=None):
+    """Background worker: runs transcription, saves results, pushes events.
+
+    每个引擎有独立信号量限流。任务提交后可能先排队（quota 已满），
+    抢到信号量后才真正开跑，所以先推一条 queued，再推 progress。
+    """
 
     def progress_cb(percent):
         q.put(json.dumps({
@@ -121,7 +223,19 @@ def run_transcription(task_id, filepath, engine, original_filename, q):
     cleanup_paths = [filepath]
     input_path = filepath
 
+    # 排队等待本引擎的并发额度
+    sem = _engine_semaphores.get(engine)
+    q.put(json.dumps({'type': 'queued', 'message': '排队中...'}))
+    if sem is not None:
+        sem.acquire()
+
     try:
+        taskdb.set_status(task_id, 'running')
+        q.put(json.dumps({
+            'type': 'progress',
+            'percent': 1,
+            'message': '开始转写...',
+        }))
         if is_video_file(filepath):
             q.put(json.dumps({
                 'type': 'progress',
@@ -202,7 +316,91 @@ def run_transcription(task_id, filepath, engine, original_filename, q):
             )
             summary_data = _run_summary(full_text, q, use_qwen=True)
 
+        elif engine == 'precise':
+            # 精准模式：Gemini 转写(文字) + 阿里云分离(说话人) 并行跑，最后 Gemini 合并
+            from transcribe_gemini import transcribe_audio as _gemini_tx
+            from transcribe_dashscope import transcribe_audio as _dashscope_tx
+            from transcribe_precise import (
+                merge_speaker_transcript,
+                speaker_only_segments,
+            )
+
+            q.put(json.dumps({
+                'type': 'progress',
+                'percent': 10,
+                'message': '精准模式：Gemini 转写 + 阿里云说话人分离（并行中）...',
+            }))
+
+            holder = {}
+
+            def _do_gemini():
+                try:
+                    segs, _full = _gemini_tx(input_path)
+                    holder['gemini'] = segs
+                except Exception as e:  # noqa: BLE001
+                    holder['gemini_err'] = e
+
+            def _do_dashscope():
+                try:
+                    holder['dashscope'] = _dashscope_tx(
+                        input_path, diarization=True,
+                        speaker_count=speaker_count,
+                    )
+                except Exception as e:  # noqa: BLE001
+                    holder['dashscope_err'] = e
+
+            tg = threading.Thread(target=_do_gemini)
+            td = threading.Thread(target=_do_dashscope)
+            tg.start()
+            td.start()
+            tg.join()
+            td.join()
+
+            g = holder.get('gemini')
+            d = holder.get('dashscope')
+
+            if g and d:
+                q.put(json.dumps({
+                    'type': 'progress',
+                    'percent': 70,
+                    'message': '正在合并说话人与文字...',
+                }))
+                segments, full_text = merge_speaker_transcript(g, d)
+            elif d and not g:
+                # Gemini 失败（常见：安全过滤）→ 降级用阿里云的说话人稿
+                q.put(json.dumps({
+                    'type': 'progress',
+                    'percent': 70,
+                    'message': 'Gemini 未成功，降级为阿里云说话人稿',
+                }))
+                segments = speaker_only_segments(d)
+                full_text = "\n".join(
+                    f"[{s['timestamp']}] {s['text']}" for s in segments
+                )
+            elif g and not d:
+                # 阿里云失败 → 只有 Gemini 文字，无说话人
+                q.put(json.dumps({
+                    'type': 'progress',
+                    'percent': 70,
+                    'message': '阿里云分离未成功，仅输出文字（无说话人）',
+                }))
+                segments = g
+                full_text = "\n".join(
+                    f"[{s['timestamp']}] {s['text']}" for s in segments
+                )
+            else:
+                raise RuntimeError(
+                    f"精准模式失败：Gemini={holder.get('gemini_err')}; "
+                    f"阿里云={holder.get('dashscope_err')}"
+                )
+
+            for seg in segments:
+                q.put(json.dumps({'type': 'segment', **seg}))
+
+            summary_data = _run_summary(full_text, q)
+
         else:
+            taskdb.set_status(task_id, 'failed', error=f'Unknown engine: {engine}')
             q.put(json.dumps({
                 'type': 'error',
                 'message': f'Unknown engine: {engine}',
@@ -212,6 +410,14 @@ def run_transcription(task_id, filepath, engine, original_filename, q):
         _save_results(task_id, original_filename, engine, input_path,
                       segments, summary_data)
 
+        # 生成列表卡片元数据（AI 标题/一句话/标签），失败不影响主流程
+        try:
+            from enrich import enrich_task
+            enrich_task(os.path.join(config.RESULTS_FOLDER, task_id))
+        except Exception:
+            pass
+
+        taskdb.set_status(task_id, 'done')
         q.put(json.dumps({
             'type': 'done',
             'task_id': task_id,
@@ -220,17 +426,23 @@ def run_transcription(task_id, filepath, engine, original_filename, q):
         }))
 
     except Exception as e:
+        taskdb.set_status(task_id, 'failed', error=str(e))
         q.put(json.dumps({
             'type': 'error',
             'message': str(e),
         }))
 
     finally:
+        if sem is not None:
+            sem.release()
         for path in cleanup_paths:
             try:
                 os.remove(path)
             except OSError:
                 pass
+        # worker 完成后才从全局表里清掉自己，
+        # 这样客户端断开/刷新后重连依然能读到队列里剩下的消息。
+        tasks.pop(task_id, None)
 
 
 # ========== Pages ==========
@@ -242,18 +454,26 @@ def index():
 
 # ========== Upload & Stream ==========
 
-@app.route('/upload', methods=['POST'])
-def upload():
-    file = request.files.get('audio')
-    engine = request.form.get('engine', 'whisper')
+def _parse_speaker_count(raw):
+    """解析前端传来的预计人数；非法/空则返回 None（让阿里云自动判断）。"""
+    try:
+        n = int(raw)
+        return n if n > 0 else None
+    except (TypeError, ValueError):
+        return None
 
+
+def _enqueue_task(file, engine, speaker_count=None):
+    """校验并保存单个文件，建队列并提交到线程池。
+
+    返回 (task_id, None) 成功，或 (None, error_message) 失败。
+    单文件 /upload 和批量 /upload_batch 共用此逻辑。
+    """
     if not file or file.filename == '':
-        return jsonify({'error': '请选择一个音频或视频文件'}), 400
+        return None, '请选择一个音频或视频文件'
 
     if not allowed_file(file.filename):
-        return jsonify({
-            'error': f'不支持的文件格式。支持: {", ".join(config.ALLOWED_EXTENSIONS)}'
-        }), 400
+        return None, f'不支持的文件格式。支持: {", ".join(config.ALLOWED_EXTENSIONS)}'
 
     task_id = str(uuid.uuid4())
     ext = file.filename.rsplit('.', 1)[1].lower() if '.' in file.filename else 'mp3'
@@ -261,39 +481,137 @@ def upload():
     filepath = os.path.join(config.UPLOAD_FOLDER, filename)
     file.save(filepath)
 
+    # 先落库再入队：服务中途重启也能从 DB 找回这个任务
+    taskdb.create(task_id, file.filename, engine, speaker_count, filepath)
+
     q = queue.Queue()
     tasks[task_id] = q
 
-    t = threading.Thread(
-        target=run_transcription,
-        args=(task_id, filepath, engine, file.filename, q),
-        daemon=True,
+    executor.submit(
+        run_transcription, task_id, filepath, engine, file.filename, q,
+        speaker_count,
     )
-    t.start()
+
+    return task_id, None
+
+
+def recover_unfinished_tasks():
+    """启动时找回上次没跑完的任务：源文件还在就重新入队，不在就标记失败。
+
+    同时清掉 uploads/ 里不属于任何待恢复任务的孤儿文件。
+    """
+    rows = taskdb.unfinished()
+    active_ids = set()
+    recovered = 0
+
+    for row in rows:
+        task_id = row['id']
+        upload_path = row.get('upload_path') or ''
+        if upload_path and os.path.isfile(upload_path):
+            taskdb.set_status(task_id, 'pending')
+            q = queue.Queue()
+            tasks[task_id] = q
+            executor.submit(
+                run_transcription, task_id, upload_path, row.get('engine'),
+                row.get('filename'), q, row.get('speaker_count'),
+            )
+            active_ids.add(task_id)
+            recovered += 1
+        else:
+            taskdb.set_status(
+                task_id, 'failed', error='服务重启且源文件已丢失，请重新上传'
+            )
+
+    # 孤儿上传文件清理（不属于任何已恢复任务的残留）
+    cleaned = 0
+    for name in os.listdir(config.UPLOAD_FOLDER):
+        if not any(name.startswith(tid) for tid in active_ids):
+            try:
+                os.remove(os.path.join(config.UPLOAD_FOLDER, name))
+                cleaned += 1
+            except OSError:
+                pass
+
+    if recovered or cleaned:
+        print(f"[recover] 找回未完成任务 {recovered} 个，清理孤儿上传文件 {cleaned} 个")
+
+
+@app.route('/upload', methods=['POST'])
+def upload():
+    file = request.files.get('audio')
+    engine = request.form.get('engine', 'whisper')
+    speaker_count = _parse_speaker_count(request.form.get('speaker_count'))
+
+    task_id, error = _enqueue_task(file, engine, speaker_count)
+    if error:
+        return jsonify({'error': error}), 400
 
     return jsonify({'task_id': task_id})
 
 
+@app.route('/upload_batch', methods=['POST'])
+def upload_batch():
+    """一次接收多个文件，各自建独立任务。
+
+    返回每个文件的 task_id（或该文件的错误）。整体只要有至少一个成功
+    就返回 200；全部失败返回 400。
+    """
+    files = request.files.getlist('audios')
+    engine = request.form.get('engine', 'whisper')
+    speaker_count = _parse_speaker_count(request.form.get('speaker_count'))
+
+    if not files:
+        return jsonify({'error': '请至少选择一个文件'}), 400
+
+    results = []
+    for file in files:
+        task_id, error = _enqueue_task(file, engine, speaker_count)
+        results.append({
+            'filename': file.filename,
+            'task_id': task_id,
+            'error': error,
+        })
+
+    if not any(r['task_id'] for r in results):
+        return jsonify({'error': '没有可处理的文件', 'tasks': results}), 400
+
+    return jsonify({'tasks': results})
+
+
 @app.route('/stream/<task_id>')
 def stream(task_id):
+    # 真正的超时上限：1 小时没有任何消息才算死任务
+    HARD_TIMEOUT_SECONDS = 60 * 60
+    # 单次 get 短轮询间隔：没消息就发 SSE 注释保活，避免代理/浏览器断流
+    POLL_INTERVAL = 15
+
     def event_stream():
         q = tasks.get(task_id)
         if not q:
             yield f"data: {json.dumps({'type': 'error', 'message': 'Task not found'})}\n\n"
             return
 
+        # 注意：这里不在 finally 里 pop tasks。
+        # 客户端可能中途刷新/重连，pop 由后台 worker 在写完 done/error 之后负责，
+        # 这样重连时还能继续读队列里剩下的消息。
+        idle_seconds = 0
         while True:
             try:
-                msg = q.get(timeout=300)
+                msg = q.get(timeout=POLL_INTERVAL)
+                idle_seconds = 0
                 yield f"data: {msg}\n\n"
                 data = json.loads(msg)
                 if data['type'] in ('done', 'error'):
                     break
             except queue.Empty:
-                yield f"data: {json.dumps({'type': 'error', 'message': '转写超时'})}\n\n"
-                break
-
-        tasks.pop(task_id, None)
+                idle_seconds += POLL_INTERVAL
+                if idle_seconds >= HARD_TIMEOUT_SECONDS:
+                    yield (
+                        f"data: {json.dumps({'type': 'error', 'message': '转写超时（后台无响应）'})}\n\n"
+                    )
+                    break
+                # SSE 注释行：不会触发前端 onmessage，仅用于保活
+                yield ": keepalive\n\n"
 
     return Response(
         event_stream(),
@@ -332,6 +650,9 @@ def api_history():
 @app.route('/api/history/<task_id>')
 def api_history_detail(task_id):
     """Get full data for a saved transcription."""
+    if not _is_valid_task_id(task_id):
+        return jsonify({'error': 'Invalid task id'}), 400
+
     task_dir = os.path.join(config.RESULTS_FOLDER, task_id)
     meta_path = os.path.join(task_dir, 'meta.json')
     transcript_path = os.path.join(task_dir, 'transcript.json')
@@ -359,6 +680,9 @@ def api_history_detail(task_id):
 @app.route('/api/history/<task_id>/audio')
 def api_history_audio(task_id):
     """Serve the saved audio file for a transcription."""
+    if not _is_valid_task_id(task_id):
+        return jsonify({'error': 'Invalid task id'}), 400
+
     task_dir = os.path.join(config.RESULTS_FOLDER, task_id)
     meta_path = os.path.join(task_dir, 'meta.json')
 
@@ -378,12 +702,25 @@ def api_history_audio(task_id):
         '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.flac': 'audio/flac',
         '.m4a': 'audio/mp4', '.ogg': 'audio/ogg', '.webm': 'audio/webm',
     }
-    return send_file(audio_path, mimetype=mime_map.get(audio_ext, 'audio/wav'))
+    resp = send_file(
+        audio_path,
+        mimetype=mime_map.get(audio_ext, 'audio/wav'),
+        conditional=True,
+    )
+    resp.headers['Cache-Control'] = 'public, max-age=3600'
+    return resp
 
 
 @app.route('/api/history/<task_id>', methods=['DELETE'])
 def api_history_delete(task_id):
     """Delete a saved transcription and its files."""
+    if not _is_valid_task_id(task_id):
+        return jsonify({'error': 'Invalid task id'}), 400
+
+    # 任务还在转写中就不允许删，不然后台跑完还会重新创建目录
+    if task_id in tasks:
+        return jsonify({'error': '任务正在转写中，请等完成后再删除'}), 409
+
     task_dir = os.path.join(config.RESULTS_FOLDER, task_id)
     if os.path.isdir(task_dir):
         shutil.rmtree(task_dir, ignore_errors=True)
@@ -391,5 +728,534 @@ def api_history_delete(task_id):
     return jsonify({'error': 'Not found'}), 404
 
 
+# ========== AI 整理（批量回填卡片元数据） ==========
+
+# 回填是幂等的后台任务：跳过已有 ai_title 的条目，所以随时可重跑
+_enrich_state = {'running': False, 'done': 0, 'total': 0, 'failed': 0}
+_enrich_lock = threading.Lock()
+
+
+def _run_enrich_all():
+    from concurrent.futures import ThreadPoolExecutor as _TPE
+
+    from enrich import enrich_task
+
+    results_dir = config.RESULTS_FOLDER
+    pending = []
+    for name in os.listdir(results_dir):
+        meta_path = os.path.join(results_dir, name, 'meta.json')
+        if not os.path.isfile(meta_path):
+            continue
+        try:
+            with open(meta_path, 'r', encoding='utf-8') as f:
+                meta = json.load(f)
+        except Exception:
+            continue
+        if not meta.get('ai_title'):
+            pending.append(os.path.join(results_dir, name))
+
+    _enrich_state.update(done=0, failed=0, total=len(pending))
+
+    def _one(task_dir):
+        ok = False
+        try:
+            ok = enrich_task(task_dir)
+        except Exception:
+            ok = False
+        with _enrich_lock:
+            _enrich_state['done'] += 1
+            if not ok:
+                _enrich_state['failed'] += 1
+
+    # Flash 模型轻量调用，8 并发在 Paid Tier 1 下安全
+    with _TPE(max_workers=8) as pool:
+        list(pool.map(_one, pending))
+
+    _enrich_state['running'] = False
+
+
+@app.route('/api/enrich_all', methods=['POST'])
+def api_enrich_all():
+    """后台批量给缺少 AI 标题的历史条目生成卡片元数据。"""
+    if _enrich_state['running']:
+        return jsonify({'ok': True, 'already_running': True, **_enrich_state})
+    _enrich_state['running'] = True
+    threading.Thread(target=_run_enrich_all, daemon=True).start()
+    return jsonify({'ok': True, **_enrich_state})
+
+
+@app.route('/api/enrich_status')
+def api_enrich_status():
+    return jsonify(_enrich_state)
+
+
+# ========== Search ==========
+
+@app.route('/api/search')
+def api_search():
+    """全文搜索：文件名 / AI标题 / 标签 / 转写正文，返回带命中片段的条目列表。"""
+    query = (request.args.get('q') or '').strip().lower()
+    if not query:
+        return jsonify([])
+
+    results_dir = config.RESULTS_FOLDER
+    hits = []
+    if not os.path.isdir(results_dir):
+        return jsonify(hits)
+
+    for name in os.listdir(results_dir):
+        task_dir = os.path.join(results_dir, name)
+        meta_path = os.path.join(task_dir, 'meta.json')
+        if not os.path.isfile(meta_path):
+            continue
+        try:
+            with open(meta_path, 'r', encoding='utf-8') as f:
+                meta = json.load(f)
+        except Exception:
+            continue
+
+        haystacks = [
+            meta.get('filename', ''),
+            meta.get('ai_title', ''),
+            meta.get('ai_one_line', ''),
+            ' '.join(meta.get('ai_tags', []) or []),
+        ]
+        snippet = ''
+        matched = any(query in h.lower() for h in haystacks if h)
+
+        if not matched:
+            transcript_path = os.path.join(task_dir, 'transcript.json')
+            if os.path.isfile(transcript_path):
+                try:
+                    with open(transcript_path, 'r', encoding='utf-8') as f:
+                        segs = json.load(f)
+                    for s in segs:
+                        text = s.get('text', '')
+                        idx = text.lower().find(query)
+                        if idx != -1:
+                            start = max(0, idx - 20)
+                            snippet = (
+                                f"[{s.get('timestamp', '')}] "
+                                f"...{text[start:idx + len(query) + 40]}..."
+                            )
+                            matched = True
+                            break
+                except Exception:
+                    pass
+
+        if matched:
+            hits.append({**meta, 'snippet': snippet})
+
+    hits.sort(key=lambda e: e.get('date', ''), reverse=True)
+    return jsonify(hits)
+
+
+@app.route('/api/history', methods=['DELETE'])
+def api_history_clear():
+    """Delete ALL saved transcriptions in one shot.
+
+    Skips directories that belong to currently running tasks so we don't
+    nuke an in-flight job's output folder.
+    """
+    results_dir = config.RESULTS_FOLDER
+    if not os.path.isdir(results_dir):
+        return jsonify({'ok': True, 'deleted': 0, 'skipped': 0})
+
+    deleted = 0
+    skipped = 0
+    for name in os.listdir(results_dir):
+        if not _is_valid_task_id(name):
+            continue
+        if name in tasks:
+            skipped += 1
+            continue
+        task_dir = os.path.join(results_dir, name)
+        if os.path.isdir(task_dir):
+            shutil.rmtree(task_dir, ignore_errors=True)
+            deleted += 1
+
+    return jsonify({'ok': True, 'deleted': deleted, 'skipped': skipped})
+
+
+# ========== 链条：URL → 下载音频 → 转写 → 逐期分析 → 总合成 ==========
+#
+# 复刻多 agent workflow 的思路（每期独立分析防丢信息 → 最后综合），
+# 但用纯产品代码实现：一个链条 = 一个后台线程，状态持久化在
+# results/_chains/<chain_id>/chain.json，产物（逐期分析 md + 总分析.md）同目录。
+
+CHAINS_DIR = os.path.join(config.RESULTS_FOLDER, '_chains')
+os.makedirs(CHAINS_DIR, exist_ok=True)
+
+_CHAIN_ID_RE = re.compile(r'^[0-9a-f]{32}$')
+_MAX_CHAIN_VIDEOS = 300  # 防手滑整个频道几千个视频全下下来
+
+
+def _chain_dir(chain_id):
+    return os.path.join(CHAINS_DIR, chain_id)
+
+
+def _save_chain(state):
+    with open(os.path.join(_chain_dir(state['id']), 'chain.json'),
+              'w', encoding='utf-8') as f:
+        json.dump(state, f, ensure_ascii=False, indent=2)
+
+
+def _safe_doc_name(name):
+    name = name.replace('/', '-').replace('\\', '-')
+    return re.sub(r'[:*?"<>|\x00-\x1f]', '_', name).strip()[:120]
+
+
+def run_chain(state):
+    """链条后台线程：解析 → 边下边转 → 逐期分析 → 总合成。
+
+    下载和转写重叠进行（每个视频下完立刻提交转写），下载并发受全局闸限流；
+    分析同样走全局闸。无论开多少条链，对外部的瞬时压力都封顶。
+    """
+    chain_id = state['id']
+    chain_dir = _chain_dir(chain_id)
+    dl_dir = os.path.join(chain_dir, 'downloads')
+    lock = threading.Lock()
+
+    def save():
+        with lock:
+            _save_chain(state)
+
+    try:
+        from downloader import probe, download_one
+
+        # ---- 1. 解析目标（拿到标题 + 封面）----
+        state['stage'] = 'downloading'
+        _save_chain(state)
+        targets = probe(state['url'], state.get('max_videos'))
+        if not targets:
+            raise RuntimeError('No downloadable videos at this link')
+
+        # 预置视频网格：一开始就把全部目标铺出来，前端详情页能立刻看到
+        videos = [{
+            'index': i,
+            'title': t.get('title') or t.get('video_id') or f'视频{i + 1}',
+            'video_id': t.get('video_id', ''),
+            'thumbnail': t.get('thumbnail', ''),
+            'status': 'downloading',
+            'task_id': None,
+        } for i, t in enumerate(targets)]
+        state['videos'] = videos
+        state['download_total'] = len(targets)
+        state['download_done'] = 0
+        _save_chain(state)
+
+        # ---- 2. 边下边转：并发下载（全局限流），每个下完立刻提交转写 ----
+        state['stage'] = 'transcribing'
+
+        def _download_and_submit(i, target):
+            v = videos[i]
+            with _chain_download_sem:            # 全局下载闸
+                with lock:
+                    state['current'] = v['title']
+                item = download_one(target, dl_dir)
+            with lock:
+                state['download_done'] = state.get('download_done', 0) + 1
+            if not item:
+                v['status'] = 'download_failed'
+                save()
+                return
+            # 下完立刻建转写任务（复用引擎池/信号量/taskdb/历史），不等其它视频
+            task_id = str(uuid.uuid4())
+            ext = os.path.splitext(item['path'])[1].lstrip('.') or 'mp3'
+            upload_path = os.path.join(config.UPLOAD_FOLDER, f"{task_id}.{ext}")
+            shutil.move(item['path'], upload_path)
+            display_name = f"{item['title']} [{item['video_id']}].mp3"
+            taskdb.create(task_id, display_name, state['engine'], None, upload_path)
+            q = queue.Queue()
+            tasks[task_id] = q
+            executor.submit(
+                run_transcription, task_id, upload_path, state['engine'],
+                display_name, q, None,
+            )
+            v['task_id'] = task_id
+            v['title'] = item['title']
+            v['video_id'] = item['video_id']
+            v['status'] = 'transcribing'
+            save()
+
+        dl_futures = [
+            _download_executor.submit(_download_and_submit, i, t)
+            for i, t in enumerate(targets)
+        ]
+        for f in dl_futures:
+            f.result()  # 等所有下载线程结束（对应转写已在后台并行跑着）
+
+        submitted = [v for v in videos if v.get('task_id')]
+        if not submitted:
+            raise RuntimeError('No audio downloaded — bad link, login required, or all downloads failed')
+
+        # ---- 3. 等全部转写落定（轮询 taskdb）----
+        pending = {v['task_id'] for v in submitted}
+        while pending:
+            time.sleep(5)
+            for v in submitted:
+                if v['task_id'] not in pending:
+                    continue
+                row = taskdb.get(v['task_id'])
+                if row and row['status'] in ('done', 'failed'):
+                    v['status'] = row['status']
+                    if row['status'] == 'failed':
+                        v['error'] = row.get('error') or ''
+                    pending.discard(v['task_id'])
+            save()
+
+        # ---- 4. 逐期分析（全局分析闸；每期一次独立调用，防丢信息）----
+        if state.get('analyze'):
+            state['stage'] = 'analyzing'
+            state['analyzed_done'] = 0
+            save()
+            from analyze import analyze_transcript, synthesize
+
+            def _analyze_one(v):
+                if v['status'] != 'done':
+                    return None
+                tpath = os.path.join(
+                    config.RESULTS_FOLDER, v['task_id'], 'transcript.json')
+                if not os.path.isfile(tpath):
+                    return None
+                try:
+                    with open(tpath, 'r', encoding='utf-8') as fh:
+                        segs = json.load(fh)
+                    text = '\n'.join(
+                        f"[{s.get('timestamp', '')}] {s.get('text', '')}"
+                        for s in segs
+                    )
+                    with _chain_analysis_sem:    # 全局分析闸
+                        md = analyze_transcript(v['title'], text, state['author'])
+                    fname = f"分析_{v['index'] + 1:03d}_{_safe_doc_name(v['title'])}.md"
+                    with open(os.path.join(chain_dir, fname),
+                              'w', encoding='utf-8') as fh:
+                        fh.write(md)
+                    return (v['title'], md)
+                except Exception:  # noqa: BLE001  单期失败不拖垮整链
+                    return None
+                finally:
+                    with lock:
+                        state['analyzed_done'] = state.get('analyzed_done', 0) + 1
+                        _save_chain(state)
+
+            with ThreadPoolExecutor(
+                max_workers=config.CHAIN_ANALYSIS_CONCURRENCY
+            ) as pool:
+                results = list(pool.map(_analyze_one, submitted))
+            analyses = [r for r in results if r]
+            state['analyzed_ok'] = len(analyses)
+
+            # ---- 5. 总合成 ----
+            if analyses:
+                state['stage'] = 'synthesizing'
+                save()
+                total_md = synthesize(analyses, state['author'])
+                with open(os.path.join(chain_dir, '总分析.md'),
+                          'w', encoding='utf-8') as fh:
+                    fh.write(total_md)
+                state['final_doc'] = '总分析.md'
+
+        state['stage'] = 'done'
+    except Exception as e:  # noqa: BLE001
+        state['stage'] = 'failed'
+        state['error'] = str(e)
+    finally:
+        state['finished_at'] = __import__('datetime').datetime.now().strftime(
+            '%Y-%m-%d %H:%M:%S')
+        _save_chain(state)
+        shutil.rmtree(dl_dir, ignore_errors=True)
+
+
+@app.route('/api/chain', methods=['POST'])
+def api_chain_create():
+    data = request.get_json(force=True, silent=True) or {}
+    url = (data.get('url') or '').strip()
+    if not url.startswith(('http://', 'https://')):
+        return jsonify({'error': '请填写有效的 http(s) 链接'}), 400
+
+    try:
+        max_videos = int(data.get('max_videos') or 0)
+    except (TypeError, ValueError):
+        max_videos = 0
+    max_videos = min(max_videos, _MAX_CHAIN_VIDEOS) if max_videos > 0 else None
+
+    chain_id = uuid.uuid4().hex
+    os.makedirs(_chain_dir(chain_id), exist_ok=True)
+    state = {
+        'id': chain_id,
+        'url': url,
+        'engine': data.get('engine') or 'gemini',
+        'max_videos': max_videos,
+        'analyze': bool(data.get('analyze', True)),
+        'author': (data.get('author') or '').strip() or '该博主',
+        'stage': 'starting',
+        'created_at': __import__('datetime').datetime.now().strftime(
+            '%Y-%m-%d %H:%M:%S'),
+    }
+    _save_chain(state)
+    threading.Thread(target=run_chain, args=(state,), daemon=True).start()
+    return jsonify({'chain_id': chain_id})
+
+
+@app.route('/api/chains')
+def api_chains():
+    entries = []
+    if os.path.isdir(CHAINS_DIR):
+        for name in os.listdir(CHAINS_DIR):
+            cpath = os.path.join(CHAINS_DIR, name, 'chain.json')
+            if _CHAIN_ID_RE.match(name) and os.path.isfile(cpath):
+                try:
+                    with open(cpath, 'r', encoding='utf-8') as f:
+                        entries.append(json.load(f))
+                except Exception:
+                    pass
+    entries.sort(key=lambda e: e.get('created_at', ''), reverse=True)
+    return jsonify(entries)
+
+
+@app.route('/api/chain/<chain_id>')
+def api_chain_detail(chain_id):
+    if not _CHAIN_ID_RE.match(chain_id or ''):
+        return jsonify({'error': 'Invalid chain id'}), 400
+    cpath = os.path.join(_chain_dir(chain_id), 'chain.json')
+    if not os.path.isfile(cpath):
+        return jsonify({'error': 'Not found'}), 404
+    with open(cpath, 'r', encoding='utf-8') as f:
+        return jsonify(json.load(f))
+
+
+@app.route('/api/chain/<chain_id>', methods=['DELETE'])
+def api_chain_delete(chain_id):
+    if not _CHAIN_ID_RE.match(chain_id or ''):
+        return jsonify({'error': 'Invalid chain id'}), 400
+    cdir = _chain_dir(chain_id)
+    if not os.path.isdir(cdir):
+        return jsonify({'error': 'Not found'}), 404
+    # 只删链条目录（分析产物）；转写结果仍留在历史里
+    shutil.rmtree(cdir, ignore_errors=True)
+    return jsonify({'ok': True})
+
+
+@app.route('/api/chain/<chain_id>/file')
+def api_chain_file(chain_id):
+    """读链条目录下的 md 产物（?name=总分析.md 或某期分析）。"""
+    if not _CHAIN_ID_RE.match(chain_id or ''):
+        return jsonify({'error': 'Invalid chain id'}), 400
+    name = request.args.get('name') or ''
+    # 只允许目录内的 .md 文件名，杜绝路径穿越
+    if '/' in name or '\\' in name or '..' in name or not name.endswith('.md'):
+        return jsonify({'error': 'Invalid file name'}), 400
+    fpath = os.path.join(_chain_dir(chain_id), name)
+    if not os.path.isfile(fpath):
+        return jsonify({'error': 'Not found'}), 404
+    return send_file(fpath, mimetype='text/markdown; charset=utf-8',
+                     as_attachment=False, download_name=name)
+
+
+@app.route('/api/chain/<chain_id>/files')
+def api_chain_files(chain_id):
+    """列出链条目录下的全部 md 产物。"""
+    if not _CHAIN_ID_RE.match(chain_id or ''):
+        return jsonify({'error': 'Invalid chain id'}), 400
+    cdir = _chain_dir(chain_id)
+    if not os.path.isdir(cdir):
+        return jsonify({'error': 'Not found'}), 404
+    files = sorted(f for f in os.listdir(cdir) if f.endswith('.md'))
+    return jsonify(files)
+
+
+# ========== 个人数据展板 ==========
+
+@app.route('/api/stats')
+def api_stats():
+    """聚合历史转写：总时长、产出字数、按引擎、关注领域(标签)、每日活跃度。
+
+    字数(char_count)首次计算后写回 meta.json 缓存，之后秒回。
+    """
+    from collections import defaultdict
+
+    results_dir = config.RESULTS_FOLDER
+    total = 0
+    total_seconds = 0.0
+    total_chars = 0
+    total_segments = 0
+    engines = defaultdict(int)
+    tag_counts = defaultdict(int)
+    daily_seconds = defaultdict(float)   # 'YYYY-MM-DD' -> 秒
+    daily_count = defaultdict(int)
+
+    if os.path.isdir(results_dir):
+        for name in os.listdir(results_dir):
+            if name.startswith('_'):
+                continue
+            task_dir = os.path.join(results_dir, name)
+            meta_path = os.path.join(task_dir, 'meta.json')
+            if not os.path.isfile(meta_path):
+                continue
+            try:
+                with open(meta_path, 'r', encoding='utf-8') as f:
+                    meta = json.load(f)
+            except Exception:
+                continue
+
+            total += 1
+            total_seconds += meta.get('duration_seconds') or 0
+            total_segments += meta.get('segment_count') or 0
+            engines[meta.get('engine') or 'unknown'] += 1
+            for t in (meta.get('ai_tags') or []):
+                tag_counts[t] += 1
+
+            # 字数：优先用缓存，没有就读 transcript 算一次并写回
+            cc = meta.get('char_count')
+            if cc is None:
+                cc = 0
+                tpath = os.path.join(task_dir, 'transcript.json')
+                if os.path.isfile(tpath):
+                    try:
+                        with open(tpath, 'r', encoding='utf-8') as f:
+                            for s in json.load(f):
+                                cc += len(s.get('text', '') or '')
+                    except Exception:
+                        cc = 0
+                meta['char_count'] = cc
+                try:
+                    with open(meta_path, 'w', encoding='utf-8') as f:
+                        json.dump(meta, f, ensure_ascii=False, indent=2)
+                except Exception:
+                    pass
+            total_chars += cc
+
+            date = (meta.get('date') or '')[:10]
+            if len(date) == 10:
+                daily_seconds[date] += meta.get('duration_seconds') or 0
+                daily_count[date] += 1
+
+    # 每日时间线（按日期升序），前端据此画累计小时折线
+    timeline = [
+        {'date': d, 'minutes': round(daily_seconds[d] / 60, 1),
+         'count': daily_count[d]}
+        for d in sorted(daily_seconds)
+    ]
+    top_tags = sorted(tag_counts.items(), key=lambda kv: -kv[1])[:8]
+
+    return jsonify({
+        'totals': {
+            'transcripts': total,
+            'hours': round(total_seconds / 3600, 1),
+            'chars': total_chars,
+            'segments': total_segments,
+        },
+        'engines': dict(engines),
+        'top_tags': [{'tag': t, 'count': c} for t, c in top_tags],
+        'timeline': timeline,
+    })
+
+
 if __name__ == '__main__':
-    app.run(debug=True, threaded=True, port=5001)
+    # debug 模式下 werkzeug 起两个进程（reloader 父进程 + 真正服务的子进程），
+    # 恢复逻辑只在服务子进程（WERKZEUG_RUN_MAIN=true）里跑，避免同一任务被跑两遍。
+    if os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
+        recover_unfinished_tasks()
+    app.run(debug=True, threaded=True,
+            port=int(os.environ.get('PORT', 5001)))
