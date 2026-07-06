@@ -38,6 +38,8 @@ os.makedirs(config.RESULTS_FOLDER, exist_ok=True)
 taskdb.init()
 
 tasks = {}
+# task_id -> 最近的转写进度百分比（供链条详情页在封面上显示 %）
+_task_progress = {}
 
 
 # ========== 可选鉴权 ==========
@@ -214,6 +216,7 @@ def run_transcription(task_id, filepath, engine, original_filename, q,
     """
 
     def progress_cb(percent):
+        _task_progress[task_id] = percent
         q.put(json.dumps({
             'type': 'progress',
             'percent': percent,
@@ -443,6 +446,7 @@ def run_transcription(task_id, filepath, engine, original_filename, q,
         # worker 完成后才从全局表里清掉自己，
         # 这样客户端断开/刷新后重连依然能读到队列里剩下的消息。
         tasks.pop(task_id, None)
+        _task_progress.pop(task_id, None)
 
 
 # ========== Pages ==========
@@ -1122,7 +1126,15 @@ def api_chain_detail(chain_id):
     if not os.path.isfile(cpath):
         return jsonify({'error': 'Not found'}), 404
     with open(cpath, 'r', encoding='utf-8') as f:
-        return jsonify(json.load(f))
+        data = json.load(f)
+    # 给正在转写的视频挂上实时进度百分比（内存里的 _task_progress）
+    for v in data.get('videos', []):
+        tid = v.get('task_id')
+        if tid and v.get('status') == 'transcribing':
+            p = _task_progress.get(tid)
+            if p is not None:
+                v['progress'] = p
+    return jsonify(data)
 
 
 @app.route('/api/chain/<chain_id>', methods=['DELETE'])
@@ -1253,9 +1265,15 @@ def api_stats():
 
 
 if __name__ == '__main__':
-    # debug 模式下 werkzeug 起两个进程（reloader 父进程 + 真正服务的子进程），
-    # 恢复逻辑只在服务子进程（WERKZEUG_RUN_MAIN=true）里跑，避免同一任务被跑两遍。
-    if os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
+    # 生产（Docker/公网）用 FLASK_DEBUG=0 关掉调试器（debug=True 的 Werkzeug 调试器
+    # 在公网上等于 RCE 漏洞）。本地默认开 debug（热重载方便）。
+    debug = os.environ.get('FLASK_DEBUG', '1') == '1'
+    # 恢复未完成任务只在"真正服务的进程"里跑一次：
+    # debug 模式有 reloader 父/子两进程，只在子进程（WERKZEUG_RUN_MAIN）跑；
+    # 非 debug 只有一个进程，直接跑。
+    if not debug or os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
         recover_unfinished_tasks()
-    app.run(debug=True, threaded=True,
+    # HOST 默认 127.0.0.1（本地只对自己开）；Docker 里设 HOST=0.0.0.0 对外暴露。
+    app.run(debug=debug, threaded=True,
+            host=os.environ.get('HOST', '127.0.0.1'),
             port=int(os.environ.get('PORT', 5001)))

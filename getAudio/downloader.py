@@ -45,6 +45,30 @@ def _cookie_args():
             if YTDLP_COOKIES_FROM_BROWSER else [])
 
 
+# YouTube 频道主页（无栏目）→ 补 /videos，否则 yt-dlp 会把"视频/直播/短视频"
+# 各个栏目 tab 当成条目返回，下载器再拿 tab 去下 = 下载整个频道，永远下不完。
+_YT_CHANNEL_ROOT = re.compile(
+    r'^(https?://(?:www\.)?youtube\.com/(?:@[^/?#]+|channel/[^/?#]+|c/[^/?#]+|user/[^/?#]+))/?(?:[?#].*)?$'
+)
+
+
+def _normalize_url(url):
+    m = _YT_CHANNEL_ROOT.match(url or '')
+    return m.group(1) + '/videos' if m else url
+
+
+def _is_video_entry(e):
+    """判断 flat 条目是不是"单个视频"——排除频道 tab / 嵌套播放列表。"""
+    if e.get('_type') == 'playlist':
+        return False
+    if e.get('ie_key') in ('YoutubeTab', 'YoutubeChannel'):
+        return False
+    vid = e.get('id') or ''
+    if vid.startswith('UC') and len(vid) == 24:   # YouTube 频道 ID，不是视频
+        return False
+    return True
+
+
 def _thumbnail_for(entry):
     """从 flat 条目里取封面 URL；YouTube 用稳定的 ytimg 兜底。"""
     thumbs = entry.get('thumbnails')
@@ -66,6 +90,7 @@ def probe(url, max_videos=None):
     每个元素：{'video_url', 'title', 'video_id', 'thumbnail'}
     """
     binary = _resolve_ytdlp()
+    url = _normalize_url(url)          # 频道主页 → /videos，避免下成整个频道
     cmd = [binary, '--flat-playlist', '-J', '--no-warnings',
            *_lang_args(), *_cookie_args()]
     if max_videos:
@@ -83,7 +108,8 @@ def probe(url, max_videos=None):
     info = json.loads(result.stdout)
 
     if info.get('_type') == 'playlist':
-        entries = [e for e in (info.get('entries') or []) if e]
+        # 只保留真正的视频条目，滤掉频道 tab / 嵌套播放列表（防跑飞）
+        entries = [e for e in (info.get('entries') or []) if e and _is_video_entry(e)]
         if max_videos:
             entries = entries[:max_videos]
         targets = []

@@ -1,0 +1,24 @@
+# Never bake secrets or data into the image
+.env
+getAudio/.env
+getAudio/results/
+getAudio/uploads/
+getAudio/tasks.db
+getAudio/tasks.db-*
+data/
+
+# Repo cruft
+.git/
+venv/
+**/__pycache__/
+**/*.pyc
+*.log
+docs/
+.claude/
+.DS_Store
+
+# Large local content (not part of the app)
+getAudio/立党_*/
+getAudio/立党_*.md
+getAudio/合并文本_*.txt
+getAudio/完整源代码_*.md

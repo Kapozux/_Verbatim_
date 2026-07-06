@@ -92,6 +92,26 @@ Run:
 bash getAudio/run.sh          # → http://localhost:5001
 ```
 
+### Or self-host with Docker
+
+Everything (Python, ffmpeg, yt-dlp) is baked into the image — no local setup.
+
+```bash
+cp .env.example .env          # fill in keys + a GETAUDIO_TOKEN
+docker compose up -d          # → http://localhost:5001
+```
+
+Transcripts and audio persist in `./data/`. The image runs the app with the debugger
+off and binds `0.0.0.0`. Notes:
+
+- **Exposing to the internet?** Set `GETAUDIO_TOKEN` in `.env` (visit `/?token=...` once),
+  and put it behind HTTPS (a reverse proxy like Caddy/nginx). You pay all cloud-engine API costs.
+- **The Channel Pipeline** needs YouTube/Bilibili access. There's no browser in the container,
+  so `YTDLP_COOKIES_BROWSER` is empty by default — for logged-in sources, mount a `cookies.txt`.
+- **Local Whisper** runs on CPU inside the container; heavy jobs are slow — prefer a cloud engine on a server.
+- The image is a few GB (PyTorch, for the openai-whisper fallback). Drop `torch` + `openai-whisper`
+  from `requirements.txt` if you only use faster-whisper / cloud engines.
+
 ---
 
 ## Configuration (`getAudio/config.py`)

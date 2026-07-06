@@ -843,20 +843,27 @@ chainStartBtn.addEventListener('click', async () => {
 });
 
 function chainProgressText(c) {
-    const parts = [];
     const vids = c.videos || [];
+    const by = s => vids.filter(v => v.status === s).length;
+    const parts = [];
+
     if (c.download_total) {
-        const dlFail = vids.filter(v => v.status === 'download_failed').length;
+        const f = by('download_failed');
         parts.push(`Downloaded ${c.download_done || 0}/${c.download_total}` +
-            (dlFail ? ` (${dlFail} failed)` : ''));
+            (f ? ` (${f} failed)` : ''));
     }
-    // 转写基数只算下载成功、真正提交了转写的视频
+
+    // 转写：显示已完成 + 正在转写 + 失败，让进度"会动"（不只在转完才 +1）
     const submitted = vids.filter(v => v.status !== 'download_failed');
-    if (submitted.length) {
-        const done = submitted.filter(v => v.status === 'done').length;
-        const failed = submitted.filter(v => v.status === 'failed').length;
-        parts.push(`Transcribed ${done}/${submitted.length}` + (failed ? ` (${failed} failed)` : ''));
+    const done = by('done'), transcribing = by('transcribing'), failed = by('failed');
+    if (submitted.length && (done || transcribing || failed || c.stage !== 'downloading')) {
+        const extra = [];
+        if (transcribing) extra.push(`${transcribing} in progress`);
+        if (failed) extra.push(`${failed} failed`);
+        parts.push(`Transcribed ${done}/${submitted.length}` +
+            (extra.length ? ` (${extra.join(', ')})` : ''));
     }
+
     if (c.analyze && c.analyzed_done != null && submitted.length) {
         parts.push(`Analyzed ${c.analyzed_done}/${submitted.length}`);
     }
@@ -951,10 +958,15 @@ async function refreshChainDetail() {
             ? `<img class="vg-thumb" src="${v.thumbnail}" loading="lazy" alt=""
                  onerror="this.style.display='none'">`
             : '<div class="vg-thumb vg-noimg">▷</div>';
+        // 转写中且有进度 → 封面上盖珊瑚半透明板 + 大号百分比
+        const pct = (v.status === 'transcribing' && typeof v.progress === 'number')
+            ? v.progress : null;
+        const overlay = pct != null
+            ? `<div class="vg-prog" style="--p:${pct}%"><span>${pct}%</span></div>` : '';
         const onclick = clickable
             ? ` onclick="openDetailView('${v.task_id}')" title="View transcript"` : '';
         return `<div class="vg-card ${clickable ? 'vg-clickable' : ''}"${onclick}>
-            ${thumb}
+            <div class="vg-thumb-wrap">${thumb}${overlay}</div>
             <div class="vg-badge ${st.cls}">${st.label}</div>
             <div class="vg-title" title="${(v.title || '').replace(/"/g, '&quot;')}">${v.title || ''}</div>
         </div>`;
