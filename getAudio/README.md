@@ -10,6 +10,8 @@ The interface is English; the transcribed content keeps its original language.
 > Runs entirely on your machine (Flask, `localhost:5001`). Transcription can be local (Whisper) or
 > cloud (Gemini / DashScope); nothing is shared unless you configure a cloud engine.
 
+![Verbatim](../docs/verbatim.webp)
+
 ---
 
 ## What it does
