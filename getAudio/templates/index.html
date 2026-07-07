@@ -62,12 +62,18 @@
                                     <small>Cloud · needs API key</small>
                                 </span>
                             </label>
+                        </div>
+
+                        <button type="button" id="show-mainland" class="reveal-link">
+                            Show mainland-cloud engines ▾
+                        </button>
+                        <div class="radio-group hidden" id="mainland-engines">
                             <label class="radio-option">
                                 <input type="radio" name="engine" value="dashscope">
                                 <span class="radio-custom"></span>
                                 <span class="radio-label">
                                     <strong>DashScope</strong>
-                                    <small>Paraformer ASR · cheap · Chinese-tuned</small>
+                                    <small>Alibaba Cloud · cheap · ⚠ moderates content</small>
                                 </span>
                             </label>
                             <label class="radio-option">
@@ -75,7 +81,7 @@
                                 <span class="radio-custom"></span>
                                 <span class="radio-label">
                                     <strong>Precise</strong>
-                                    <small>Gemini text + DashScope diarization · slow</small>
+                                    <small>Gemini text + Alibaba diarization · ⚠ moderates content</small>
                                 </span>
                             </label>
                         </div>
@@ -130,7 +136,6 @@
                                    min="1" max="300" placeholder="Max videos">
                             <select id="chain-engine" class="search-input chain-small">
                                 <option value="gemini">Gemini (recommended)</option>
-                                <option value="dashscope">DashScope</option>
                                 <option value="whisper">Whisper (local)</option>
                             </select>
                             <label class="chain-check">
@@ -280,7 +285,11 @@
                 <div id="stats-chart"></div>
             </div>
             <div class="stats-block">
-                <div class="stats-label">Fields you follow</div>
+                <div class="stats-label stats-label-row">
+                    <span>Fields you follow</span>
+                    <button id="stats-lang" class="stats-lang" type="button"
+                            title="Toggle tag language">EN</button>
+                </div>
                 <div id="stats-tags"></div>
             </div>
         </div>

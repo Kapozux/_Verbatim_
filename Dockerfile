@@ -23,11 +23,14 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY getAudio/ .
 
+# GETAUDIO_DB lives under results/ (a mounted volume) so task state
+# survives image rebuilds, not just container restarts.
 ENV PYTHONUNBUFFERED=1 \
     FLASK_DEBUG=0 \
     HOST=0.0.0.0 \
     PORT=5001 \
-    YTDLP_COOKIES_BROWSER=""
+    YTDLP_COOKIES_BROWSER="" \
+    GETAUDIO_DB=/app/getAudio/results/tasks.db
 
 EXPOSE 5001
 CMD ["python", "app.py"]

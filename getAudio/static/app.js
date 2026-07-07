@@ -136,6 +136,33 @@ document.querySelectorAll('input[name="engine"]').forEach(radio => {
     });
 });
 
+// ========== 国内云引擎（DashScope / Precise）：默认隐藏 + 风险确认 ==========
+// 这两个引擎把音频送阿里云，阿里强制内容审核 —— 敏感/政治内容会被拒或篡改。
+const showMainlandBtn = document.getElementById('show-mainland');
+const mainlandEngines = document.getElementById('mainland-engines');
+if (showMainlandBtn && mainlandEngines) {
+    showMainlandBtn.addEventListener('click', () => {
+        mainlandEngines.classList.toggle('hidden');
+        showMainlandBtn.classList.toggle('open');
+    });
+}
+const MAINLAND_WARNING =
+    'DashScope / Precise send your audio to Alibaba Cloud (mainland China), which runs ' +
+    'mandatory content moderation.\n\n' +
+    'Do NOT use them for politically sensitive material — it may be refused, garbled, or altered. ' +
+    'For sensitive content use Whisper (local, private) or Gemini.\n\nUse this engine anyway?';
+document.querySelectorAll('input[name="engine"][value="dashscope"], input[name="engine"][value="precise"]')
+    .forEach(radio => {
+        radio.addEventListener('change', () => {
+            if (radio.checked && !confirm(MAINLAND_WARNING)) {
+                // 拒绝 → 退回 Whisper
+                const w = document.querySelector('input[name="engine"][value="whisper"]');
+                w.checked = true;
+                w.dispatchEvent(new Event('change'));
+            }
+        });
+    });
+
 // ========== Form submission (batch) ==========
 // 同时上传的文件数。逐个上传是为了绕开单请求体积上限（几百个文件塞一个请求会超限被拒），
 // 上传本身也限流，避免一次性发起过多大文件上传拖垮网络/内存。
@@ -1240,6 +1267,26 @@ function renderMarkdown(md) {
 const statsToggle = document.getElementById('stats-toggle');
 const statsPanel = document.getElementById('stats-panel');
 let statsLoaded = false;
+let statsTags = [];
+let statsTagLang = 'zh';   // 'zh' | 'en'
+
+// 关注领域横向条：按当前语言渲染，不重新拉数据
+function renderStatsTags() {
+    const el = document.getElementById('stats-tags');
+    if (!statsTags.length) {
+        el.innerHTML = '<div class="spark-empty">No tags yet — run “Auto-title”</div>';
+        return;
+    }
+    const max = statsTags[0].count || 1;
+    el.innerHTML = statsTags.map(t => {
+        const label = statsTagLang === 'en' ? (t.tag_en || t.tag) : t.tag;
+        return `<div class="stat-tag">
+            <span class="stat-tag-name" title="${label}">${label}</span>
+            <span class="stat-tag-bar"><i style="width:${Math.max(6, t.count / max * 100)}%"></i></span>
+            <span class="stat-tag-num">${t.count}</span>
+        </div>`;
+    }).join('');
+}
 
 function fmtBig(n) {
     if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
@@ -1283,16 +1330,9 @@ async function loadStats() {
         const cumHours = (s.timeline || []).map(p => { cum += p.minutes / 60; return cum; });
         document.getElementById('stats-chart').innerHTML = sparkline(cumHours);
 
-        // 关注领域：横向条
-        const tags = s.top_tags || [];
-        const max = tags.length ? tags[0].count : 1;
-        document.getElementById('stats-tags').innerHTML = tags.length
-            ? tags.map(t => `<div class="stat-tag">
-                    <span class="stat-tag-name" title="${t.tag}">${t.tag}</span>
-                    <span class="stat-tag-bar"><i style="width:${Math.max(6, t.count / max * 100)}%"></i></span>
-                    <span class="stat-tag-num">${t.count}</span>
-                </div>`).join('')
-            : '<div class="spark-empty">No tags yet — run “Auto-title”</div>';
+        // 关注领域：横向条（中/EN 切换见 renderStatsTags）
+        statsTags = s.top_tags || [];
+        renderStatsTags();
         statsLoaded = true;
     } catch {
         document.getElementById('stats-chart').innerHTML = '<div class="spark-empty">Failed to load</div>';
@@ -1304,6 +1344,14 @@ statsToggle.addEventListener('click', (e) => {
     const open = statsPanel.classList.toggle('hidden');
     if (!open && !statsLoaded) loadStats();      // 首次打开才拉数据
     if (!open) loadStats();                        // 每次打开刷新
+});
+// 标签语言切换：按钮上显示的是"点了会切到的语言"
+const statsLang = document.getElementById('stats-lang');
+statsLang.addEventListener('click', (e) => {
+    e.stopPropagation();
+    statsTagLang = statsTagLang === 'zh' ? 'en' : 'zh';
+    statsLang.textContent = statsTagLang === 'zh' ? 'EN' : '中';
+    renderStatsTags();
 });
 // 点面板外部关闭
 document.addEventListener('click', (e) => {

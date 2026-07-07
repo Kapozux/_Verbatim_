@@ -52,18 +52,83 @@ def generate_card_meta(filename, content):
     return _parse_json(raw)
 
 
-def _parse_json(raw):
+def _parse_json_obj(raw):
+    """从模型输出里抠出第一个 JSON 对象，失败返回 None。"""
     m = re.search(r'```json\s*(.*?)\s*```', raw, re.DOTALL)
     if m:
         raw = m.group(1)
     raw = raw.strip()
-    if not raw.startswith('{'):
-        start = raw.find('{')
-        if start != -1:
-            raw = raw[start:]
+    start = raw.find('{')
+    if start != -1:
+        raw = raw[start:]
     try:
-        data = json.loads(raw)
+        return json.loads(raw)
     except json.JSONDecodeError:
+        return None
+
+
+def translate_tags(tags, cache_path):
+    """把中文标签批量译成简短英文，结果持久化缓存到 cache_path(JSON)。
+
+    返回 {原标签: 英文}。已缓存的标签不再调模型；无 key / 调用失败时，
+    未命中的标签回落为原文（前端切到 EN 也不会空）。
+    """
+    tags = [t for t in dict.fromkeys(tags) if t]   # 去重保序
+    if not tags:
+        return {}
+
+    cache = {}
+    try:
+        if os.path.isfile(cache_path):
+            with open(cache_path, 'r', encoding='utf-8') as f:
+                cache = json.load(f)
+    except Exception:
+        cache = {}
+
+    missing = [t for t in tags if t not in cache]
+    if missing:
+        added = _gemini_translate(missing)
+        if added:
+            cache.update(added)
+            try:
+                with open(cache_path, 'w', encoding='utf-8') as f:
+                    json.dump(cache, f, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
+
+    return {t: cache.get(t, t) for t in tags}
+
+
+def _gemini_translate(tags):
+    """一次性把一批标签译成英文；返回 {中文: English} 或 None。"""
+    api_key = GEMINI_API_KEY or os.environ.get('GEMINI_API_KEY', '')
+    if not api_key:
+        return None
+    prompt = (
+        "把下面这些中文内容标签逐个翻译成简短的英文标签"
+        "（每个 1-3 个单词，Title Case，如 时政评论→Politics、职业规划→Careers）。\n"
+        "严格输出一个 JSON 对象，key 是原中文、value 是英文，不要输出别的：\n"
+        + json.dumps(tags, ensure_ascii=False)
+    )
+    try:
+        from google import genai
+        client = genai.Client(api_key=api_key)
+        resp = client.models.generate_content(
+            model=GEMINI_ENRICH_MODEL,
+            contents=prompt,
+        )
+        raw = (resp.text or '').strip()
+    except Exception:
+        return None
+    data = _parse_json_obj(raw)
+    if not isinstance(data, dict):
+        return None
+    return {str(k): str(v).strip()[:30] for k, v in data.items() if str(v).strip()}
+
+
+def _parse_json(raw):
+    data = _parse_json_obj(raw)
+    if data is None:
         return None
 
     title = str(data.get('title', '')).strip()

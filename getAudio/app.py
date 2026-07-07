@@ -1251,6 +1251,14 @@ def api_stats():
     ]
     top_tags = sorted(tag_counts.items(), key=lambda kv: -kv[1])[:8]
 
+    # 标签英文译名（带磁盘缓存，只对出现的标签翻一次）
+    try:
+        from enrich import translate_tags
+        tmap = translate_tags([t for t, _ in top_tags],
+                              os.path.join(results_dir, '_tagmap.json'))
+    except Exception:
+        tmap = {}
+
     return jsonify({
         'totals': {
             'transcripts': total,
@@ -1259,7 +1267,8 @@ def api_stats():
             'segments': total_segments,
         },
         'engines': dict(engines),
-        'top_tags': [{'tag': t, 'count': c} for t, c in top_tags],
+        'top_tags': [{'tag': t, 'tag_en': tmap.get(t, t), 'count': c}
+                     for t, c in top_tags],
         'timeline': timeline,
     })
 
