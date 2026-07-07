@@ -1006,6 +1006,34 @@ def recover_unfinished_chains():
             pass
 
 
+def _merged_raw_text(author, videos):
+    """把所有转写成功的视频拼成一份纯文本合集（无 AI 分析）。空则返回 ''。"""
+    parts = []
+    n = 0
+    for v in videos:
+        if v.get('status') != 'done' or not v.get('task_id'):
+            continue
+        tpath = os.path.join(config.RESULTS_FOLDER, v['task_id'], 'transcript.json')
+        if not os.path.isfile(tpath):
+            continue
+        try:
+            with open(tpath, 'r', encoding='utf-8') as f:
+                segs = json.load(f)
+        except Exception:
+            continue
+        text = ' '.join((s.get('text') or '').strip()
+                        for s in segs if (s.get('text') or '').strip()).strip()
+        if not text:
+            continue
+        n += 1
+        title = v.get('title') or f"视频{v.get('index', 0) + 1}"
+        parts.append(f"## {title}\n\n{text}\n")
+    if not n:
+        return ''
+    header = f"# {author} — 全部转写合并（{n} 期 · 纯文本，无 AI 分析）\n"
+    return header + '\n' + '\n'.join(parts)
+
+
 def _safe_doc_name(name):
     name = name.replace('/', '-').replace('\\', '-')
     return re.sub(r'[:*?"<>|\x00-\x1f]', '_', name).strip()[:120]
@@ -1132,6 +1160,15 @@ def run_chain(state):
                     if row['status'] == 'failed':
                         v['error'] = row.get('error') or ''
                     pending.discard(v['task_id'])
+            save()
+
+        # ---- 3.5 合并原文（纯文本，无 AI；不勾 analyze 也生成）----
+        raw = _merged_raw_text(state['author'], submitted)
+        if raw:
+            with open(os.path.join(chain_dir, '合并原文.md'),
+                      'w', encoding='utf-8') as fh:
+                fh.write(raw)
+            state['raw_doc'] = '合并原文.md'
             save()
 
         # ---- 4. 逐期分析（全局分析闸；每期一次独立调用，防丢信息）----

@@ -916,6 +916,10 @@ function renderChains(chains) {
             links += `<a class="chain-doc-link" href="#"
                 onclick="openDocView('${c.id}','${encodeURIComponent(c.final_doc)}');return false;">Read synthesis</a>`;
         }
+        if (c.raw_doc) {
+            links += `<a class="chain-doc-link" href="#"
+                onclick="openDocView('${c.id}','${encodeURIComponent(c.raw_doc)}');return false;">Merged transcript</a>`;
+        }
         if (['done', 'failed'].includes(c.stage)) {
             links += `<a class="chain-doc-link" href="#"
                 onclick="gotoDocs();return false;">All documents</a>
