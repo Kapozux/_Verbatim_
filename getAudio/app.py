@@ -945,6 +945,35 @@ def _save_chain(state):
         json.dump(state, f, ensure_ascii=False, indent=2)
 
 
+_VID_IN_NAME = re.compile(r'\[([A-Za-z0-9_-]{6,20})\]')
+
+
+def _video_id_index():
+    """{video_id: task_id}：扫所有已完成转写，从 meta.filename 里的 [id] 回填。
+
+    用于去重复用——同一个视频（同 video_id）之前转写过就直接拿旧结果。
+    """
+    idx = {}
+    rd = config.RESULTS_FOLDER
+    if not os.path.isdir(rd):
+        return idx
+    for name in os.listdir(rd):
+        if name.startswith('_') or not _is_valid_task_id(name):
+            continue
+        d = os.path.join(rd, name)
+        if not os.path.isfile(os.path.join(d, 'transcript.json')):
+            continue
+        try:
+            with open(os.path.join(d, 'meta.json'), 'r', encoding='utf-8') as f:
+                meta = json.load(f)
+        except Exception:
+            continue
+        m = _VID_IN_NAME.search(meta.get('filename', '') or '')
+        if m:
+            idx.setdefault(m.group(1), name)
+    return idx
+
+
 def _save_subtitle_task(task_id, target, segments, source):
     """把抓来的字幕当作转写结果落盘（无音频），并在 taskdb 里标记 done。
 
@@ -1103,13 +1132,25 @@ def run_chain(state):
             'index': i,
             'title': t.get('title') or t.get('video_id') or f'视频{i + 1}',
             'video_id': t.get('video_id', ''),
+            'video_url': t.get('video_url', ''),   # 供 retry 重下用
             'thumbnail': t.get('thumbnail', ''),
             'status': 'downloading',
             'task_id': None,
         } for i, t in enumerate(targets)]
+
+        # 去重复用：之前已转写过的（同 video_id）直接复用旧结果，跳过下载+转写
+        idx = _video_id_index()
+        for v in videos:
+            tid = v['video_id'] and idx.get(v['video_id'])
+            if tid:
+                v['task_id'] = tid
+                v['status'] = 'done'
+                v['source'] = 'reused'
+        reused = sum(1 for v in videos if v.get('source') == 'reused')
+
         state['videos'] = videos
         state['download_total'] = len(targets)
-        state['download_done'] = 0
+        state['download_done'] = reused
         _save_chain(state)
 
         # ---- 2. 边下边转：并发下载（全局限流），每个下完立刻提交转写 ----
@@ -1117,6 +1158,8 @@ def run_chain(state):
 
         def _download_and_submit(i, target):
             v = videos[i]
+            if v.get('status') == 'done':        # 复用的旧结果，跳过
+                return
             if chain_id in _cancel_chains:       # 已请求停止：不再开新下载
                 v['status'] = 'skipped'
                 save()
@@ -1182,7 +1225,8 @@ def run_chain(state):
             raise RuntimeError('No audio downloaded — bad link, login required, or all downloads failed')
 
         # ---- 3. 等全部转写落定（轮询 taskdb；被停则停止等待，在飞的转写自然收尾）----
-        pending = {v['task_id'] for v in submitted}
+        # 只等新提交转写的；复用/字幕来源的已经是 done，不进等待队列。
+        pending = {v['task_id'] for v in submitted if v.get('status') == 'transcribing'}
         while pending and chain_id not in _cancel_chains:
             time.sleep(5)
             for v in submitted:
@@ -1449,6 +1493,24 @@ def api_chain_stop(chain_id):
     if not _CHAIN_ID_RE.match(chain_id or ''):
         return jsonify({'error': 'Invalid chain id'}), 400
     _cancel_chains.add(chain_id)
+    return jsonify({'ok': True})
+
+
+@app.route('/api/chain/<chain_id>/retry', methods=['POST'])
+def api_chain_retry(chain_id):
+    """重跑这条链：重新解析 URL，去重复用已成功的、只重下重转失败/未完成的，再重新合成。"""
+    if not _CHAIN_ID_RE.match(chain_id or ''):
+        return jsonify({'error': 'Invalid chain id'}), 400
+    cpath = os.path.join(_chain_dir(chain_id), 'chain.json')
+    if not os.path.isfile(cpath):
+        return jsonify({'error': 'Not found'}), 404
+    with open(cpath, 'r', encoding='utf-8') as f:
+        state = json.load(f)
+    if state.get('stage') not in ('done', 'failed', 'cancelled'):
+        return jsonify({'ok': False, 'error': '这条链还在跑'}), 409
+    _cancel_chains.discard(chain_id)          # 清掉可能残留的取消标记
+    # run_chain 会重新 probe + 去重复用（已转写的跳过），只有缺的会真正重下重转
+    threading.Thread(target=run_chain, args=(state,), daemon=True).start()
     return jsonify({'ok': True})
 
 

@@ -929,6 +929,11 @@ function renderChains(chains) {
             links += `<a class="chain-doc-link chain-del" href="#"
                 onclick="stopChain('${c.id}',event);return false;">Stop</a>`;
         }
+        if (['done', 'failed', 'cancelled'].includes(c.stage)
+            && (c.videos || []).some(v => v.status !== 'done')) {
+            links += `<a class="chain-doc-link" href="#"
+                onclick="retryChain('${c.id}',event);return false;">Retry failed</a>`;
+        }
         if (['done', 'failed', 'cancelled'].includes(c.stage)) {
             links += `<a class="chain-doc-link" href="#"
                 onclick="reanalyzeMenu('${c.id}',event);return false;">Re-analyze</a>
@@ -1079,6 +1084,16 @@ document.addEventListener('visibilitychange', () => {
 function gotoDocs() {
     switchTab('library');
     switchLib('docs');
+}
+
+async function retryChain(chainId, ev) {
+    if (ev) ev.stopPropagation();
+    if (!confirm('Re-run this pipeline? Already-transcribed videos are reused (no re-download); only the missing/failed ones are re-fetched.')) return;
+    try {
+        const r = await (await fetch(`/api/chain/${chainId}/retry`, { method: 'POST' })).json();
+        if (!r.ok) { alert(r.error || 'Could not start retry'); }
+    } catch { alert('Could not start retry'); }
+    loadChains();
 }
 
 async function stopChain(chainId, ev) {
