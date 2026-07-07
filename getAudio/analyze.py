@@ -1,11 +1,13 @@
 """
-博主解读：分层 pipeline —— 从他的原话里读出"这个人怎么思考他的领域"。
+博主解读：证据卡两段式 —— 逐期只做中立抽取，评判/风格采纳全部上移到合并层。
 
-默认离线、不判对错。分三层，避免"一个大 prompt 焊死"导致的诬告/复读来回横跳：
-  1. extract()          中立抽取：他说了什么(带来源+认识论状态) + 修辞观察。不评价、不核实。
-  2. analyze_transcript() 逐期解读：只吃抽取料 + 转写，文本内推断他怎么讲/怎么想。analyst 视角，不联网。
-  3. synthesize()       人物画像：跨期综合，每条结论强制标来源层（转写自证/他的主张/外部核实）。
-可选：verify=True 时，额外一趟联网核实，结果只作"脚注"，绝不进人物结论当论据。
+  1. analyze_episode()  逐期 → 结构化"证据卡"（原子观察 + 逐字引文 + 时间戳 + 证据层）
+                        + 三个可数修辞指标（hype/hedge/tradeoff）+ 疑似 ASR 误识实体。
+                        零评判、离线。
+  2. synthesize()       只吃卡片（不再吃全文）→ 人物画像。母题归纳、风格采纳、批判都在这层，
+                        每条结论必须能点回某张卡的引文；批判强度由 critique_level 调（只调语气，
+                        不调证据松紧）。
+可选 verify=True：逐期附一节联网核实脚注，只作脚注、绝不进卡片/画像结论。
 """
 
 import json
@@ -16,68 +18,74 @@ from datetime import datetime
 
 from config import GEMINI_API_KEY, GEMINI_ANALYSIS_MODEL, make_gemini_client
 
-# 校准兜底（任何一层都适用）：unknown≠false、保留存疑、ASR 提醒。
 _CALIBRATION_RULES = """【校准兜底 · 必守】
 - 今天是 {today}。内容可能涉及你知识截止之后的论文/模型/事件。**不认识 ≠ 不存在 ≠ 编造。**
-- 不许判"造假/虚构"。涉及外部事实而你无法确认的，一律记为"未能核实"，不下真伪判决。
-- 保留说话人的存疑标注；区分"他的主张 / 他转述来源 / 他自己标存疑"，别塌缩。
-- 转写可能有语音识别错误（专名/英文/模型名易听错）：按疑似误识处理，别把糊音当实质主张。"""
+- 不许判"造假/虚构"。涉及外部事实而无法确认的，一律记"未能核实"，不下真伪判决。
+- 保留说话人的存疑标注；区分"他的主张 / 他转述来源 / 他自己标存疑"。"""
 
-# ---- 层 1：抽取（中立、结构化、离线）----
-EXTRACT_PROMPT = """你的任务是**中立抽取**，不评价、不核实、不润色。从「{author}」这期《{title}》的转写里抽出结构化原料。
+# ---- 逐期：抽取证据卡（中立、结构化、离线、零评判）----
+CARDS_PROMPT = """你的任务是**中立抽取证据卡**：不评价、不判断、不润色、不下结论。从「{author}」这期《{title}》的转写抽出结构化证据。
 
-严格输出 JSON（只输出 JSON，不要别的文字）：
+严格只输出 JSON：
 {{
-  "claims": [{{"text": "他表达的一个具体主张/结论(简述)", "quote": "支撑的原话片段", "status": "主张|转述|存疑"}}],
-  "rhetoric": [{{"obs": "一个修辞/叙事观察(比喻/英雄反派/标题党/demo怎么摆/夸张措辞)", "quote": "原话片段"}}],
-  "topics": ["这期涉及的技术/主题/作品"],
-  "framing": {{"heroes": ["被捧的对象"], "villains": ["被贬/被宣判淘汰的对象"]}}
+  "cards": [
+    {{"obs": "一条原子观察（他的一个主张／一个修辞手法／一个叙事框架，客观描述，不带评价词）",
+      "quote": "支撑它的逐字原话（照抄转写，别改写）",
+      "timestamp": "该原话的时间戳（从转写行首 [MM:SS] 取，取不到留空）",
+      "layer": "转写自证 | 他的主张 | 外部核实"}}
+  ],
+  "metrics": {{
+    "hype":     {{"count": 0, "examples": ["最高级/军备竞赛类原话，如 碾压/秒杀/新王/无敌/彻底取代/判死刑"]}},
+    "hedge":    {{"count": 0, "examples": ["待验证/尚未/存疑/未开源/自己核 类原话"]}},
+    "tradeoff": {{"tech_count": 0, "with_tradeoff": 0, "examples": ["介绍某技术时确实提到了代价/权衡的原话"]}}
+  }},
+  "asr_suspects": ["疑似语音识别错误的实体名，照抄听错的样子（如 千万三 / Dora-CIT）"]
 }}
 
-规则：
-- status：他自己下的判断=主张；转述某论文/某来源=转述；他自己说"待核实/没验证/存疑"=存疑。
-- 只抽转写里真有的，别脑补。quote 用原话别改写。
-- 语音识别可能有错：照抄转写原样，别猜"正确写法"（那是后面的事）。今天是 {today}，不认识的新东西照抄，别判真假。
+规则（必守）：
+- layer：修辞/叙事/措辞观察 = 转写自证；他下的事实/性能/预测判断 = 他的主张；只有你确凿的外部事实核对才 = 外部核实（默认几乎不用）。
+- 卡片里**不许出现评价词**（不写"浮夸/严谨/高明/盲区"），只客观描述 + 引文。评价是合并层的事。
+- quote 必须是转写里的逐字原话，能让人点回原文。
+- metrics：hype/hedge 的 count = 出现次数，examples 放几条代表原话；tradeoff 的 tech_count = 他介绍了几个技术，with_tradeoff = 其中几个提了代价。
+- asr_suspects：只放疑似识别错误的**实体名**——这是转写质量问题，不是他的语言风格。
+- 今天是 {today}，不认识的新词照抄，别判真假、别猜"正确写法"。
 
 转写：
 {transcript}"""
 
-# ---- 层 2：逐期解读（analyst 视角，文本内，离线）----
-READ_PROMPT = """你在做的是"解读一个人怎么思考他的领域"，不是给他打分。基于下面的抽取原料 + 转写，写这一期的解读（Markdown）。你是分析者、有自己的视角，但**只在文本内推断，不联网、不判外部事实真假**。
+# ---- 可选：联网核实（仅脚注，不进卡片/画像）----
+VERIFY_PROMPT = """（联网核实 · 仅作脚注）下面是从一期抽出的、依赖外部事实的 claim。用 Google 搜索逐条核对，只输出一节 Markdown：
 
-**语言：整份文档（含小标题）用与转写相同的语言。下面的小标题是示例，请翻成对应语言。**
+## 事实核对（脚注 · 不改变对这个人的解读）
+- 每条：`claim → 真实 / 未找到 / 有出入`，加一句依据（给得出源就给源）。
+- 疑似语音识别错误的实体，先搜正确写法再核。
 
-{rules}
+claims：
+{claims}"""
 
-# {title}
+# ---- 合并层：人物画像（只吃卡片；批判档位只调语气）----
+_TONE = {
+    'descriptive': '只描述、不评判：呈现他的母题/风格/指标分布，不下价值判断、不展开"盲区/缺陷"。',
+    'analytical': '可指出系统性盲区与回避，但归因克制：只依据证据说"他在 X 上回避 Y"，不猜动机、不夸大。',
+    'sharp': '可以明确下判断、语气锋利直接。但证据标准丝毫不变：每条评判仍须挂证据层标签、仍须能点回引文——提升的只是语气强度，不是证据松紧。',
+}
 
-## 他讲了什么
-这期主题 + 主要 claim。涉及外部事实的标"（他称，未核实）"；他自己标了存疑的如实写"（他自己标了存疑）"。
+PORTRAIT_PROMPT = """你会收到「{author}」{n} 期的**证据卡 + 修辞指标**（不是全文）。基于这些卡片综合成一份人物画像（Markdown）：这个人怎么看、怎么思考他的领域。
 
-## 他怎么讲的（风格与修辞）
-从修辞原料出发：比喻、叙事框架、英雄/反派、标题与 demo 手法、夸张 vs 克制。**这层是转写自证的，放心写实。**
-
-## 他怎么思考（方法与母题）
-论证套路、反复出现的思维母题、他把技术转译给谁/靠什么手法、系统性回避什么（如 trade-off）。
-
-## 存疑与边界
-需要外部核实才能定的（列为"他的 claim，未核实"，不判真伪）；以及这一期看不出的。
-
-抽取原料(JSON)：
-{extraction}
-
-转写：
-{transcript}"""
-
-# ---- 层 3：人物画像（跨期综合，强制标层）----
-PORTRAIT_PROMPT = """你会收到「{author}」{n} 期的逐期解读。综合成一份**人物画像**（Markdown）：这个人怎么看、怎么思考他的领域。
-
-**语言：整份文档（含小标题）用与下方解读相同的语言。下面的小标题是示例，请翻成对应语言。**
+**语言：跟随卡片语言；下面的小标题是示例，请翻成对应语言。**
 
 {rules}
-- **每条结论必须自带来源层标签**：〔转写自证〕稳的风格/叙事观察；〔他的主张〕他的判断/预测（转述，未核实）；〔外部核实〕若有。
-- **严禁**把他的判断/预测洗成你自己的客观洞察——凡他的世界观一律挂〔他的主张〕。
-- 别因为某个无法核实的说法在多期反复出现就当成坐实的事实（共同盲区 ≠ 证据）。
+
+【评判档位：{level}】{tone}
+
+【硬约束 · 任何档位都必守】
+- 每条评判性结论必须挂证据层标签〔转写自证〕/〔他的主张〕/〔外部核实〕，且能点回某张卡的引文；点不回引文的**不许写**。
+- 他的判断/预测一律挂〔他的主张〕，**不许**洗成你自己的客观结论。
+- 涉及外部事实的只标"未核实/流行说法"，**不要背书**（别把营销回声当已核实）。
+- 只做行为对比、**不猜动机**（可写"他只在非开源项目上 hedge、别处浮夸"，不许写"为维持人设"）。
+- 区分"他个人的选择性回避"与"这个体裁天生不做的事"，后者别算进他的盲区。
+- 修辞结论用给到的 hype/hedge/tradeoff 跨期分布支撑；**不要**输出"客观性/可信度"这类合成总分，只用可数分项。
+- 疑似 ASR 误识的实体名属于转写质量，放最后的「转写质量说明」里，**不许**当成他的语言风格。
 
 # {author}：人物解读（基于 {n} 期）
 
@@ -85,29 +93,22 @@ PORTRAIT_PROMPT = """你会收到「{author}」{n} 期的逐期解读。综合�
 他对这个领域的总体世界观/判断（记住这些是他的，挂〔他的主张〕）。
 
 ## 思维方法与母题
-跨期反复出现的思考方式、第一性原理/类比/判断偏好、执念。以〔转写自证〕为主。
+跨期反复出现的思考方式、判断偏好、执念。以〔转写自证〕为主。
 
 ## 叙事与修辞风格
-他怎么讲：英雄叙事、浮夸 vs 克制的分布（在哪些事上 hedge、在哪些事上"碾压/秒杀"）、demo 手法、标题风格。〔转写自证〕。
+用 hype / hedge / tradeoff 的跨期分布 + 卡片引文支撑：他在哪些事上浮夸、在哪些事上 hedge、介绍技术时提不提代价。
 
 ## 系统性盲区
-他反复回避或轻视什么（trade-off、反例、失败案例）。
+（descriptive 档可略过或只陈述事实；analytical/sharp 才展开。区分个人回避 vs 体裁固有。）
 
 ## 综合印象
-读完这些，他是个怎样的创作者/思考者。分析者视角，但把"他的主张"和"你的判断"分清。
+读完这些他是个怎样的创作者/思考者。分析者视角，但把"他的主张"和"你的判断"分清。
 
-逐期解读：
-{analyses}"""
+## 转写质量说明
+本报告基于的转写可能含语音识别错误，下列实体名可能失真（仅元数据，非其风格）：按卡片里的 asr_suspects 汇总。
 
-# ---- 可选层：联网核实（仅脚注，不进结论）----
-VERIFY_PROMPT = """（联网核实 · 仅作脚注）下面是从一期内容抽出的、依赖外部事实的 claim。请用 Google 搜索逐条核对，只输出一节 Markdown：
-
-## 事实核对（脚注 · 不改变对这个人的解读）
-- 每条：`claim → 真实 / 未找到 / 有出入`，加一句依据。
-- 疑似语音识别错误的实体，先搜正确写法再核。
-
-claims：
-{claims}"""
+证据卡与指标（JSON）：
+{digest}"""
 
 _SYNTH_CHAR_LIMIT = 600_000
 _MAX_ATTEMPTS = 3
@@ -149,7 +150,6 @@ def _call_gemini(prompt, grounded=False):
 
 
 def _parse_json_obj(raw):
-    """从模型输出里抠出第一个 JSON 对象，失败返回 None。"""
     m = re.search(r'```json\s*(.*?)\s*```', raw, re.DOTALL)
     if m:
         raw = m.group(1)
@@ -163,40 +163,58 @@ def _parse_json_obj(raw):
         return None
 
 
-def extract(title, transcript_text, author='该博主'):
-    """层 1：中立抽取，返回 dict 或 None（失败时调用方回落到直接看转写）。"""
-    prompt = EXTRACT_PROMPT.format(
+def _extract_cards(title, transcript_text, author):
+    """逐期抽取证据卡。返回 {cards, metrics, asr_suspects} 或 None。"""
+    prompt = CARDS_PROMPT.format(
         author=author, title=title, transcript=transcript_text,
         today=datetime.now().strftime('%Y-%m-%d'),
     )
     try:
-        return _parse_json_obj(_call_gemini(prompt))
-    except Exception:  # noqa: BLE001  抽取失败不致命，回落
+        data = _parse_json_obj(_call_gemini(prompt))
+    except Exception:  # noqa: BLE001
         return None
+    if not isinstance(data, dict):
+        return None
+    data.setdefault('cards', [])
+    data.setdefault('metrics', {})
+    data.setdefault('asr_suspects', [])
+    return data
 
 
-def _external_claims(ext):
-    """从抽取里挑出依赖外部事实的 claim（主张/转述），供可选核实用。"""
-    out = []
-    for c in (ext or {}).get('claims', []) or []:
-        if c.get('status') in ('主张', '转述') and c.get('text'):
-            out.append(c['text'])
-    return out
+def _cards_markdown(title, data):
+    """把证据卡渲染成可读的逐期文档（可回溯，无评判）。"""
+    lines = [f'# {title}', '', '## 证据卡']
+    for c in data.get('cards', []):
+        ts = f" [{c['timestamp']}]" if c.get('timestamp') else ''
+        q = c.get('quote', '')
+        lines.append(f"- 〔{c.get('layer', '?')}〕{c.get('obs', '')}"
+                     + (f"  ——「{q}」{ts}" if q else ''))
+    m = data.get('metrics', {}) or {}
+    lines += ['', '## 修辞指标']
+    h, hd, td = m.get('hype', {}), m.get('hedge', {}), m.get('tradeoff', {})
+    lines.append(f"- Hype（最高级/军备竞赛词）：{h.get('count', 0)} 次")
+    lines.append(f"- Hedge（待验证/存疑类）：{hd.get('count', 0)} 次")
+    lines.append(f"- 提代价/权衡：介绍 {td.get('tech_count', 0)} 个技术中 {td.get('with_tradeoff', 0)} 个提了")
+    asr = data.get('asr_suspects', []) or []
+    if asr:
+        lines += ['', '## 转写质量（疑似识别错误，非风格）', '- ' + '、'.join(asr)]
+    return '\n'.join(lines)
 
 
-def analyze_transcript(title, transcript_text, author='该博主', verify=False):
-    """层 1→2：抽取 → 逐期解读。verify=True 时附加一节联网核实脚注（不进结论）。"""
-    ext = extract(title, transcript_text, author)
-    extraction = (json.dumps(ext, ensure_ascii=False, indent=2)
-                  if ext else '（抽取未成功，请直接基于下面的转写解读）')
+def _external_claims(data):
+    return [c.get('obs') or c.get('quote') for c in data.get('cards', [])
+            if c.get('layer') == '他的主张' and (c.get('obs') or c.get('quote'))]
 
-    read = _call_gemini(READ_PROMPT.format(
-        title=title, rules=_rules(),
-        extraction=extraction, transcript=transcript_text,
-    ))
+
+def analyze_episode(title, transcript_text, author='该博主', verify=False):
+    """逐期 → {title, cards, metrics, asr_suspects, markdown}。verify 时附核实脚注。"""
+    data = _extract_cards(title, transcript_text, author) or {
+        'cards': [], 'metrics': {}, 'asr_suspects': [],
+    }
+    md = _cards_markdown(title, data)
 
     if verify:
-        claims = _external_claims(ext)
+        claims = _external_claims(data)
         if claims:
             try:
                 footnote = _call_gemini(
@@ -204,44 +222,46 @@ def analyze_transcript(title, transcript_text, author='该博主', verify=False)
                         claims='\n'.join(f'- {c}' for c in claims[:40])),
                     grounded=True,
                 )
-                read = read + '\n\n' + footnote
-            except Exception:  # noqa: BLE001  核实失败不影响解读
+                md = md + '\n\n' + footnote
+            except Exception:  # noqa: BLE001
                 pass
-    return read
+
+    return {
+        'title': title,
+        'cards': data.get('cards', []),
+        'metrics': data.get('metrics', {}),
+        'asr_suspects': data.get('asr_suspects', []),
+        'markdown': md,
+    }
 
 
-def synthesize(analyses, author='该博主'):
-    """层 3：N 份逐期解读 → 一份人物画像（强制标来源层）。
+def _digest(episodes, budget):
+    """把各期卡片压成合并层的输入（不含全文）。超预算就每期少留几张卡。"""
+    keep = 100
+    while keep > 3:
+        items = []
+        for ep in episodes:
+            items.append({
+                'title': ep.get('title', ''),
+                'cards': (ep.get('cards') or [])[:keep],
+                'metrics': ep.get('metrics', {}),
+                'asr_suspects': ep.get('asr_suspects', []),
+            })
+        s = json.dumps(items, ensure_ascii=False, indent=1)
+        if len(s) <= budget:
+            return s
+        keep = keep // 2
+    return s  # 尽力而为
 
-    Args:
-        analyses: list of (title, read_markdown)
-    """
-    if not analyses:
-        raise RuntimeError('没有可综合的解读文档')
 
-    def _join(items):
-        return '\n\n---\n\n'.join(md for _t, md in items)
-
-    def _portrait(items, n):
-        return _call_gemini(PORTRAIT_PROMPT.format(
-            author=author, n=n, analyses=_join(items), rules=_rules()
-        ))
-
-    combined = _join(analyses)
-    if len(combined) <= _SYNTH_CHAR_LIMIT:
-        return _portrait(analyses, len(analyses))
-
-    # 超长：切批 → 每批中间综合 → 终合
-    batches, cur, cur_len = [], [], 0
-    for item in analyses:
-        if cur and cur_len + len(item[1]) > _SYNTH_CHAR_LIMIT:
-            batches.append(cur)
-            cur, cur_len = [], 0
-        cur.append(item)
-        cur_len += len(item[1])
-    if cur:
-        batches.append(cur)
-
-    partials = [(f'中间综合{i + 1}', _portrait(b, len(b)))
-                for i, b in enumerate(batches)]
-    return _portrait(partials, len(analyses))
+def synthesize(episodes, author='该博主', critique_level='analytical'):
+    """N 期证据卡 → 一份人物画像。critique_level: descriptive/analytical/sharp。"""
+    episodes = [e for e in episodes if e and e.get('cards') is not None]
+    if not episodes:
+        raise RuntimeError('没有可综合的证据卡')
+    level = critique_level if critique_level in _TONE else 'analytical'
+    return _call_gemini(PORTRAIT_PROMPT.format(
+        author=author, n=len(episodes), rules=_rules(),
+        level=level, tone=_TONE[level],
+        digest=_digest(episodes, _SYNTH_CHAR_LIMIT),
+    ))

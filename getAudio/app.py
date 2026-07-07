@@ -1201,7 +1201,7 @@ def run_chain(state):
             state['stage'] = 'analyzing'
             state['analyzed_done'] = 0
             save()
-            from analyze import analyze_transcript, synthesize
+            from analyze import analyze_episode, synthesize
 
             def _analyze_one(v):
                 if v['status'] != 'done':
@@ -1218,13 +1218,13 @@ def run_chain(state):
                         for s in segs
                     )
                     with _chain_analysis_sem:    # 全局分析闸
-                        md = analyze_transcript(v['title'], text, state['author'],
-                                                verify=state.get('verify', False))
+                        ep = analyze_episode(v['title'], text, state['author'],
+                                             verify=state.get('verify', False))
                     fname = f"分析_{v['index'] + 1:03d}_{_safe_doc_name(v['title'])}.md"
                     with open(os.path.join(chain_dir, fname),
                               'w', encoding='utf-8') as fh:
-                        fh.write(md)
-                    return (v['title'], md)
+                        fh.write(ep['markdown'])
+                    return ep
                 except Exception:  # noqa: BLE001  单期失败不拖垮整链
                     return None
                 finally:
@@ -1236,14 +1236,15 @@ def run_chain(state):
                 max_workers=config.CHAIN_ANALYSIS_CONCURRENCY
             ) as pool:
                 results = list(pool.map(_analyze_one, submitted))
-            analyses = [r for r in results if r]
-            state['analyzed_ok'] = len(analyses)
+            episodes = [r for r in results if r]
+            state['analyzed_ok'] = len(episodes)
 
-            # ---- 5. 总合成 ----
-            if analyses:
+            # ---- 5. 总合成（只吃证据卡，不吃全文）----
+            if episodes:
                 state['stage'] = 'synthesizing'
                 save()
-                total_md = synthesize(analyses, state['author'])
+                total_md = synthesize(episodes, state['author'],
+                                      critique_level=state.get('critique_level', 'analytical'))
                 with open(os.path.join(chain_dir, '总分析.md'),
                           'w', encoding='utf-8') as fh:
                     fh.write(total_md)
@@ -1262,7 +1263,7 @@ def run_chain(state):
 
 def _reanalyze_chain(state):
     """只重跑分析+合成（不重下、不重转），复用已有转写。供历史链条测试新模型/核实模式。"""
-    from analyze import analyze_transcript, synthesize
+    from analyze import analyze_episode, synthesize
     chain_dir = _chain_dir(state['id'])
     lock = threading.Lock()
 
@@ -1297,13 +1298,13 @@ def _reanalyze_chain(state):
                 text = '\n'.join(
                     f"[{s.get('timestamp', '')}] {s.get('text', '')}" for s in segs)
                 with _chain_analysis_sem:
-                    md = analyze_transcript(v['title'], text, state['author'],
-                                            verify=state.get('verify', False))
+                    ep = analyze_episode(v['title'], text, state['author'],
+                                         verify=state.get('verify', False))
                 fname = f"分析_{v['index'] + 1:03d}_{_safe_doc_name(v['title'])}.md"
                 with open(os.path.join(chain_dir, fname),
                           'w', encoding='utf-8') as fh:
-                    fh.write(md)
-                return (v['title'], md)
+                    fh.write(ep['markdown'])
+                return ep
             except Exception:  # noqa: BLE001
                 return None
             finally:
@@ -1314,13 +1315,14 @@ def _reanalyze_chain(state):
         with ThreadPoolExecutor(
                 max_workers=config.CHAIN_ANALYSIS_CONCURRENCY) as pool:
             results = list(pool.map(_analyze_one, submitted))
-        analyses = [r for r in results if r]
-        state['analyzed_ok'] = len(analyses)
+        episodes = [r for r in results if r]
+        state['analyzed_ok'] = len(episodes)
 
-        if analyses:
+        if episodes:
             state['stage'] = 'synthesizing'
             save()
-            total_md = synthesize(analyses, state['author'])
+            total_md = synthesize(episodes, state['author'],
+                                  critique_level=state.get('critique_level', 'analytical'))
             with open(os.path.join(chain_dir, '总分析.md'),
                       'w', encoding='utf-8') as fh:
                 fh.write(total_md)
@@ -1357,6 +1359,7 @@ def api_chain_create():
         'analyze': bool(data.get('analyze', True)),
         'prefer_subs': bool(data.get('prefer_subs', False)),
         'verify': bool(data.get('verify', False)),
+        'critique_level': (data.get('critique_level') or 'analytical'),
         'author': (data.get('author') or '').strip() or '该博主',
         'stage': 'starting',
         'created_at': __import__('datetime').datetime.now().strftime(
@@ -1419,6 +1422,8 @@ def api_chain_reanalyze(chain_id):
 
     body = request.get_json(silent=True) or {}
     state['verify'] = bool(body.get('verify', False))
+    if body.get('critique_level'):
+        state['critique_level'] = body['critique_level']
     state['analyze'] = True
     threading.Thread(target=_reanalyze_chain, args=(state,), daemon=True).start()
     return jsonify({'ok': True})

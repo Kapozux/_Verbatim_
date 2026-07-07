@@ -832,6 +832,7 @@ const chainEngine = document.getElementById('chain-engine');
 const chainAnalyze = document.getElementById('chain-analyze');
 const chainPreferSubs = document.getElementById('chain-prefer-subs');
 const chainVerify = document.getElementById('chain-verify');
+const chainCritique = document.getElementById('chain-critique');
 const chainStartBtn = document.getElementById('chain-start');
 const chainList = document.getElementById('chain-list');
 
@@ -863,6 +864,7 @@ chainStartBtn.addEventListener('click', async () => {
                 analyze: chainAnalyze.checked,
                 prefer_subs: chainPreferSubs.checked,
                 verify: chainVerify.checked,
+                critique_level: chainCritique.value,
             }),
         });
         const data = await resp.json();
@@ -1097,7 +1099,7 @@ async function doReanalyze(chainId, verify, ev) {
     try {
         const r = await (await fetch(`/api/chain/${chainId}/reanalyze`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ verify }),
+            body: JSON.stringify({ verify, critique_level: chainCritique.value }),
         })).json();
         if (!r.ok) { alert(r.error || 'Could not start re-analysis'); loadChains(); return; }
     } catch { alert('Could not start re-analysis'); }
