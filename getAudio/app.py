@@ -1260,6 +1260,80 @@ def run_chain(state):
         shutil.rmtree(dl_dir, ignore_errors=True)
 
 
+def _reanalyze_chain(state):
+    """只重跑分析+合成（不重下、不重转），复用已有转写。供历史链条测试新模型/核实模式。"""
+    from analyze import analyze_transcript, synthesize
+    chain_dir = _chain_dir(state['id'])
+    lock = threading.Lock()
+
+    def save():
+        with lock:
+            _save_chain(state)
+
+    try:
+        videos = state.get('videos') or []
+        submitted = [v for v in videos
+                     if v.get('task_id') and v.get('status') == 'done']
+        if not submitted:
+            state['stage'] = 'failed'
+            state['error'] = '没有可重新分析的已转写视频'
+            save()
+            return
+
+        state['stage'] = 'analyzing'
+        state['analyzed_done'] = 0
+        state['analyzed_ok'] = 0
+        state['final_doc'] = None
+        save()
+
+        def _analyze_one(v):
+            tpath = os.path.join(
+                config.RESULTS_FOLDER, v['task_id'], 'transcript.json')
+            if not os.path.isfile(tpath):
+                return None
+            try:
+                with open(tpath, 'r', encoding='utf-8') as fh:
+                    segs = json.load(fh)
+                text = '\n'.join(
+                    f"[{s.get('timestamp', '')}] {s.get('text', '')}" for s in segs)
+                with _chain_analysis_sem:
+                    md = analyze_transcript(v['title'], text, state['author'],
+                                            verify=state.get('verify', False))
+                fname = f"分析_{v['index'] + 1:03d}_{_safe_doc_name(v['title'])}.md"
+                with open(os.path.join(chain_dir, fname),
+                          'w', encoding='utf-8') as fh:
+                    fh.write(md)
+                return (v['title'], md)
+            except Exception:  # noqa: BLE001
+                return None
+            finally:
+                with lock:
+                    state['analyzed_done'] = state.get('analyzed_done', 0) + 1
+                    _save_chain(state)
+
+        with ThreadPoolExecutor(
+                max_workers=config.CHAIN_ANALYSIS_CONCURRENCY) as pool:
+            results = list(pool.map(_analyze_one, submitted))
+        analyses = [r for r in results if r]
+        state['analyzed_ok'] = len(analyses)
+
+        if analyses:
+            state['stage'] = 'synthesizing'
+            save()
+            total_md = synthesize(analyses, state['author'])
+            with open(os.path.join(chain_dir, '总分析.md'),
+                      'w', encoding='utf-8') as fh:
+                fh.write(total_md)
+            state['final_doc'] = '总分析.md'
+
+        state['stage'] = 'done'
+        save()
+    except Exception as e:  # noqa: BLE001
+        state['stage'] = 'failed'
+        state['error'] = f'重新分析失败：{e}'
+        save()
+
+
 @app.route('/api/chain', methods=['POST'])
 def api_chain_create():
     data = request.get_json(force=True, silent=True) or {}
@@ -1328,6 +1402,26 @@ def api_chain_detail(chain_id):
             if p is not None:
                 v['progress'] = p
     return jsonify(data)
+
+
+@app.route('/api/chain/<chain_id>/reanalyze', methods=['POST'])
+def api_chain_reanalyze(chain_id):
+    """只重跑分析+合成（复用已有转写）。body: {verify: bool}。"""
+    if not _CHAIN_ID_RE.match(chain_id or ''):
+        return jsonify({'error': 'Invalid chain id'}), 400
+    cpath = os.path.join(_chain_dir(chain_id), 'chain.json')
+    if not os.path.isfile(cpath):
+        return jsonify({'error': 'Not found'}), 404
+    with open(cpath, 'r', encoding='utf-8') as f:
+        state = json.load(f)
+    if state.get('stage') in ('downloading', 'transcribing', 'analyzing', 'synthesizing'):
+        return jsonify({'ok': False, 'error': '这条链还在跑，等它结束再重分析'}), 409
+
+    body = request.get_json(silent=True) or {}
+    state['verify'] = bool(body.get('verify', False))
+    state['analyze'] = True
+    threading.Thread(target=_reanalyze_chain, args=(state,), daemon=True).start()
+    return jsonify({'ok': True})
 
 
 @app.route('/api/chain/<chain_id>', methods=['DELETE'])

@@ -924,6 +924,8 @@ function renderChains(chains) {
         }
         if (['done', 'failed'].includes(c.stage)) {
             links += `<a class="chain-doc-link" href="#"
+                onclick="reanalyzeMenu('${c.id}',event);return false;">Re-analyze</a>
+                <a class="chain-doc-link" href="#"
                 onclick="gotoDocs();return false;">All documents</a>
                 <a class="chain-doc-link chain-del" href="#"
                 onclick="deleteChain('${c.id}');return false;">Delete</a>`;
@@ -1076,6 +1078,30 @@ async function deleteChain(chainId) {
     if (!confirm('Delete this pipeline’s documents? (transcripts stay in the library)')) return;
     await fetch(`/api/chain/${chainId}`, { method: 'DELETE' });
     loadChains();
+}
+
+// 重新分析：只重跑分析+合成（复用已有转写），点开选 默认 / +联网核实
+function reanalyzeMenu(chainId, ev) {
+    ev.stopPropagation();
+    const span = ev.target.closest('.chain-links');
+    if (!span) return;
+    span.innerHTML = `<span class="reanalyze-menu">Re-analyze:
+        <a href="#" onclick="doReanalyze('${chainId}',false,event);return false;">Default</a>
+        <a href="#" onclick="doReanalyze('${chainId}',true,event);return false;">+ Web verify</a>
+        <a href="#" class="chain-del" onclick="event.stopPropagation();loadChains();return false;">cancel</a>
+    </span>`;
+}
+
+async function doReanalyze(chainId, verify, ev) {
+    ev.stopPropagation();
+    try {
+        const r = await (await fetch(`/api/chain/${chainId}/reanalyze`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ verify }),
+        })).json();
+        if (!r.ok) { alert(r.error || 'Could not start re-analysis'); loadChains(); return; }
+    } catch { alert('Could not start re-analysis'); }
+    loadChains();   // stage 变 analyzing → 轮询自动接管显示进度
 }
 
 loadChains();
