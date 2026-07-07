@@ -84,6 +84,7 @@ PORTRAIT_PROMPT = """你会收到「{author}」{n} 期的**证据卡 + 修辞指
 - 涉及外部事实的只标"未核实/流行说法"，**不要背书**（别把营销回声当已核实）。
 - 只做行为对比、**不猜动机**（可写"他只在非开源项目上 hedge、别处浮夸"，不许写"为维持人设"）。
 - 区分"他个人的选择性回避"与"这个体裁天生不做的事"，后者别算进他的盲区。
+- 跨语境的态度不一致，如实描述为"不一致"（如"对开源项目 hedge、对闭源项目浮夸"）；**不许**升级成"双重标准/知行不一/虚伪"这类道德指控——证据只支撑到不一致，支撑不到诛心。
 - 修辞结论用给到的 hype/hedge/tradeoff 跨期分布支撑；**不要**输出"客观性/可信度"这类合成总分，只用可数分项。
 - 疑似 ASR 误识的实体名属于转写质量，放最后的「转写质量说明」里，**不许**当成他的语言风格。
 
@@ -101,8 +102,8 @@ PORTRAIT_PROMPT = """你会收到「{author}」{n} 期的**证据卡 + 修辞指
 ## 系统性盲区
 （descriptive 档可略过或只陈述事实；analytical/sharp 才展开。区分个人回避 vs 体裁固有。）
 
-## 综合印象
-读完这些他是个怎样的创作者/思考者。分析者视角，但把"他的主张"和"你的判断"分清。
+## 综合印象（本节为 {level} 档下的判断，换档/换语气可能变化）
+读完这些他是个怎样的创作者/思考者。分析者视角，但把"他的主张"和"你的判断"分清。尽量把总体判断锚到可数指标（hype/hedge/tradeoff 的跨期分布）上，而不是笼统的情绪定性。{impression}
 
 ## 转写质量说明
 本报告基于的转写可能含语音识别错误，下列实体名可能失真（仅元数据，非其风格）：按卡片里的 asr_suspects 汇总。
@@ -254,14 +255,20 @@ def _digest(episodes, budget):
     return s  # 尽力而为
 
 
-def synthesize(episodes, author='该博主', critique_level='analytical'):
-    """N 期证据卡 → 一份人物画像。critique_level: descriptive/analytical/sharp。"""
+def synthesize(episodes, author='该博主', critique_level='analytical',
+               impression_bias=''):
+    """N 期证据卡 → 一份人物画像。critique_level: descriptive/analytical/sharp。
+
+    impression_bias：仅供校准回归测试用——在"综合印象"注入一条语气基线
+    （如"中性 / 略带怀疑 / 略带欣赏"），看结论会不会跟着漂。默认空。
+    """
     episodes = [e for e in episodes if e and e.get('cards') is not None]
     if not episodes:
         raise RuntimeError('没有可综合的证据卡')
     level = critique_level if critique_level in _TONE else 'analytical'
+    impression = f'（综合印象的语气基线：{impression_bias}）' if impression_bias else ''
     return _call_gemini(PORTRAIT_PROMPT.format(
         author=author, n=len(episodes), rules=_rules(),
-        level=level, tone=_TONE[level],
+        level=level, tone=_TONE[level], impression=impression,
         digest=_digest(episodes, _SYNTH_CHAR_LIMIT),
     ))
