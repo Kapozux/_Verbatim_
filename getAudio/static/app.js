@@ -1409,7 +1409,83 @@ function showSettingsPane(name) {
         b.classList.toggle('active', b.dataset.pane === name));
     document.querySelectorAll('.settings-pane').forEach(p =>
         p.classList.toggle('active', p.dataset.pane === name));
+    if (name === 'storage') loadStorage();
 }
+
+function fmtBytes(n) {
+    if (n >= 1e9) return (n / 1e9).toFixed(1) + ' GB';
+    if (n >= 1e6) return (n / 1e6).toFixed(0) + ' MB';
+    if (n >= 1e3) return (n / 1e3).toFixed(0) + ' KB';
+    return (n || 0) + ' B';
+}
+
+let compressPollTimer = null;
+
+async function loadStorage() {
+    const sizeEl = document.getElementById('storage-size');
+    const doneEl = document.getElementById('storage-done');
+    sizeEl.textContent = '…';
+    try {
+        const s = await (await fetch('/api/storage')).json();
+        sizeEl.textContent = fmtBytes(s.audio_bytes);
+        doneEl.textContent = `${s.compressed_count} / ${s.audio_count}`;
+    } catch { sizeEl.textContent = '—'; }
+    // 若已有批量压缩在跑，接着显示进度
+    try {
+        const st = await (await fetch('/api/compress_status')).json();
+        if (st.running) {
+            document.getElementById('compress-all').disabled = true;
+            pollCompress();
+        }
+    } catch { /* ignore */ }
+}
+
+async function pollCompress() {
+    const res = document.getElementById('compress-res');
+    const btn = document.getElementById('compress-all');
+    clearTimeout(compressPollTimer);
+    try {
+        const s = await (await fetch('/api/compress_status')).json();
+        if (s.running) {
+            res.className = 'test-res testing';
+            res.textContent = `Compressing ${s.done}/${s.total}… saved ${fmtBytes(s.saved)}`;
+            if (!document.hidden) compressPollTimer = setTimeout(pollCompress, 2000);
+        } else {
+            btn.disabled = false;
+            if (s.total > 0) {
+                res.className = 'test-res ok';
+                res.textContent = `Done — reclaimed ${fmtBytes(s.saved)}`
+                    + (s.errors ? ` (${s.errors} errors)` : '');
+                loadStorage();
+            }
+        }
+    } catch {
+        res.className = 'test-res bad';
+        res.textContent = 'Status check failed';
+        btn.disabled = false;
+    }
+}
+
+document.getElementById('compress-all').addEventListener('click', async () => {
+    const res = document.getElementById('compress-res');
+    const btn = document.getElementById('compress-all');
+    res.className = 'test-res testing';
+    res.textContent = 'Starting…';
+    try {
+        const r = await (await fetch('/api/compress_all', { method: 'POST' })).json();
+        if (!r.ok) {
+            res.className = 'test-res bad';
+            res.textContent = r.error || 'Could not start';
+            return;
+        }
+    } catch {
+        res.className = 'test-res bad';
+        res.textContent = 'Could not start';
+        return;
+    }
+    btn.disabled = true;
+    pollCompress();
+});
 document.querySelectorAll('.settings-nav-item').forEach(b =>
     b.addEventListener('click', () => showSettingsPane(b.dataset.pane)));
 

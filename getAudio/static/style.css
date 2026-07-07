@@ -483,6 +483,11 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .settings-label a:hover { text-decoration: underline; }
 .settings-opt { font-size: 12px; font-weight: 400; color: var(--faint); }
 
+.storage-stat { display: flex; gap: 32px; margin: 6px 0 20px; }
+.storage-stat > div { display: flex; flex-direction: column; gap: 3px; }
+.storage-stat b { font-family: var(--serif); font-size: 24px; color: var(--ink); letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
+.storage-stat span { font-size: 11.5px; color: var(--muted); }
+
 .settings-test-row { display: flex; align-items: center; gap: 12px; margin-top: 6px; }
 .test-res { font-size: 12.5px; line-height: 1.45; }
 .test-res.testing { color: var(--muted); }

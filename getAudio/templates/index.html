@@ -280,6 +280,7 @@
                 <div class="settings-nav-title">Settings</div>
                 <button class="settings-nav-item active" data-pane="gemini">Gemini</button>
                 <button class="settings-nav-item" data-pane="dashscope">DashScope</button>
+                <button class="settings-nav-item" data-pane="storage">Storage</button>
                 <button class="settings-nav-item" data-pane="about">About</button>
             </nav>
 
@@ -331,6 +332,25 @@
                             <button type="button" id="test-dashscope" class="btn-secondary">Test connection</button>
                             <span id="test-dashscope-res" class="test-res"></span>
                         </div>
+                    </section>
+
+                    <!-- Storage -->
+                    <section class="settings-pane" data-pane="storage">
+                        <h3>Storage</h3>
+                        <p class="settings-desc">
+                            After a recording is transcribed, its audio is only kept for playback.
+                            Compressing it to Opus (24 kbps mono) keeps speech clear while shrinking
+                            the library by roughly 70%. New transcriptions are compressed automatically.
+                        </p>
+                        <div class="storage-stat">
+                            <div><b id="storage-size">—</b><span>audio on disk</span></div>
+                            <div><b id="storage-done">—</b><span>already compressed</span></div>
+                        </div>
+                        <div class="settings-test-row">
+                            <button type="button" id="compress-all" class="btn-secondary">Compress existing library</button>
+                            <span id="compress-res" class="test-res"></span>
+                        </div>
+                        <p class="settings-opt">Lossy and irreversible — fine for playback, but you can't re-transcribe at original quality afterward. Chrome/Firefox play Opus natively.</p>
                     </section>
 
                     <!-- About -->

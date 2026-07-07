@@ -459,6 +459,13 @@ def run_transcription(task_id, filepath, engine, original_filename, q,
             'summary': summary_data,
         }))
 
+        # 转写已完成，音频只剩回放用途 → 压成 opus 省磁盘（失败不影响结果）
+        try:
+            from audioutil import compress_task
+            compress_task(os.path.join(config.RESULTS_FOLDER, task_id))
+        except Exception:
+            pass
+
     except Exception as e:
         taskdb.set_status(task_id, 'failed', error=str(e))
         q.put(json.dumps({
@@ -1451,6 +1458,86 @@ def api_settings_test():
             return jsonify({'ok': False, 'reason': str(e)[:180]})
 
     return jsonify({'ok': False, 'reason': 'Unknown engine.'}), 400
+
+
+# ========== 存储 / 音频压缩 ==========
+
+_compress_state = {'running': False, 'done': 0, 'total': 0, 'saved': 0, 'errors': 0}
+_compress_lock = threading.Lock()
+
+
+def _audio_files():
+    """遍历所有任务的音频文件，产出 (路径, 是否已是 opus)。"""
+    results_dir = config.RESULTS_FOLDER
+    if not os.path.isdir(results_dir):
+        return
+    for d in os.listdir(results_dir):
+        td = os.path.join(results_dir, d)
+        if not (_is_valid_task_id(d) and os.path.isdir(td)):
+            continue
+        try:
+            names = os.listdir(td)
+        except OSError:
+            continue
+        for name in names:
+            if name.startswith('audio.') and not name.endswith('.tmp'):
+                yield os.path.join(td, name), name.endswith('.ogg')
+
+
+@app.route('/api/storage')
+def api_storage():
+    total = 0
+    count = 0
+    compressed = 0
+    for path, is_opus in _audio_files():
+        try:
+            total += os.path.getsize(path)
+        except OSError:
+            continue
+        count += 1
+        if is_opus:
+            compressed += 1
+    return jsonify({'audio_bytes': total, 'audio_count': count,
+                    'compressed_count': compressed})
+
+
+def _run_compress_all():
+    from audioutil import compress_task
+    results_dir = config.RESULTS_FOLDER
+    task_dirs = [d for d in os.listdir(results_dir)
+                 if _is_valid_task_id(d)
+                 and os.path.isdir(os.path.join(results_dir, d))]
+    with _compress_lock:
+        _compress_state.update(running=True, done=0,
+                               total=len(task_dirs), saved=0, errors=0)
+    for d in task_dirs:
+        try:
+            saved, status = compress_task(os.path.join(results_dir, d))
+        except Exception:
+            saved, status = 0, 'error'
+        with _compress_lock:
+            _compress_state['done'] += 1
+            _compress_state['saved'] += saved
+            if status.startswith('error'):
+                _compress_state['errors'] += 1
+    with _compress_lock:
+        _compress_state['running'] = False
+
+
+@app.route('/api/compress_all', methods=['POST'])
+def api_compress_all():
+    with _compress_lock:
+        if _compress_state['running']:
+            return jsonify({'ok': False, 'error': 'already running'}), 409
+    # 串行跑（ffmpeg 吃 CPU，串行避免烧满/发热），后台线程 + 状态轮询
+    threading.Thread(target=_run_compress_all, daemon=True).start()
+    return jsonify({'ok': True})
+
+
+@app.route('/api/compress_status')
+def api_compress_status():
+    with _compress_lock:
+        return jsonify(dict(_compress_state))
 
 
 if __name__ == '__main__':
