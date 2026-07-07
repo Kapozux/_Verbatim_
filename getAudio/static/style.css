@@ -300,6 +300,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .doc-item { background: var(--card); border: 1px solid var(--line-2); border-radius: var(--r-sm); padding: 8px 13px; font-size: 13px; cursor: pointer; color: var(--ink-soft); text-align: left; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: border-color .15s ease, color .15s ease; }
 .doc-item:hover { border-color: var(--coral); color: var(--coral); }
 .doc-item.doc-total { background: var(--coral-soft); border-color: var(--coral-line); font-weight: 600; color: var(--coral-deep); }
+.doc-item.doc-raw { background: var(--code-bg); border-color: var(--line-2); font-weight: 600; color: var(--ink-soft); }
+.doc-item.doc-raw:hover { border-color: var(--ink); color: var(--ink); }
 
 /* === Markdown 阅读排版（衬线标题 · 编辑感）=== */
 #doc-view { max-width: 780px; margin: 0 auto; }

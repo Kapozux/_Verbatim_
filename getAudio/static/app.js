@@ -912,13 +912,13 @@ function renderChains(chains) {
         const active = !['done', 'failed'].includes(c.stage);
         const prog = chainProgressText(c);
         let links = '';
+        if (c.raw_doc) {
+            links += `<a class="chain-doc-link" href="#"
+                onclick="openDocView('${c.id}','${encodeURIComponent(c.raw_doc)}');return false;">Merged script</a>`;
+        }
         if (c.final_doc) {
             links += `<a class="chain-doc-link" href="#"
                 onclick="openDocView('${c.id}','${encodeURIComponent(c.final_doc)}');return false;">Read synthesis</a>`;
-        }
-        if (c.raw_doc) {
-            links += `<a class="chain-doc-link" href="#"
-                onclick="openDocView('${c.id}','${encodeURIComponent(c.raw_doc)}');return false;">Merged transcript</a>`;
         }
         if (['done', 'failed'].includes(c.stage)) {
             links += `<a class="chain-doc-link" href="#"
@@ -1146,15 +1146,19 @@ async function loadDocs() {
             catch { files = []; }
             files = (Array.isArray(files) ? files : []).filter(f => f.endsWith('.md'));
             if (!files.length) return '';
-            // 总分析置顶，其余按名排序
-            files.sort((a, b) => (a === '总分析.md' ? -1 : b === '总分析.md' ? 1 : a.localeCompare(b)));
+            // 排序：Synthesis(总分析) > Merged script(合并原文) > 其余按名
+            const rank = f => f === '总分析.md' ? 0 : f === '合并原文.md' ? 1 : 2;
+            files.sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
             const title = (c.author && c.author !== '该博主') ? c.author : c.url;
             const stageBadge = c.stage === 'done' ? ''
                 : `<span class="doc-stage">（${CHAIN_STAGE_LABELS[c.stage] || c.stage}）</span>`;
             const items = files.map(f => {
-                const isTotal = f === 'total' || f === '总分析.md';
-                const label = f === '总分析.md' ? 'Synthesis' : '' + f.replace(/^分析_\d+_/, '').replace(/\.md$/, '');
-                return `<button class="doc-item ${isTotal ? 'doc-total' : ''}"
+                const isTotal = f === '总分析.md';
+                const isRaw = f === '合并原文.md';
+                const label = isTotal ? 'Synthesis' : isRaw ? 'Merged script'
+                    : f.replace(/^分析_\d+_/, '').replace(/\.md$/, '');
+                const cls = isTotal ? 'doc-total' : isRaw ? 'doc-raw' : '';
+                return `<button class="doc-item ${cls}"
                     onclick="openDocView('${c.id}','${encodeURIComponent(f)}')">${label}</button>`;
             }).join('');
             return `<div class="doc-group">

@@ -1034,6 +1034,31 @@ def _merged_raw_text(author, videos):
     return header + '\n' + '\n'.join(parts)
 
 
+def _ensure_raw_doc(state):
+    """确保终态链条有 合并原文.md，并回填 state['raw_doc']。
+
+    功能上线前跑的老链条没有这份文档——这里按需补生成一次（转写还在，重拼即可）。
+    """
+    if state.get('stage') not in ('done', 'failed'):
+        return
+    fpath = os.path.join(_chain_dir(state['id']), '合并原文.md')
+    if os.path.isfile(fpath):
+        if not state.get('raw_doc'):
+            state['raw_doc'] = '合并原文.md'
+            _save_chain(state)
+        return
+    raw = _merged_raw_text(state.get('author') or '该博主', state.get('videos') or [])
+    if not raw:
+        return
+    try:
+        with open(fpath, 'w', encoding='utf-8') as f:
+            f.write(raw)
+        state['raw_doc'] = '合并原文.md'
+        _save_chain(state)
+    except Exception:
+        pass
+
+
 def _safe_doc_name(name):
     name = name.replace('/', '-').replace('\\', '-')
     return re.sub(r'[:*?"<>|\x00-\x1f]', '_', name).strip()[:120]
@@ -1275,7 +1300,9 @@ def api_chains():
             if _CHAIN_ID_RE.match(name) and os.path.isfile(cpath):
                 try:
                     with open(cpath, 'r', encoding='utf-8') as f:
-                        entries.append(json.load(f))
+                        state = json.load(f)
+                    _ensure_raw_doc(state)      # 老链条按需补『合并原文.md』
+                    entries.append(state)
                 except Exception:
                     pass
     entries.sort(key=lambda e: e.get('created_at', ''), reverse=True)
