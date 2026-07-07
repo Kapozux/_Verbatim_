@@ -142,11 +142,16 @@
                                 <input type="checkbox" id="chain-analyze" checked>
                                 Analyze &amp; synthesize
                             </label>
+                            <label class="chain-check" title="If a video already has captions, use them instead of downloading + transcribing the audio (much faster, no API cost). Manual subs preferred; falls back to the video's auto-captions, then to audio.">
+                                <input type="checkbox" id="chain-prefer-subs">
+                                Prefer subtitles
+                            </label>
                             <button id="chain-start" type="button" class="btn-primary chain-btn">Start</button>
                         </div>
                     </div>
                     <p class="chain-hint">YouTube tip: use <code>channel/videos</code>. Bilibili &amp; other
-                       yt-dlp sites work too.</p>
+                       yt-dlp sites work too. <b>Prefer subtitles</b> skips download + transcription when a
+                       video already has captions.</p>
                 </form>
 
                 <div id="chain-list" class="chain-list"></div>

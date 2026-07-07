@@ -84,10 +84,26 @@ def _thumbnail_for(entry):
     return ''
 
 
-def probe(url, max_videos=None):
-    """解析 URL 元数据（不下载），返回目标视频列表。
+def _channel_from_info(info):
+    """从 yt-dlp 信息里取频道名 + 头像 URL（尽力而为，取不到就空字符串）。"""
+    name = (info.get('channel') or info.get('uploader')
+            or info.get('playlist_uploader') or '')
+    avatar = ''
+    thumbs = info.get('thumbnails')
+    if isinstance(thumbs, list):
+        for t in thumbs:                     # 频道头像的 thumbnail id 通常含 'avatar'
+            if 'avatar' in str(t.get('id', '')).lower() and t.get('url'):
+                avatar = t['url']
+                break
+    return {'name': (name or '').strip(), 'avatar': avatar}
 
-    每个元素：{'video_url', 'title', 'video_id', 'thumbnail'}
+
+def probe(url, max_videos=None):
+    """解析 URL 元数据（不下载）。
+
+    返回 (targets, channel)：
+      targets = [{'video_url','title','video_id','thumbnail'}, ...]
+      channel = {'name', 'avatar'}
     """
     binary = _resolve_ytdlp()
     url = _normalize_url(url)          # 频道主页 → /videos，避免下成整个频道
@@ -106,6 +122,7 @@ def probe(url, max_videos=None):
         raise RuntimeError(f'Could not parse link: {detail}')
 
     info = json.loads(result.stdout)
+    channel = _channel_from_info(info)
 
     if info.get('_type') == 'playlist':
         # 只保留真正的视频条目，滤掉频道 tab / 嵌套播放列表（防跑飞）
@@ -120,14 +137,14 @@ def probe(url, max_videos=None):
                 'video_id': e.get('id', ''),
                 'thumbnail': _thumbnail_for(e),
             })
-        return targets
+        return targets, channel
 
     return [{
         'video_url': url,
         'title': info.get('title', ''),
         'video_id': info.get('id', ''),
         'thumbnail': _thumbnail_for(info),
-    }]
+    }], channel
 
 
 def download_one(target, dest_dir):
@@ -170,9 +187,131 @@ def download_one(target, dest_dir):
     }
 
 
+_SUB_TIMEOUT = 120
+
+
+def _collect_srt(dest_dir, vid):
+    try:
+        names = [n for n in os.listdir(dest_dir)
+                 if n.startswith('sub_') and n.endswith('.srt')
+                 and (not vid or vid in n)]
+    except OSError:
+        return None
+    return os.path.join(dest_dir, names[0]) if names else None
+
+
+def _pick_sub_lang(tracks, orig):
+    """从可用字幕轨里挑一条：原语言 > 英 > 中 > 任意。避免下成机翻。"""
+    if not tracks:
+        return None
+    for code in [c for c in (orig, 'en', 'en-US', 'zh-Hans', 'zh', 'zh-CN') if c]:
+        if code in tracks:
+            return code
+    return next(iter(tracks))
+
+
+def fetch_subtitle(target, dest_dir):
+    """抓取视频已有字幕并转 srt。返回 (srt路径, 类型) 或 (None, None)。
+
+    先用一次 -J 拿到视频语言 + 可用字幕清单，只下『原语言那一条轨』——
+    避免请求多语言触发 429，也避免下成机器翻译。人工字幕优先，其次自动字幕。
+    """
+    os.makedirs(dest_dir, exist_ok=True)
+    binary = _resolve_ytdlp()
+    url = target['video_url']
+
+    # 1) 一次元数据调用，拿语言 + 字幕清单（不下载、不强制 lang，免得偏向翻译轨）
+    try:
+        r = subprocess.run(
+            [binary, '-J', '--skip-download', '--no-playlist', '--no-warnings',
+             *_cookie_args(), url],
+            capture_output=True, text=True, timeout=_SUB_TIMEOUT,
+        )
+        info = json.loads(r.stdout) if r.stdout.strip() else {}
+    except Exception:
+        return None, None
+
+    orig = (info.get('language') or '').split('-')[0]
+    manual = info.get('subtitles') or {}
+    autos = info.get('automatic_captions') or {}
+
+    kind = chosen = None
+    m = _pick_sub_lang(manual, orig)
+    if m:
+        kind, chosen = 'manual', m
+    else:
+        a = orig if (orig and orig in autos) else _pick_sub_lang(autos, orig)
+        if a:
+            kind, chosen = 'auto', a
+    if not chosen:
+        return None, None
+
+    # 2) 只下这一条轨
+    outtmpl = os.path.join(dest_dir, 'sub_%(id)s.%(ext)s')
+    flag = '--write-subs' if kind == 'manual' else '--write-auto-subs'
+    try:
+        subprocess.run(
+            [binary, '--skip-download', flag, '--sub-langs', chosen,
+             '--convert-subs', 'srt', '-o', outtmpl,
+             '--no-playlist', '--no-warnings', '--quiet', *_cookie_args(), url],
+            capture_output=True, text=True, timeout=_SUB_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        return None, None
+    path = _collect_srt(dest_dir, target.get('video_id', ''))
+    return (path, kind) if path else (None, None)
+
+
+def _fmt_ts(sec):
+    h, rem = divmod(int(sec), 3600)
+    m, s = divmod(rem, 60)
+    return f'{h:d}:{m:02d}:{s:02d}' if h else f'{m:02d}:{s:02d}'
+
+
+_SRT_TS = re.compile(
+    r'(\d{2}):(\d{2}):(\d{2})[,.](\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2})[,.](\d{3})')
+
+
+def parse_srt(path):
+    """SRT → [{'timestamp','end','text'}]，格式对齐转写输出。
+
+    YouTube 自动字幕是"滚动累积"格式（同一句反复出现、逐步补全），逐行去重：
+    与上一行相同则跳过；是上一行的延伸则替换（保留最长的那版）。
+    """
+    try:
+        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+            raw = f.read()
+    except OSError:
+        return []
+    segs = []
+    last = None
+    for block in re.split(r'\n\s*\n', raw.strip()):
+        m = _SRT_TS.search(block)
+        if not m:
+            continue
+        sh, sm, ss, _, eh, em, es, _ = m.groups()
+        ts, end = _fmt_ts(int(sh) * 3600 + int(sm) * 60 + int(ss)), \
+            _fmt_ts(int(eh) * 3600 + int(em) * 60 + int(es))
+        for ln in block.splitlines():
+            if _SRT_TS.search(ln) or ln.strip().isdigit():
+                continue
+            text = re.sub(r'<[^>]+>', '', ln).strip()
+            if not text or text == last:
+                continue
+            if last and text.startswith(last):           # 滚动补全：延伸上一行
+                segs[-1] = {'timestamp': segs[-1]['timestamp'], 'end': end, 'text': text}
+                last = text
+                continue
+            if last and last.startswith(text):           # 上一行已包含它
+                continue
+            segs.append({'timestamp': ts, 'end': end, 'text': text})
+            last = text
+    return segs
+
+
 def download_audios(url, dest_dir, max_videos=None, progress_cb=None):
     """（兼容旧接口）串行下载 URL 指向的所有音频，返回成功项列表。"""
-    targets = probe(url, max_videos)
+    targets, _ = probe(url, max_videos)
     if not targets:
         raise RuntimeError('No downloadable videos at this link')
 

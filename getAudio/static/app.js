@@ -830,6 +830,7 @@ const chainAuthor = document.getElementById('chain-author');
 const chainMax = document.getElementById('chain-max');
 const chainEngine = document.getElementById('chain-engine');
 const chainAnalyze = document.getElementById('chain-analyze');
+const chainPreferSubs = document.getElementById('chain-prefer-subs');
 const chainStartBtn = document.getElementById('chain-start');
 const chainList = document.getElementById('chain-list');
 
@@ -859,6 +860,7 @@ chainStartBtn.addEventListener('click', async () => {
                 max_videos: parseInt(chainMax.value, 10) || 0,
                 engine: chainEngine.value,
                 analyze: chainAnalyze.checked,
+                prefer_subs: chainPreferSubs.checked,
             }),
         });
         const data = await resp.json();
@@ -924,11 +926,24 @@ function renderChains(chains) {
             ? `<div class="chain-error">${(c.error || '').slice(0, 200)}</div>` : '';
         const cur = active && c.current
             ? `<div class="chain-current">${c.current.slice(0, 60)}</div>` : '';
+        const author = (c.author && c.author !== '该博主') ? c.author : '';
+        const initial = (author || c.url.replace(/^https?:\/\/(www\.)?/, '') || '?')
+            .slice(0, 1).toUpperCase();
+        const avatar = `<span class="chain-avatar">
+            <span class="chain-avatar-fallback">${initial}</span>
+            ${c.avatar ? `<img src="${c.avatar}" alt="" onerror="this.style.display='none'">` : ''}
+        </span>`;
         return `<div class="chain-item ${active ? 'chain-active' : ''}"
                 onclick="openChainDetail('${c.id}')" title="点击查看每个视频的进度">
             <div class="chain-item-top">
-                <span class="chain-stage">${stage}</span>
-                <span class="chain-url" title="${c.url}">${c.author !== '该博主' ? c.author + ' · ' : ''}${c.url.slice(0, 60)}</span>
+                ${avatar}
+                <span class="chain-meta">
+                    <span class="chain-author-line">
+                        ${author ? `<b class="chain-author">${author}</b>` : ''}
+                        <span class="chain-stage">${stage}</span>
+                    </span>
+                    <span class="chain-url" title="${c.url}">${c.url.slice(0, 64)}</span>
+                </span>
                 <span class="chain-links" onclick="event.stopPropagation()">${links}</span>
             </div>
             <div class="chain-progress">${prog}</div>

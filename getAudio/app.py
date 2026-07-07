@@ -942,6 +942,39 @@ def _save_chain(state):
         json.dump(state, f, ensure_ascii=False, indent=2)
 
 
+def _save_subtitle_task(task_id, target, segments, source):
+    """把抓来的字幕当作转写结果落盘（无音频），并在 taskdb 里标记 done。
+
+    这样它和普通转写任务一样进历史、进分析，只是引擎标为 subtitle、没有音频回放。
+    """
+    task_dir = os.path.join(config.RESULTS_FOLDER, task_id)
+    os.makedirs(task_dir, exist_ok=True)
+    title = target.get('title') or target.get('video_id') or 'untitled'
+    display = f"{title} [{target.get('video_id', '')}]"
+    meta = {
+        'id': task_id,
+        'filename': display,
+        'engine': 'subtitle',
+        'date': __import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'audio_ext': None,                    # 字幕来源，无音频
+        'segment_count': len(segments),
+        'duration_seconds': None,
+        'has_summary': False,
+        'subtitle_source': source,            # manual / auto
+    }
+    with open(os.path.join(task_dir, 'meta.json'), 'w', encoding='utf-8') as f:
+        json.dump(meta, f, ensure_ascii=False, indent=2)
+    with open(os.path.join(task_dir, 'transcript.json'), 'w', encoding='utf-8') as f:
+        json.dump(segments, f, ensure_ascii=False, indent=2)
+    taskdb.create(task_id, display, 'subtitle', None, None)
+    taskdb.set_status(task_id, 'done')
+    try:
+        from enrich import enrich_task
+        enrich_task(task_dir)
+    except Exception:
+        pass
+
+
 def recover_unfinished_chains():
     """启动时把上次没跑完的链条标记为 failed（pipeline 暂不自动恢复）。
 
@@ -994,14 +1027,20 @@ def run_chain(state):
             _save_chain(state)
 
     try:
-        from downloader import probe, download_one
+        from downloader import probe, download_one, fetch_subtitle, parse_srt
 
-        # ---- 1. 解析目标（拿到标题 + 封面）----
+        # ---- 1. 解析目标（拿到标题 + 封面 + 频道名/头像）----
         state['stage'] = 'downloading'
         _save_chain(state)
-        targets = probe(state['url'], state.get('max_videos'))
+        targets, channel = probe(state['url'], state.get('max_videos'))
         if not targets:
             raise RuntimeError('No downloadable videos at this link')
+
+        # 用户没填 author 就用探测到的频道名；头像给卡片展示
+        if channel.get('name') and state.get('author') in ('', '该博主'):
+            state['author'] = channel['name']
+        state['avatar'] = channel.get('avatar', '')
+        _save_chain(state)
 
         # 预置视频网格：一开始就把全部目标铺出来，前端详情页能立刻看到
         videos = [{
@@ -1022,12 +1061,30 @@ def run_chain(state):
 
         def _download_and_submit(i, target):
             v = videos[i]
+            sub_segs = sub_source = None
             with _chain_download_sem:            # 全局下载闸
                 with lock:
                     state['current'] = v['title']
-                item = download_one(target, dl_dir)
+                # 勾了"优先字幕"：先抓已有字幕；有就完全跳过下载+转写
+                if state.get('prefer_subs'):
+                    sp, sub_source = fetch_subtitle(target, dl_dir)
+                    if sp:
+                        sub_segs = parse_srt(sp) or None
+                item = None if sub_segs else download_one(target, dl_dir)
             with lock:
                 state['download_done'] = state.get('download_done', 0) + 1
+
+            # 有字幕 → 直接落转写结果，跳过音频转写（省下载/转写/API）
+            if sub_segs:
+                task_id = str(uuid.uuid4())
+                _save_subtitle_task(task_id, target, sub_segs, sub_source)
+                v['task_id'] = task_id
+                v['title'] = target.get('title') or v['title']
+                v['status'] = 'done'
+                v['source'] = 'subtitle:' + (sub_source or '')
+                save()
+                return
+
             if not item:
                 v['status'] = 'download_failed'
                 save()
@@ -1161,6 +1218,7 @@ def api_chain_create():
         'engine': data.get('engine') or 'gemini',
         'max_videos': max_videos,
         'analyze': bool(data.get('analyze', True)),
+        'prefer_subs': bool(data.get('prefer_subs', False)),
         'author': (data.get('author') or '').strip() or '该博主',
         'stage': 'starting',
         'created_at': __import__('datetime').datetime.now().strftime(
