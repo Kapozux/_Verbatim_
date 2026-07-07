@@ -59,3 +59,21 @@ GEMINI_INLINE_LIMIT = 19 * 1024 * 1024  # 19 MB, use File API above this
 DASHSCOPE_API_KEY = os.environ.get('DASHSCOPE_API_KEY', '')
 DASHSCOPE_ASR_MODEL = 'paraformer-v2'
 DASHSCOPE_LLM_MODEL = 'qwen-plus'
+
+
+def make_gemini_client(api_key, timeout_ms=600_000):
+    """统一构造 Gemini 客户端：带超时 + 可选自定义 base_url。
+
+    base_url 取自环境变量 GEMINI_BASE_URL（Settings 里可填），给国内用户挂代理用；
+    留空则直连官方。老 SDK 不支持 HttpOptions 时回退到最简构造。
+    """
+    from google import genai
+    base = (os.environ.get('GEMINI_BASE_URL') or '').strip() or None
+    try:
+        from google.genai import types
+        return genai.Client(
+            api_key=api_key,
+            http_options=types.HttpOptions(timeout=timeout_ms, base_url=base),
+        )
+    except Exception:
+        return genai.Client(api_key=api_key)

@@ -10,7 +10,7 @@ import json
 import os
 import re
 
-from config import GEMINI_API_KEY, GEMINI_ENRICH_MODEL
+from config import GEMINI_API_KEY, GEMINI_ENRICH_MODEL, make_gemini_client
 
 ENRICH_PROMPT = """根据下面这条音频转写的信息，生成用于列表卡片展示的元数据。
 
@@ -25,7 +25,8 @@ ENRICH_PROMPT = """根据下面这条音频转写的信息，生成用于列表�
   "tags": ["2到4个简短标签，如：访谈、课堂、播客、情感短剧、时政评论、英语、会议"]
 }}
 
-要求：中文输出；标题要具体（宁可写"杜甫生平纪录片解说"也不要写"历史内容"）；
+要求：title / one_line / tags 用与内容相同的语言输出（内容是英文就用英文，是中文就用中文）；
+标题要具体（宁可写"杜甫生平纪录片解说"也不要写"历史内容"）；
 若内容明显是废稿/空白/无意义，title 写"（内容为空或无效）"。"""
 
 
@@ -39,8 +40,7 @@ def generate_card_meta(filename, content):
     content = content.strip()[:3000]
 
     try:
-        from google import genai
-        client = genai.Client(api_key=api_key)
+        client = make_gemini_client(api_key)
         resp = client.models.generate_content(
             model=GEMINI_ENRICH_MODEL,
             contents=ENRICH_PROMPT.format(filename=filename, content=content),
@@ -111,8 +111,7 @@ def _gemini_translate(tags):
         + json.dumps(tags, ensure_ascii=False)
     )
     try:
-        from google import genai
-        client = genai.Client(api_key=api_key)
+        client = make_gemini_client(api_key)
         resp = client.models.generate_content(
             model=GEMINI_ENRICH_MODEL,
             contents=prompt,

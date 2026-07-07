@@ -271,6 +271,94 @@
 
     </div>
 
+    <!-- ===== Settings modal (two-pane, Claude-style) ===== -->
+    <div id="settings-overlay" class="settings-overlay hidden">
+        <div class="settings-modal">
+            <button id="settings-close" class="settings-x" aria-label="Close">×</button>
+
+            <nav class="settings-nav">
+                <div class="settings-nav-title">Settings</div>
+                <button class="settings-nav-item active" data-pane="gemini">Gemini</button>
+                <button class="settings-nav-item" data-pane="dashscope">DashScope</button>
+                <button class="settings-nav-item" data-pane="about">About</button>
+            </nav>
+
+            <div class="settings-main">
+                <div class="settings-panes">
+                    <!-- Gemini -->
+                    <section class="settings-pane active" data-pane="gemini">
+                        <h3>Gemini</h3>
+                        <p class="settings-desc">
+                            Powers cloud transcription, summaries, and the pipeline analysis.
+                            Everything stays on this machine except the calls to Google.
+                        </p>
+                        <label class="settings-field">
+                            <span class="settings-label">API key
+                                <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">get one ↗</a>
+                            </span>
+                            <input type="password" id="set-gemini-key" class="search-input"
+                                   placeholder="paste key…" autocomplete="off">
+                        </label>
+                        <label class="settings-field">
+                            <span class="settings-label">Base URL
+                                <span class="settings-opt">optional · proxy / mainland China</span>
+                            </span>
+                            <input type="text" id="set-gemini-base" class="search-input"
+                                   placeholder="https://your-proxy.example   (blank = official endpoint)"
+                                   autocomplete="off">
+                        </label>
+                        <div class="settings-test-row">
+                            <button type="button" id="test-gemini" class="btn-secondary">Test connection</button>
+                            <span id="test-gemini-res" class="test-res"></span>
+                        </div>
+                    </section>
+
+                    <!-- DashScope -->
+                    <section class="settings-pane" data-pane="dashscope">
+                        <h3>DashScope</h3>
+                        <p class="settings-desc">
+                            Alibaba Cloud transcription. <strong>⚠ It moderates content</strong> — don't
+                            use it for politically sensitive audio; prefer local Whisper or Gemini for that.
+                        </p>
+                        <label class="settings-field">
+                            <span class="settings-label">API key
+                                <a href="https://bailian.console.aliyun.com/" target="_blank" rel="noopener">get one ↗</a>
+                            </span>
+                            <input type="password" id="set-dashscope-key" class="search-input"
+                                   placeholder="paste key…" autocomplete="off">
+                        </label>
+                        <div class="settings-test-row">
+                            <button type="button" id="test-dashscope" class="btn-secondary">Test connection</button>
+                            <span id="test-dashscope-res" class="test-res"></span>
+                        </div>
+                    </section>
+
+                    <!-- About -->
+                    <section class="settings-pane" data-pane="about">
+                        <h3>About</h3>
+                        <p class="settings-desc">
+                            <strong>Verbatim</strong> — a local, self-hosted tool that turns audio and video
+                            into transcripts, then into cross-episode research.
+                        </p>
+                        <p class="settings-desc">
+                            Keys you enter here are stored only in <code>settings.local.json</code> on this
+                            machine and are never sent anywhere except to the provider they belong to. Leave a
+                            key field blank to keep the current one.
+                        </p>
+                        <p class="settings-desc">
+                            <a href="https://github.com/xyzxinlu-max/getAudio" target="_blank" rel="noopener">Source on GitHub ↗</a>
+                        </p>
+                    </section>
+                </div>
+
+                <div class="settings-foot">
+                    <span id="settings-msg" class="settings-msg"></span>
+                    <button type="button" id="settings-save" class="btn-primary">Save</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- ===== 左下角个人数据展板 ===== -->
     <div id="stats-fab" class="stats-fab">
         <div id="stats-panel" class="stats-panel hidden">
@@ -293,9 +381,14 @@
                 <div id="stats-tags"></div>
             </div>
         </div>
-        <button id="stats-toggle" class="stats-toggle" title="Your stats">
-            <span class="stats-dot"></span><span>Your stats</span>
-        </button>
+        <div class="fab-row">
+            <button id="stats-toggle" class="stats-toggle" title="Your stats">
+                <span class="stats-dot"></span><span>Your stats</span>
+            </button>
+            <button id="settings-open" class="stats-toggle" title="Settings">
+                <span class="fab-gear">⚙</span><span>Settings</span>
+            </button>
+        </div>
     </div>
 
     <script src="/static/app.js"></script>

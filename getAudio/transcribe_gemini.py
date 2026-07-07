@@ -11,7 +11,7 @@ import tempfile
 import time
 from google import genai
 from google.genai import types
-from config import GEMINI_API_KEY, GEMINI_MODEL, GEMINI_INLINE_LIMIT
+from config import GEMINI_API_KEY, GEMINI_MODEL, GEMINI_INLINE_LIMIT, make_gemini_client
 
 TRANSCRIPTION_PROMPT = """请对这段音频进行精确的逐字转录。
 
@@ -94,13 +94,7 @@ def transcribe_audio(filepath, progress_callback=None):
 
     # 给底层 HTTP 调用设 10 分钟超时，防止代理 / Gemini 侧 socket 挂起后永远不 return。
     # 老版本 SDK 不支持 HttpOptions 就回退到默认。
-    try:
-        client = genai.Client(
-            api_key=api_key,
-            http_options=types.HttpOptions(timeout=600_000),
-        )
-    except Exception:
-        client = genai.Client(api_key=api_key)
+    client = make_gemini_client(api_key)
     temp_dir = None
 
     try:

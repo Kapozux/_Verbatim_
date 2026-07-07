@@ -18,7 +18,7 @@ from concurrent.futures import ThreadPoolExecutor
 from google import genai
 from google.genai import types
 
-from config import GEMINI_API_KEY, GEMINI_MODEL
+from config import GEMINI_API_KEY, GEMINI_MODEL, make_gemini_client
 from transcribe_gemini import parse_timestamped_text
 
 # 合并按时间窗口分段做：一次只喂一段给 Gemini，避免长音频（几小时）
@@ -73,13 +73,7 @@ def _make_client():
     api_key = GEMINI_API_KEY or os.environ.get('GEMINI_API_KEY', '')
     if not api_key:
         raise RuntimeError("Gemini API Key 未设置，无法执行精准模式的合并步骤。")
-    try:
-        return genai.Client(
-            api_key=api_key,
-            http_options=types.HttpOptions(timeout=600_000),
-        )
-    except Exception:
-        return genai.Client(api_key=api_key)
+    return make_gemini_client(api_key)
 
 
 def _ts_to_seconds(ts):

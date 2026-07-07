@@ -1360,3 +1360,106 @@ document.addEventListener('click', (e) => {
         statsPanel.classList.add('hidden');
     }
 });
+
+
+// ===== Settings modal =====
+const settingsOverlay = document.getElementById('settings-overlay');
+const setGeminiKey = document.getElementById('set-gemini-key');
+const setGeminiBase = document.getElementById('set-gemini-base');
+const setDashKey = document.getElementById('set-dashscope-key');
+const settingsMsg = document.getElementById('settings-msg');
+
+async function openSettings() {
+    // 拉当前状态：填回 base URL、用占位符提示 key 是否已存在
+    try {
+        const s = await (await fetch('/api/settings')).json();
+        setGeminiBase.value = s.gemini_base_url || '';
+        setGeminiKey.value = '';
+        setDashKey.value = '';
+        setGeminiKey.placeholder = s.gemini.set
+            ? `saved ${s.gemini.hint} · leave blank to keep` : 'paste key…';
+        setDashKey.placeholder = s.dashscope.set
+            ? `saved ${s.dashscope.hint} · leave blank to keep` : 'paste key…';
+    } catch { /* 打开即可，拉取失败不阻塞 */ }
+    document.getElementById('test-gemini-res').textContent = '';
+    document.getElementById('test-dashscope-res').textContent = '';
+    settingsMsg.textContent = '';
+    settingsOverlay.classList.remove('hidden');
+}
+function closeSettings() { settingsOverlay.classList.add('hidden'); }
+
+// 左侧导航切换面板
+function showSettingsPane(name) {
+    document.querySelectorAll('.settings-nav-item').forEach(b =>
+        b.classList.toggle('active', b.dataset.pane === name));
+    document.querySelectorAll('.settings-pane').forEach(p =>
+        p.classList.toggle('active', p.dataset.pane === name));
+}
+document.querySelectorAll('.settings-nav-item').forEach(b =>
+    b.addEventListener('click', () => showSettingsPane(b.dataset.pane)));
+
+document.getElementById('settings-open').addEventListener('click', () => {
+    showSettingsPane('gemini');       // 每次打开回到第一栏
+    openSettings();
+});
+document.getElementById('settings-close').addEventListener('click', closeSettings);
+settingsOverlay.addEventListener('click', (e) => {
+    if (e.target === settingsOverlay) closeSettings();      // 点遮罩关闭
+});
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !settingsOverlay.classList.contains('hidden')) closeSettings();
+});
+
+async function testEngine(engine, resEl, payload) {
+    resEl.className = 'test-res testing';
+    resEl.textContent = 'Testing…';
+    try {
+        const r = await (await fetch('/api/settings/test', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({engine, ...payload}),
+        })).json();
+        resEl.className = 'test-res ' + (r.ok ? 'ok' : 'bad');
+        resEl.textContent = (r.ok ? '✓ ' : '✗ ') + (r.reason || '');
+    } catch {
+        resEl.className = 'test-res bad';
+        resEl.textContent = '✗ Request failed';
+    }
+}
+
+document.getElementById('test-gemini').addEventListener('click', () => {
+    testEngine('gemini', document.getElementById('test-gemini-res'), {
+        gemini_key: setGeminiKey.value.trim(),
+        gemini_base_url: setGeminiBase.value.trim(),
+    });
+});
+document.getElementById('test-dashscope').addEventListener('click', () => {
+    testEngine('dashscope', document.getElementById('test-dashscope-res'), {
+        dashscope_key: setDashKey.value.trim(),
+    });
+});
+
+document.getElementById('settings-save').addEventListener('click', async () => {
+    const body = { gemini_base_url: setGeminiBase.value.trim() };
+    if (setGeminiKey.value.trim()) body.gemini_key = setGeminiKey.value.trim();
+    if (setDashKey.value.trim()) body.dashscope_key = setDashKey.value.trim();
+    settingsMsg.className = 'settings-msg';
+    settingsMsg.textContent = 'Saving…';
+    try {
+        const r = await (await fetch('/api/settings', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(body),
+        })).json();
+        if (r.ok) {
+            settingsMsg.className = 'settings-msg ok';
+            settingsMsg.textContent = 'Saved ✓';
+            openSettings();                    // 刷新占位符、清空已输入的 key
+            settingsMsg.textContent = 'Saved ✓';
+        } else {
+            settingsMsg.className = 'settings-msg bad';
+            settingsMsg.textContent = r.error || 'Save failed';
+        }
+    } catch {
+        settingsMsg.className = 'settings-msg bad';
+        settingsMsg.textContent = 'Save failed';
+    }
+});

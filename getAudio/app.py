@@ -37,6 +37,37 @@ os.makedirs(config.RESULTS_FOLDER, exist_ok=True)
 
 taskdb.init()
 
+
+# ========== 用户设置（API keys / base URL）==========
+# 让用户在网页 Settings 里填 key，免去手动改 .env。存到 gitignore 的
+# settings.local.json；启动时和每次保存后写进 os.environ，各引擎调用时即时读到
+# （模块里都是 `KEY or os.environ.get(...)` 在调用时求值，所以不用重启）。
+SETTINGS_PATH = os.path.join(os.path.dirname(__file__), 'settings.local.json')
+# 前端字段名 -> 环境变量名
+_SETTING_ENV = {
+    'gemini_key': 'GEMINI_API_KEY',
+    'gemini_base_url': 'GEMINI_BASE_URL',
+    'dashscope_key': 'DASHSCOPE_API_KEY',
+}
+
+
+def _load_settings():
+    try:
+        with open(SETTINGS_PATH, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _apply_settings_to_env(data):
+    for field, env in _SETTING_ENV.items():
+        val = (data.get(field) or '').strip()
+        if val:
+            os.environ[env] = val
+
+
+_apply_settings_to_env(_load_settings())
+
 tasks = {}
 # task_id -> 最近的转写进度百分比（供链条详情页在封面上显示 %）
 _task_progress = {}
@@ -1271,6 +1302,124 @@ def api_stats():
                      for t, c in top_tags],
         'timeline': timeline,
     })
+
+
+# ========== Settings API ==========
+
+def _mask_key(env_name):
+    """返回 (是否已设置, 末4位提示)，绝不回传完整 key。"""
+    v = (os.environ.get(env_name) or '').strip()
+    if not v:
+        return False, ''
+    return True, '••••' + v[-4:] if len(v) >= 4 else '••••'
+
+
+@app.route('/api/settings', methods=['GET'])
+def api_settings_get():
+    gset, ghint = _mask_key('GEMINI_API_KEY')
+    dset, dhint = _mask_key('DASHSCOPE_API_KEY')
+    return jsonify({
+        'gemini': {'set': gset, 'hint': ghint},
+        'dashscope': {'set': dset, 'hint': dhint},
+        # base URL 不是秘密，直接回显供编辑
+        'gemini_base_url': (os.environ.get('GEMINI_BASE_URL') or '').strip(),
+    })
+
+
+@app.route('/api/settings', methods=['POST'])
+def api_settings_save():
+    body = request.get_json(silent=True) or {}
+    data = _load_settings()
+
+    # key：只有传了非空值才更新（留空 = 保持不变，避免用户没重填就被清空）
+    for field in ('gemini_key', 'dashscope_key'):
+        if field in body:
+            v = (body.get(field) or '').strip()
+            if v:
+                data[field] = v
+    # base URL：允许清空（传空字符串 = 删除代理，回到直连）
+    if 'gemini_base_url' in body:
+        data['gemini_base_url'] = (body.get('gemini_base_url') or '').strip()
+        if not data['gemini_base_url']:
+            os.environ.pop('GEMINI_BASE_URL', None)
+
+    try:
+        with open(SETTINGS_PATH, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        return jsonify({'ok': False, 'error': f'保存失败：{e}'}), 500
+
+    _apply_settings_to_env(data)
+    return jsonify({'ok': True})
+
+
+def _diagnose_gemini_error(e):
+    s = str(e).lower()
+    if any(k in s for k in ('api_key_invalid', 'api key not valid', 'invalid api key',
+                            'unauthorized', 'permission', '401', '403')):
+        return 'API key looks invalid — double-check you copied the whole thing.'
+    if any(k in s for k in ('location', 'not supported in your', 'user location',
+                            'failed_precondition', 'region')):
+        return 'Gemini is not available from your region — fill in a proxy Base URL below.'
+    if any(k in s for k in ('timeout', 'timed out', 'connect', 'getaddrinfo',
+                            'max retries', 'ssl', 'network', 'unreachable', 'refused')):
+        return "Can't reach Gemini — network or proxy problem (check the Base URL)."
+    if any(k in s for k in ('429', 'resource_exhausted', 'quota', 'rate limit')):
+        return 'Key works, but you are rate-limited / out of quota right now.'
+    return str(e)[:180]
+
+
+@app.route('/api/settings/test', methods=['POST'])
+def api_settings_test():
+    """用用户填的 key（留空则用已保存的）打一次最小真实请求，返回能否用 + 原因。"""
+    body = request.get_json(silent=True) or {}
+    engine = body.get('engine')
+
+    if engine == 'gemini':
+        key = (body.get('gemini_key') or '').strip() or os.environ.get('GEMINI_API_KEY', '')
+        base = (body.get('gemini_base_url') or '').strip()
+        if not key:
+            return jsonify({'ok': False, 'reason': 'No key entered or saved yet.'})
+        # 临时用传入的 base URL 测（不改动已保存设置）
+        prev = os.environ.get('GEMINI_BASE_URL')
+        if base:
+            os.environ['GEMINI_BASE_URL'] = base
+        elif 'gemini_base_url' in body:
+            os.environ.pop('GEMINI_BASE_URL', None)
+        try:
+            client = config.make_gemini_client(key, timeout_ms=30_000)
+            next(iter(client.models.list()), None)
+            return jsonify({'ok': True, 'reason': 'Works — key accepted.'})
+        except Exception as e:
+            return jsonify({'ok': False, 'reason': _diagnose_gemini_error(e)})
+        finally:
+            if prev is None:
+                os.environ.pop('GEMINI_BASE_URL', None)
+            else:
+                os.environ['GEMINI_BASE_URL'] = prev
+
+    if engine == 'dashscope':
+        key = (body.get('dashscope_key') or '').strip() or os.environ.get('DASHSCOPE_API_KEY', '')
+        if not key:
+            return jsonify({'ok': False, 'reason': 'No key entered or saved yet.'})
+        try:
+            from dashscope import Generation
+            resp = Generation.call(
+                model=config.DASHSCOPE_LLM_MODEL, api_key=key,
+                messages=[{'role': 'user', 'content': 'ping'}],
+                max_tokens=1,
+            )
+            code = getattr(resp, 'status_code', 200)
+            if code == 200:
+                return jsonify({'ok': True, 'reason': 'Works — key accepted.'})
+            msg = getattr(resp, 'message', '') or str(code)
+            if code in (401, 403):
+                return jsonify({'ok': False, 'reason': 'API key looks invalid.'})
+            return jsonify({'ok': False, 'reason': f'DashScope error {code}: {msg}'[:180]})
+        except Exception as e:
+            return jsonify({'ok': False, 'reason': str(e)[:180]})
+
+    return jsonify({'ok': False, 'reason': 'Unknown engine.'}), 400
 
 
 if __name__ == '__main__':

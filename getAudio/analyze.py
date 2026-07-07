@@ -11,11 +11,13 @@
 import os
 import time
 
-from config import GEMINI_API_KEY, GEMINI_MODEL
+from config import GEMINI_API_KEY, GEMINI_MODEL, make_gemini_client
 
 ANALYZE_PROMPT = """你是一位犀利、诚实的独立研究者。下面是博主「{author}」一期视频《{title}》的完整转写文本。
 
-请只基于这份转写，输出一份扎实的中文 Markdown 分析（不要注水、不要泛泛而谈）：
+**语言：整份文档（包括所有小标题）必须用与下方转写相同的语言撰写——转写是中文就用中文，是英文就用英文，其他语言同理。下面给出的小标题只是结构示例，请翻译成对应语言。**
+
+请只基于这份转写，输出一份扎实的 Markdown 分析（不要注水、不要泛泛而谈）：
 
 # {title}
 
@@ -33,7 +35,10 @@ ANALYZE_PROMPT = """你是一位犀利、诚实的独立研究者。下面是博
 转写文本：
 {transcript}"""
 
-SYNTHESIZE_PROMPT = """你会收到博主「{author}」{n} 期视频的独立分析文档。请跨期打通，综合成一份总文档（中文 Markdown）：
+SYNTHESIZE_PROMPT = """你会收到博主「{author}」{n} 期视频的独立分析文档。请跨期打通，综合成一份总文档（Markdown）。
+
+**语言：整份总文档（包括所有小标题）必须用与下方分析文档相同的语言撰写——它们是中文就用中文，是英文就用英文。下面给出的小标题只是结构示例，请翻译成对应语言。**
+
 
 # {author}：综合观点研究（基于 {n} 期视频）
 
@@ -67,14 +72,7 @@ def _call_gemini(prompt):
         raise RuntimeError('GEMINI_API_KEY 未设置')
 
     from google import genai
-    from google.genai import types
-
-    try:
-        client = genai.Client(
-            api_key=api_key, http_options=types.HttpOptions(timeout=600_000)
-        )
-    except Exception:
-        client = genai.Client(api_key=api_key)
+    client = make_gemini_client(api_key)
 
     last_err = None
     for attempt in range(1, _MAX_ATTEMPTS + 1):

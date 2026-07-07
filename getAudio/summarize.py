@@ -10,6 +10,7 @@ import re
 from config import (
     GEMINI_API_KEY, GEMINI_MODEL,
     DASHSCOPE_API_KEY, DASHSCOPE_LLM_MODEL,
+    make_gemini_client,
 )
 
 SUMMARY_PROMPT = """你是一个专业的内容分析助手。请对以下音频/视频转录文本进行总结分析。
@@ -34,7 +35,7 @@ SUMMARY_PROMPT = """你是一个专业的内容分析助手。请对以下音频
 2. sections 按照内容的自然段落/话题切换来划分，通常 3-8 个段落
 3. 每个 section 要标注对应的时间范围（从转录文本中的时间戳推断）
 4. title 要简短有力，能概括该段主题
-5. 用中文输出
+5. 所有文字（overview / title / summary）用与转录文本相同的语言输出——转录是中文就用中文，是英文就用英文
 6. 只输出 JSON，不要有其他文字
 
 以下是转录文本：
@@ -76,8 +77,7 @@ def _call_gemini(prompt):
         return None
 
     try:
-        from google import genai
-        client = genai.Client(api_key=api_key)
+        client = make_gemini_client(api_key)
         response = client.models.generate_content(
             model=GEMINI_MODEL,
             contents=prompt,

@@ -422,3 +422,90 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 }
 .reveal-link:hover { color: var(--ink); }
 .reveal-link.open { color: var(--ink); }
+
+/* ===== 左下角按钮行（Your stats + Settings）===== */
+.fab-row { display: flex; gap: 8px; }
+.fab-gear { font-size: 13px; line-height: 1; }
+
+/* ===== Settings 弹窗（两栏：左导航 + 右内容，仿 Claude）===== */
+.settings-overlay {
+  position: fixed; inset: 0; z-index: 1000;
+  display: flex; align-items: center; justify-content: center; padding: 24px;
+  background: rgba(20, 20, 19, .38); backdrop-filter: blur(2px);
+}
+.settings-modal {
+  position: relative; width: 100%; max-width: 840px;
+  height: 78vh; min-height: 480px; max-height: 88vh;
+  display: flex; background: var(--paper);
+  border: 1px solid var(--line); border-radius: var(--r-lg);
+  box-shadow: 0 24px 64px rgba(20, 20, 19, .24); overflow: hidden;
+}
+.settings-x {
+  position: absolute; top: 14px; right: 16px; z-index: 3;
+  width: 30px; height: 30px; font-size: 22px; line-height: 1; color: var(--muted);
+  background: none; border: none; cursor: pointer; border-radius: var(--r-sm);
+}
+.settings-x:hover { color: var(--ink); background: var(--card); }
+
+.settings-nav {
+  width: 194px; flex: none; background: var(--card);
+  border-right: 1px solid var(--line); padding: 22px 12px;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.settings-nav-title {
+  font-family: var(--serif); font-size: 23px; letter-spacing: -.01em;
+  color: var(--ink); padding: 0 10px 16px;
+}
+.settings-nav-item {
+  text-align: left; font-family: inherit; font-size: 13.5px; color: var(--ink-soft);
+  background: none; border: none; border-radius: var(--r-sm); padding: 9px 11px;
+  cursor: pointer; transition: background .12s ease, color .12s ease;
+}
+.settings-nav-item:hover { background: var(--paper); }
+.settings-nav-item.active { background: var(--coral-soft); color: var(--coral-deep); font-weight: 600; }
+
+.settings-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.settings-panes { flex: 1; overflow-y: auto; padding: 34px 36px; }
+.settings-pane { display: none; }
+.settings-pane.active { display: block; animation: fadeIn .16s ease; }
+.settings-pane h3 { font-size: 20px; font-weight: 600; letter-spacing: -.01em; color: var(--ink); margin-bottom: 8px; }
+.settings-desc { font-size: 13px; color: var(--muted); line-height: 1.6; margin-bottom: 18px; }
+.settings-desc a { color: var(--coral); text-decoration: none; }
+.settings-desc a:hover { text-decoration: underline; }
+.settings-desc code { font-size: 12px; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+
+.settings-field { display: block; margin-bottom: 16px; }
+.settings-label {
+  display: flex; align-items: baseline; gap: 8px;
+  font-size: 13px; font-weight: 600; color: var(--ink-soft); margin-bottom: 8px;
+}
+.settings-label a { font-size: 12px; font-weight: 500; color: var(--coral); text-decoration: none; }
+.settings-label a:hover { text-decoration: underline; }
+.settings-opt { font-size: 12px; font-weight: 400; color: var(--faint); }
+
+.settings-test-row { display: flex; align-items: center; gap: 12px; margin-top: 6px; }
+.test-res { font-size: 12.5px; line-height: 1.45; }
+.test-res.testing { color: var(--muted); }
+.test-res.ok { color: #4a7c4e; }
+.test-res.bad { color: var(--coral-deep); }
+
+.settings-foot {
+  display: flex; align-items: center; justify-content: flex-end; gap: 14px;
+  padding: 15px 36px; border-top: 1px solid var(--line); background: var(--card);
+}
+.settings-msg { font-size: 12.5px; color: var(--muted); margin-right: auto; }
+.settings-msg.ok { color: #4a7c4e; }
+.settings-msg.bad { color: var(--coral-deep); }
+
+@media (max-width: 680px) {
+  .settings-overlay { padding: 12px; }
+  .settings-modal { flex-direction: column; height: 90vh; max-height: 90vh; }
+  .settings-nav {
+    width: auto; flex-direction: row; gap: 6px; overflow-x: auto;
+    border-right: none; border-bottom: 1px solid var(--line); padding: 12px;
+  }
+  .settings-nav-title { display: none; }
+  .settings-nav-item { white-space: nowrap; }
+  .settings-panes { padding: 24px; }
+  .settings-foot { padding: 14px 24px; }
+}

@@ -12,6 +12,7 @@ server.log
 tasks.db
 tasks.db-shm
 tasks.db-wal
+settings.local.json
 .claude/
 .DS_Store
 
