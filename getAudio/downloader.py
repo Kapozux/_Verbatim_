@@ -51,10 +51,21 @@ _YT_CHANNEL_ROOT = re.compile(
     r'^(https?://(?:www\.)?youtube\.com/(?:@[^/?#]+|channel/[^/?#]+|c/[^/?#]+|user/[^/?#]+))/?(?:[?#].*)?$'
 )
 
+# B站 UP主空间页：砍掉 /video 等子路径和 query，回到裸空间页。
+# space.bilibili.com/<uid>/video 会走 BilibiliSpaceVideo 提取器，412 风控更凶；
+# 裸 space.bilibili.com/<uid> 更稳。单个视频 www.bilibili.com/video/BV... 不受影响。
+_BILI_SPACE = re.compile(r'^(https?://space\.bilibili\.com/\d+)(?:/.*)?$')
+
 
 def _normalize_url(url):
-    m = _YT_CHANNEL_ROOT.match(url or '')
-    return m.group(1) + '/videos' if m else url
+    url = url or ''
+    m = _YT_CHANNEL_ROOT.match(url)
+    if m:
+        return m.group(1) + '/videos'
+    b = _BILI_SPACE.match(url)
+    if b:
+        return b.group(1)
+    return url
 
 
 def _is_video_entry(e):
