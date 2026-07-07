@@ -24,52 +24,61 @@ _CALIBRATION_RULES = """【事实校准规则 · 必须严格遵守】
 - 转写可能有语音识别错误（专有名词/英文/模型名尤其易被听错、音译错）。遇到明显像 ASR 误识的实体，按"疑似识别错误"处理，别把糊掉的词当成实质主张来批判。
 - 校准优先于犀利：真实、可核查 > 修辞锋利。宁可写"这点存疑/未能核实"，也不要为了叙事漂亮下自信断言。"""
 
-ANALYZE_PROMPT = """你是一位诚实、严谨、校准良好的独立研究者（不为戏剧性牺牲准确性）。下面是博主「{author}」一期视频《{title}》的完整转写文本。
+# 核实模式（联网搜索）开启时才注入
+_VERIFY_ADDENDUM = """【联网核实 · 已开启】
+- 你可以使用 Google 搜索。请主动核实转写里的专有名词、论文、模型、产品、数据是否真实、是否属实。
+- 转写里疑似语音识别错误的实体（音译泥、错拼、英文听岔），先搜出正确写法再使用，别照着错的分析。
+- 在文档开头加一节「## 实体核实」：列关键实体 + 结果（真实 / 未找到 / 疑似误识→正确名）。"""
+
+ANALYZE_PROMPT = """你是一位严谨、校准良好的知识整理者。下面是「{author}」一期内容《{title}》的完整转写。
 
 **语言：整份文档（包括所有小标题）必须用与下方转写相同的语言撰写——转写是中文就用中文，是英文就用英文，其他语言同理。下面给出的小标题只是结构示例，请翻译成对应语言。**
 
 {rules}
+{verify}
 
-请只基于这份转写，输出一份扎实的 Markdown 分析（不注水、不泛泛）：
+请基于这份转写，输出一份清晰、有信息量的**知识分析**（Markdown，不注水、不泛泛）：
 
 # {title}
 
-## 一、核心观点
-列出他这期表达的主要主张/结论，逐条具体，标注立场强度（强烈主张/顺带一提/反复强调）。
+## 概览
+这一期讲了什么：主题和覆盖范围，2-4 句说清。
 
-## 二、论点·论据·论证
-拆解他如何论证：用了什么论据（数据/案例/类比/个人经历/第一性原理推演），论证链条是什么，
-哪些是硬证据、哪些是主观断言或情绪化表达。保留他标志性的措辞/比喻（可少量引用原话）。
+## 关键内容
+逐条梳理实质内容：讲解的概念、方法、事实、结论、案例。具体、准确，保留关键术语和数字。
 
-## 三、我的独立思考
-你自己的判断：哪些站得住、哪些偏颇或以偏概全、哪些可能过时或有事实错误；
-补充背景、数据或反例；他的说法对什么人适用、对什么人是坑。
-**凡涉及具体事实（论文/数据/事件是否真实）而你无法确认的，明确标注"未能核实"，不要武断判真伪。**
+## 涉及的概念与工作
+提到的论文 / 模型 / 技术 / 工具 / 人物 / 产品等，列出来便于查证。
+
+## 要点与结论
+这一期最值得记住的核心结论、洞见或实用信息。
+
+## 补充与存疑
+需要补充的背景；以及任何你无法确认真伪、值得进一步核实的具体事实（标"未能核实"，不臆断）。
 
 转写文本：
 {transcript}"""
 
-SYNTHESIZE_PROMPT = """你会收到博主「{author}」{n} 期视频的独立分析文档。请跨期打通，综合成一份总文档（Markdown）。
+SYNTHESIZE_PROMPT = """你会收到「{author}」{n} 期内容的独立知识分析。请跨期综合成一份总文档（Markdown）。
 
 **语言：整份总文档（包括所有小标题）必须用与下方分析文档相同的语言撰写——它们是中文就用中文，是英文就用英文。下面给出的小标题只是结构示例，请翻译成对应语言。**
 
 {rules}
-- 合并注意：若同一个你无法核实的指控在多期反复出现，这更可能是**共同的识别/知识盲区**，而非"系统性造假"的证据——不要因为它反复出现就当成坐实的跨期母题。
+- 合并注意：若同一个无法核实的说法在多期反复出现，更可能是**共同的识别/知识盲区**而非事实，别因反复出现就当成坐实。
 
-# {author}：综合观点研究（基于 {n} 期视频）
+# {author}：内容综合（基于 {n} 期）
 
-## 〇、世界观速写
-横跨所有期数，提炼他最底层、反复出现的思维母题与价值判断（判断方法、偏好、执念、盲区），
-并列一份「他反复给出的、可被时间证伪的具体预测清单」。
+## 覆盖范围
+这个创作者整体在讲什么领域 / 主题。
 
-## 按议题综合
-自行把内容归纳成 5-10 个议题。每个议题写：
-（1）他的综合核心立场（跨期去重合并，标注来源期数关键词）；
-（2）论证方式与依据（哪些硬观察、哪些主观断言）；
-（3）内在矛盾或前后张力；
-（4）你的独立评价。
+## 主要议题
+归纳成 5-10 个议题。每个：讲了哪些内容、涉及哪些关键概念/工作、跨期的脉络。
 
-要求：是综合提炼而非逐期罗列；扎实、有信息量；实事求是。
+## 反复出现的重点
+高频出现的概念、方法、主题或关注点。
+
+## 综合要点
+读完这些能带走的核心知识与结论。
 
 以下是全部分析文档：
 
@@ -81,19 +90,26 @@ _SYNTH_CHAR_LIMIT = 600_000
 _MAX_ATTEMPTS = 3
 
 
-def _call_gemini(prompt):
-    """带重试的 Gemini 调用，返回文本或抛异常。"""
+def _call_gemini(prompt, grounded=False):
+    """带重试的 Gemini 调用，返回文本或抛异常。grounded=True 开 Google 搜索核实。"""
     api_key = GEMINI_API_KEY or os.environ.get('GEMINI_API_KEY', '')
     if not api_key:
         raise RuntimeError('GEMINI_API_KEY 未设置')
 
     client = make_gemini_client(api_key)
 
+    cfg = None
+    if grounded:
+        from google.genai import types
+        cfg = types.GenerateContentConfig(
+            tools=[types.Tool(google_search=types.GoogleSearch())]
+        )
+
     last_err = None
     for attempt in range(1, _MAX_ATTEMPTS + 1):
         try:
             resp = client.models.generate_content(
-                model=GEMINI_ANALYSIS_MODEL, contents=prompt
+                model=GEMINI_ANALYSIS_MODEL, contents=prompt, config=cfg
             )
             text = (resp.text or '').strip()
             if text:
@@ -110,12 +126,13 @@ def _rules():
     return _CALIBRATION_RULES.format(today=datetime.now().strftime('%Y-%m-%d'))
 
 
-def analyze_transcript(title, transcript_text, author='该博主'):
-    """一期转写 → 一份分析 Markdown 文本。"""
+def analyze_transcript(title, transcript_text, author='该博主', verify=False):
+    """一期转写 → 一份知识分析 Markdown。verify=True 开联网核实。"""
     prompt = ANALYZE_PROMPT.format(
-        author=author, title=title, transcript=transcript_text, rules=_rules()
+        author=author, title=title, transcript=transcript_text,
+        rules=_rules(), verify=(_VERIFY_ADDENDUM if verify else ''),
     )
-    return _call_gemini(prompt)
+    return _call_gemini(prompt, grounded=verify)
 
 
 def synthesize(analyses, author='该博主'):

@@ -1218,7 +1218,8 @@ def run_chain(state):
                         for s in segs
                     )
                     with _chain_analysis_sem:    # 全局分析闸
-                        md = analyze_transcript(v['title'], text, state['author'])
+                        md = analyze_transcript(v['title'], text, state['author'],
+                                                verify=state.get('verify', False))
                     fname = f"分析_{v['index'] + 1:03d}_{_safe_doc_name(v['title'])}.md"
                     with open(os.path.join(chain_dir, fname),
                               'w', encoding='utf-8') as fh:
@@ -1281,6 +1282,7 @@ def api_chain_create():
         'max_videos': max_videos,
         'analyze': bool(data.get('analyze', True)),
         'prefer_subs': bool(data.get('prefer_subs', False)),
+        'verify': bool(data.get('verify', False)),
         'author': (data.get('author') or '').strip() or '该博主',
         'stage': 'starting',
         'created_at': __import__('datetime').datetime.now().strftime(

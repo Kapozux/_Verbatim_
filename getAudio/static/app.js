@@ -831,6 +831,7 @@ const chainMax = document.getElementById('chain-max');
 const chainEngine = document.getElementById('chain-engine');
 const chainAnalyze = document.getElementById('chain-analyze');
 const chainPreferSubs = document.getElementById('chain-prefer-subs');
+const chainVerify = document.getElementById('chain-verify');
 const chainStartBtn = document.getElementById('chain-start');
 const chainList = document.getElementById('chain-list');
 
@@ -861,6 +862,7 @@ chainStartBtn.addEventListener('click', async () => {
                 engine: chainEngine.value,
                 analyze: chainAnalyze.checked,
                 prefer_subs: chainPreferSubs.checked,
+                verify: chainVerify.checked,
             }),
         });
         const data = await resp.json();
