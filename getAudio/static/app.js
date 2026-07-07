@@ -701,6 +701,8 @@ function resetEnrichBtn() {
     enrichBtn.textContent = 'Auto-title';
 }
 
+let enrichWasPolling = false;   // 后台标签暂停 enrich 轮询时的续跑标记
+
 async function pollEnrichStatus() {
     try {
         const resp = await fetch('/api/enrich_status');
@@ -709,7 +711,8 @@ async function pollEnrichStatus() {
             enrichBtn.textContent = `${st.done}/${st.total}`;
             // 每整理完几条就刷新列表，让标题逐步冒出来
             if (st.done > 0 && st.done % 10 === 0) renderHistory();
-            setTimeout(pollEnrichStatus, 1500);
+            if (!document.hidden) setTimeout(pollEnrichStatus, 1500);
+            else enrichWasPolling = true;      // 后台暂停，回前台再续
         } else {
             resetEnrichBtn();
             renderHistory();
@@ -1000,7 +1003,7 @@ async function refreshChainDetail() {
     }).join('') || '<p class="history-empty">Resolving episode list…</p>';
 
     clearTimeout(chainDetailTimer);
-    if (!['done', 'failed'].includes(c.stage)) {
+    if (!['done', 'failed'].includes(c.stage) && !document.hidden) {
         chainDetailTimer = setTimeout(refreshChainDetail, 4000);
     }
 }
@@ -1022,13 +1025,25 @@ async function loadChains() {
         renderChains(chains);
         const anyActive = chains.some(c => !['done', 'failed'].includes(c.stage));
         clearTimeout(chainPollTimer);
-        if (anyActive) {
+        // 只在有活跃链条、且标签页在前台时才继续轮询：
+        // 后台标签不空转；也不再每 4 秒全量重绘历史（几百条卡片重绘会烧满渲染进程）。
+        if (anyActive && !document.hidden) {
             chainPollTimer = setTimeout(loadChains, 4000);
-            // 转写阶段会往历史里落新条目，顺手刷新历史
-            if (typeof renderHistory === 'function') renderHistory();
         }
     } catch (e) { /* 服务重启瞬间的抖动，忽略 */ }
 }
+
+// 标签页切到后台：停掉所有轮询，别在后台烧电；切回前台再恢复。
+document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+        clearTimeout(chainPollTimer);
+        clearTimeout(chainDetailTimer);
+    } else {
+        loadChains();
+        if (chainDetailId) refreshChainDetail();
+        if (enrichWasPolling) { enrichWasPolling = false; pollEnrichStatus(); }
+    }
+});
 
 // 跳到「资料库 → 分析文档」子分区
 function gotoDocs() {

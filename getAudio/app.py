@@ -935,6 +935,37 @@ def _save_chain(state):
         json.dump(state, f, ensure_ascii=False, indent=2)
 
 
+def recover_unfinished_chains():
+    """启动时把上次没跑完的链条标记为 failed（pipeline 暂不自动恢复）。
+
+    否则这些链条永远停在 downloading/transcribing 等非终态，前端会当成
+    “活跃链条”每 4 秒不停轮询，纯白耗电（关机前那次烧电就是这个）。
+    """
+    if not os.path.isdir(CHAINS_DIR):
+        return
+    for name in os.listdir(CHAINS_DIR):
+        cpath = os.path.join(CHAINS_DIR, name, 'chain.json')
+        if not os.path.isfile(cpath):
+            continue
+        try:
+            with open(cpath, 'r', encoding='utf-8') as f:
+                state = json.load(f)
+        except Exception:
+            continue
+        if state.get('stage') in ('done', 'failed'):
+            continue
+        state['stage'] = 'failed'
+        state['error'] = '服务重启，链条中断（pipeline 暂不自动恢复，请重新发起）'
+        for v in state.get('videos', []):
+            if v.get('status') not in ('done', 'failed'):
+                v['status'] = 'failed'
+        try:
+            with open(cpath, 'w', encoding='utf-8') as f:
+                json.dump(state, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+
 def _safe_doc_name(name):
     name = name.replace('/', '-').replace('\\', '-')
     return re.sub(r'[:*?"<>|\x00-\x1f]', '_', name).strip()[:120]
@@ -1431,6 +1462,7 @@ if __name__ == '__main__':
     # 非 debug 只有一个进程，直接跑。
     if not debug or os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
         recover_unfinished_tasks()
+        recover_unfinished_chains()
     # HOST 默认 127.0.0.1（本地只对自己开）；Docker 里设 HOST=0.0.0.0 对外暴露。
     app.run(debug=debug, threaded=True,
             host=os.environ.get('HOST', '127.0.0.1'),
