@@ -51,6 +51,9 @@ WHISPER_LANGUAGE = os.environ.get('WHISPER_LANGUAGE') or None
 # Gemini
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
 GEMINI_MODEL = 'gemini-2.5-pro'
+# 分析/综合/核实层用更强、知识截止更晚的模型（少把"截止后的新论文"误判成造假）。
+# 转写仍用上面的 GEMINI_MODEL（音频转写 2.5-pro 稳）。可用环境变量覆盖。
+GEMINI_ANALYSIS_MODEL = os.environ.get('GEMINI_ANALYSIS_MODEL') or 'gemini-3.1-pro-preview'
 # 卡片元数据（标题/标签）生成用 Flash：快、便宜，质量足够
 GEMINI_ENRICH_MODEL = 'gemini-2.5-flash'
 GEMINI_INLINE_LIMIT = 19 * 1024 * 1024  # 19 MB, use File API above this

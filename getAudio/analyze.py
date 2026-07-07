@@ -10,14 +10,27 @@
 
 import os
 import time
+from datetime import datetime
 
-from config import GEMINI_API_KEY, GEMINI_MODEL, make_gemini_client
+from config import GEMINI_API_KEY, GEMINI_ANALYSIS_MODEL, make_gemini_client
 
-ANALYZE_PROMPT = """你是一位犀利、诚实的独立研究者。下面是博主「{author}」一期视频《{title}》的完整转写文本。
+# 事实校准规则：直接对症那几类失败——截止日期盲区、对冲信息被压平、
+# ASR 音译泥、以及"为了犀利牺牲校准"。两份 prompt 都注入。
+_CALIBRATION_RULES = """【事实校准规则 · 必须严格遵守】
+- 今天是 {today}。转写可能涉及你知识截止之后才出现的论文/模型/产品/事件。**不认识 ≠ 不存在，更 ≠ 编造。**
+- 下"虚构 / 造假 / 编造数据 / 查无此物"这类结论前必须有依据。核实不了就明确写"未能核实"，**严禁**把"我不认识"升级成"他在造假"。
+- 保留说话人的存疑标注：他若说过"数据来自原文、待核实 / 我没验证"，就如实记为"说话人已自行标注存疑"，不得吞掉这句再反过来指责他不标注。
+- 区分认识论状态：某条信息是①说话人自己的主张、②他转述某来源、还是③他明确标了存疑？不要把"他对 X 存疑"塌缩成"X 成立"。
+- 转写可能有语音识别错误（专有名词/英文/模型名尤其易被听错、音译错）。遇到明显像 ASR 误识的实体，按"疑似识别错误"处理，别把糊掉的词当成实质主张来批判。
+- 校准优先于犀利：真实、可核查 > 修辞锋利。宁可写"这点存疑/未能核实"，也不要为了叙事漂亮下自信断言。"""
+
+ANALYZE_PROMPT = """你是一位诚实、严谨、校准良好的独立研究者（不为戏剧性牺牲准确性）。下面是博主「{author}」一期视频《{title}》的完整转写文本。
 
 **语言：整份文档（包括所有小标题）必须用与下方转写相同的语言撰写——转写是中文就用中文，是英文就用英文，其他语言同理。下面给出的小标题只是结构示例，请翻译成对应语言。**
 
-请只基于这份转写，输出一份扎实的 Markdown 分析（不要注水、不要泛泛而谈）：
+{rules}
+
+请只基于这份转写，输出一份扎实的 Markdown 分析（不注水、不泛泛）：
 
 # {title}
 
@@ -31,6 +44,7 @@ ANALYZE_PROMPT = """你是一位犀利、诚实的独立研究者。下面是博
 ## 三、我的独立思考
 你自己的判断：哪些站得住、哪些偏颇或以偏概全、哪些可能过时或有事实错误；
 补充背景、数据或反例；他的说法对什么人适用、对什么人是坑。
+**凡涉及具体事实（论文/数据/事件是否真实）而你无法确认的，明确标注"未能核实"，不要武断判真伪。**
 
 转写文本：
 {transcript}"""
@@ -39,6 +53,8 @@ SYNTHESIZE_PROMPT = """你会收到博主「{author}」{n} 期视频的独立分
 
 **语言：整份总文档（包括所有小标题）必须用与下方分析文档相同的语言撰写——它们是中文就用中文，是英文就用英文。下面给出的小标题只是结构示例，请翻译成对应语言。**
 
+{rules}
+- 合并注意：若同一个你无法核实的指控在多期反复出现，这更可能是**共同的识别/知识盲区**，而非"系统性造假"的证据——不要因为它反复出现就当成坐实的跨期母题。
 
 # {author}：综合观点研究（基于 {n} 期视频）
 
@@ -71,14 +87,13 @@ def _call_gemini(prompt):
     if not api_key:
         raise RuntimeError('GEMINI_API_KEY 未设置')
 
-    from google import genai
     client = make_gemini_client(api_key)
 
     last_err = None
     for attempt in range(1, _MAX_ATTEMPTS + 1):
         try:
             resp = client.models.generate_content(
-                model=GEMINI_MODEL, contents=prompt
+                model=GEMINI_ANALYSIS_MODEL, contents=prompt
             )
             text = (resp.text or '').strip()
             if text:
@@ -91,10 +106,14 @@ def _call_gemini(prompt):
     raise RuntimeError(f'Gemini 调用失败（已重试 {_MAX_ATTEMPTS} 次）: {last_err}')
 
 
+def _rules():
+    return _CALIBRATION_RULES.format(today=datetime.now().strftime('%Y-%m-%d'))
+
+
 def analyze_transcript(title, transcript_text, author='该博主'):
     """一期转写 → 一份分析 Markdown 文本。"""
     prompt = ANALYZE_PROMPT.format(
-        author=author, title=title, transcript=transcript_text
+        author=author, title=title, transcript=transcript_text, rules=_rules()
     )
     return _call_gemini(prompt)
 
@@ -115,7 +134,7 @@ def synthesize(analyses, author='该博主'):
     combined = _join(analyses)
     if len(combined) <= _SYNTH_CHAR_LIMIT:
         return _call_gemini(SYNTHESIZE_PROMPT.format(
-            author=author, n=len(analyses), analyses=combined
+            author=author, n=len(analyses), analyses=combined, rules=_rules()
         ))
 
     # 超长：切批 → 每批中间综合 → 终合
@@ -134,7 +153,7 @@ def synthesize(analyses, author='该博主'):
     partials = []
     for i, batch in enumerate(batches):
         part = _call_gemini(SYNTHESIZE_PROMPT.format(
-            author=author, n=len(batch), analyses=_join(batch)
+            author=author, n=len(batch), analyses=_join(batch), rules=_rules()
         ))
         partials.append((f'中间综合{i + 1}', part))
 
@@ -142,4 +161,5 @@ def synthesize(analyses, author='该博主'):
         author=author,
         n=len(analyses),
         analyses=_join(partials),
+        rules=_rules(),
     ))
