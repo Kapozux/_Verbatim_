@@ -844,6 +844,7 @@ const CHAIN_STAGE_LABELS = {
     synthesizing: 'Synthesizing',
     done: 'Done',
     failed: 'Failed',
+    cancelled: 'Stopped',
 };
 
 let chainPollTimer = null;
@@ -913,7 +914,7 @@ function renderChains(chains) {
     }
     chainList.innerHTML = chains.map(c => {
         const stage = CHAIN_STAGE_LABELS[c.stage] || c.stage;
-        const active = !['done', 'failed'].includes(c.stage);
+        const active = !['done', 'failed', 'cancelled'].includes(c.stage);
         const prog = chainProgressText(c);
         let links = '';
         if (c.raw_doc) {
@@ -924,7 +925,11 @@ function renderChains(chains) {
             links += `<a class="chain-doc-link" href="#"
                 onclick="openDocView('${c.id}','${encodeURIComponent(c.final_doc)}');return false;">Read synthesis</a>`;
         }
-        if (['done', 'failed'].includes(c.stage)) {
+        if (active) {
+            links += `<a class="chain-doc-link chain-del" href="#"
+                onclick="stopChain('${c.id}',event);return false;">Stop</a>`;
+        }
+        if (['done', 'failed', 'cancelled'].includes(c.stage)) {
             links += `<a class="chain-doc-link" href="#"
                 onclick="reanalyzeMenu('${c.id}',event);return false;">Re-analyze</a>
                 <a class="chain-doc-link" href="#"
@@ -1028,7 +1033,7 @@ async function refreshChainDetail() {
     }).join('') || '<p class="history-empty">Resolving episode list…</p>';
 
     clearTimeout(chainDetailTimer);
-    if (!['done', 'failed'].includes(c.stage) && !document.hidden) {
+    if (!['done', 'failed', 'cancelled'].includes(c.stage) && !document.hidden) {
         chainDetailTimer = setTimeout(refreshChainDetail, 4000);
     }
 }
@@ -1048,7 +1053,7 @@ async function loadChains() {
         const resp = await fetch('/api/chains');
         const chains = await resp.json();
         renderChains(chains);
-        const anyActive = chains.some(c => !['done', 'failed'].includes(c.stage));
+        const anyActive = chains.some(c => !['done', 'failed', 'cancelled'].includes(c.stage));
         clearTimeout(chainPollTimer);
         // 只在有活跃链条、且标签页在前台时才继续轮询：
         // 后台标签不空转；也不再每 4 秒全量重绘历史（几百条卡片重绘会烧满渲染进程）。
@@ -1074,6 +1079,13 @@ document.addEventListener('visibilitychange', () => {
 function gotoDocs() {
     switchTab('library');
     switchLib('docs');
+}
+
+async function stopChain(chainId, ev) {
+    if (ev) ev.stopPropagation();
+    if (!confirm('Stop this pipeline? Finished transcripts & analyses are kept; it just stops going further.')) return;
+    try { await fetch(`/api/chain/${chainId}/stop`, { method: 'POST' }); } catch { /* ignore */ }
+    loadChains();
 }
 
 async function deleteChain(chainId) {

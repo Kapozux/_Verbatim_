@@ -931,6 +931,9 @@ os.makedirs(CHAINS_DIR, exist_ok=True)
 _CHAIN_ID_RE = re.compile(r'^[0-9a-f]{32}$')
 _MAX_CHAIN_VIDEOS = 300  # 防手滑整个频道几千个视频全下下来
 
+# 协作式取消：/stop 往里加 chain_id，运行中的链条在安全点自查并收尾（已完成产物保留）。
+_cancel_chains = set()
+
 
 def _chain_dir(chain_id):
     return os.path.join(CHAINS_DIR, chain_id)
@@ -992,7 +995,7 @@ def recover_unfinished_chains():
                 state = json.load(f)
         except Exception:
             continue
-        if state.get('stage') in ('done', 'failed'):
+        if state.get('stage') in ('done', 'failed', 'cancelled'):
             continue
         state['stage'] = 'failed'
         state['error'] = '服务重启，链条中断（pipeline 暂不自动恢复，请重新发起）'
@@ -1114,6 +1117,10 @@ def run_chain(state):
 
         def _download_and_submit(i, target):
             v = videos[i]
+            if chain_id in _cancel_chains:       # 已请求停止：不再开新下载
+                v['status'] = 'skipped'
+                save()
+                return
             sub_segs = sub_source = None
             with _chain_download_sem:            # 全局下载闸
                 with lock:
@@ -1170,11 +1177,13 @@ def run_chain(state):
 
         submitted = [v for v in videos if v.get('task_id')]
         if not submitted:
+            if chain_id in _cancel_chains:
+                return                       # 一开始就被停，交给 finally 收尾
             raise RuntimeError('No audio downloaded — bad link, login required, or all downloads failed')
 
-        # ---- 3. 等全部转写落定（轮询 taskdb）----
+        # ---- 3. 等全部转写落定（轮询 taskdb；被停则停止等待，在飞的转写自然收尾）----
         pending = {v['task_id'] for v in submitted}
-        while pending:
+        while pending and chain_id not in _cancel_chains:
             time.sleep(5)
             for v in submitted:
                 if v['task_id'] not in pending:
@@ -1197,7 +1206,7 @@ def run_chain(state):
             save()
 
         # ---- 4. 逐期分析（全局分析闸；每期一次独立调用，防丢信息）----
-        if state.get('analyze'):
+        if state.get('analyze') and chain_id not in _cancel_chains:
             state['stage'] = 'analyzing'
             state['analyzed_done'] = 0
             save()
@@ -1250,11 +1259,12 @@ def run_chain(state):
                     fh.write(total_md)
                 state['final_doc'] = '总分析.md'
 
-        state['stage'] = 'done'
+        state['stage'] = 'cancelled' if chain_id in _cancel_chains else 'done'
     except Exception as e:  # noqa: BLE001
         state['stage'] = 'failed'
         state['error'] = str(e)
     finally:
+        _cancel_chains.discard(chain_id)
         state['finished_at'] = __import__('datetime').datetime.now().strftime(
             '%Y-%m-%d %H:%M:%S')
         _save_chain(state)
@@ -1288,6 +1298,8 @@ def _reanalyze_chain(state):
         save()
 
         def _analyze_one(v):
+            if state['id'] in _cancel_chains:
+                return None
             tpath = os.path.join(
                 config.RESULTS_FOLDER, v['task_id'], 'transcript.json')
             if not os.path.isfile(tpath):
@@ -1318,7 +1330,7 @@ def _reanalyze_chain(state):
         episodes = [r for r in results if r]
         state['analyzed_ok'] = len(episodes)
 
-        if episodes:
+        if episodes and state['id'] not in _cancel_chains:
             state['stage'] = 'synthesizing'
             save()
             total_md = synthesize(episodes, state['author'],
@@ -1328,12 +1340,14 @@ def _reanalyze_chain(state):
                 fh.write(total_md)
             state['final_doc'] = '总分析.md'
 
-        state['stage'] = 'done'
+        state['stage'] = 'cancelled' if state['id'] in _cancel_chains else 'done'
         save()
     except Exception as e:  # noqa: BLE001
         state['stage'] = 'failed'
         state['error'] = f'重新分析失败：{e}'
         save()
+    finally:
+        _cancel_chains.discard(state['id'])
 
 
 @app.route('/api/chain', methods=['POST'])
@@ -1426,6 +1440,15 @@ def api_chain_reanalyze(chain_id):
         state['critique_level'] = body['critique_level']
     state['analyze'] = True
     threading.Thread(target=_reanalyze_chain, args=(state,), daemon=True).start()
+    return jsonify({'ok': True})
+
+
+@app.route('/api/chain/<chain_id>/stop', methods=['POST'])
+def api_chain_stop(chain_id):
+    """请求停止一条运行中的链条（协作式）：已完成的转写/分析保留，不再继续推进。"""
+    if not _CHAIN_ID_RE.match(chain_id or ''):
+        return jsonify({'error': 'Invalid chain id'}), 400
+    _cancel_chains.add(chain_id)
     return jsonify({'ok': True})
 
 
