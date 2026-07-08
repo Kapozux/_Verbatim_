@@ -17,7 +17,8 @@ import time
 from datetime import datetime
 
 from config import (GEMINI_API_KEY, GEMINI_ANALYSIS_MODEL,
-                    GEMINI_EXTRACT_MODEL, make_gemini_client)
+                    GEMINI_EXTRACT_MODEL, GEMINI_FALLBACK_MODELS,
+                    make_gemini_client)
 
 _CALIBRATION_RULES = """【校准兜底 · 必守】
 - 今天是 {today}。内容可能涉及你知识截止之后的论文/模型/事件。**不认识 ≠ 不存在 ≠ 编造。**
@@ -134,21 +135,35 @@ def _call_gemini(prompt, grounded=False, model=None):
             tools=[types.Tool(google_search=types.GoogleSearch())]
         )
 
+    # 模型降级链：主模型 → 兜底模型（去重保序）。某个模型限流/挂了就换下一个。
+    ladder = []
+    for m in [model or GEMINI_ANALYSIS_MODEL, *GEMINI_FALLBACK_MODELS]:
+        if m and m not in ladder:
+            ladder.append(m)
+
     last_err = None
-    for attempt in range(1, _MAX_ATTEMPTS + 1):
-        try:
-            resp = client.models.generate_content(
-                model=model or GEMINI_ANALYSIS_MODEL, contents=prompt, config=cfg
-            )
-            text = (resp.text or '').strip()
-            if text:
-                return text
-            last_err = RuntimeError('Gemini 返回空文本')
-        except Exception as e:  # noqa: BLE001
-            last_err = e
-        if attempt < _MAX_ATTEMPTS:
-            time.sleep(5 * attempt)
-    raise RuntimeError(f'Gemini 调用失败（已重试 {_MAX_ATTEMPTS} 次）: {last_err}')
+    for m in ladder:
+        for attempt in range(1, _MAX_ATTEMPTS + 1):
+            try:
+                resp = client.models.generate_content(
+                    model=m, contents=prompt, config=cfg
+                )
+                text = (resp.text or '').strip()
+                if text:
+                    return text
+                last_err = RuntimeError('Gemini 返回空文本')
+            except Exception as e:  # noqa: BLE001
+                last_err = e
+                s = str(e)
+                transient = any(k in s for k in (
+                    '429', 'RESOURCE_EXHAUSTED', '503', 'UNAVAILABLE',
+                    'overloaded', 'deadline', 'timeout'))
+                if not transient:
+                    break            # 模型名错/安全拦截等：别耗重试，直接换下一个模型
+                if attempt < _MAX_ATTEMPTS:
+                    time.sleep(5 * attempt)
+        # 该模型跑不通 → 降级到链条里的下一个
+    raise RuntimeError(f'Gemini 调用失败（已试模型 {ladder}）: {last_err}')
 
 
 def _parse_json_obj(raw):

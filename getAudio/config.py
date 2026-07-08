@@ -57,6 +57,12 @@ GEMINI_ANALYSIS_MODEL = os.environ.get('GEMINI_ANALYSIS_MODEL') or 'gemini-2.5-p
 # 逐期"抽取证据卡"是机械读写、又是调用大头（N 期 × 1）→ 用便宜的 flash（省钱大头）。
 # 合成（人物画像）才用上面的 pro。advisor/orchestrator：大模型动嘴、小模型跑腿。
 GEMINI_EXTRACT_MODEL = os.environ.get('GEMINI_EXTRACT_MODEL') or 'gemini-2.5-flash'
+# 主模型 429/限流/挂了就自动降级到这些（flash 速率额度更宽、更便宜），保命用。
+GEMINI_FALLBACK_MODELS = [
+    m.strip() for m in
+    os.environ.get('GEMINI_FALLBACK_MODELS', 'gemini-2.5-flash,gemini-flash-latest').split(',')
+    if m.strip()
+]
 # 卡片元数据（标题/标签）生成用 Flash：快、便宜，质量足够
 GEMINI_ENRICH_MODEL = 'gemini-2.5-flash'
 GEMINI_INLINE_LIMIT = 19 * 1024 * 1024  # 19 MB, use File API above this
