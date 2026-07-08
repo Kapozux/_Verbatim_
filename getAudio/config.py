@@ -63,6 +63,27 @@ GEMINI_FALLBACK_MODELS = [
     os.environ.get('GEMINI_FALLBACK_MODELS', 'gemini-2.5-flash,gemini-flash-latest').split(',')
     if m.strip()
 ]
+
+# ===== 分析层「大脑」预设 =====
+# 阿里云百炼一把 DashScope key 通吃 DeepSeek/Qwen/Kimi/GLM（OpenAI 兼容端点）。
+# 有内容审查：只用于非敏感博主。转录不走这里（都是文本模型）。
+ALIYUN_COMPAT_BASE = os.environ.get('ALIYUN_COMPAT_BASE') or \
+    'https://dashscope.aliyuncs.com/compatible-mode/v1'
+ANALYSIS_PRESET_DEFAULT = os.environ.get('ANALYSIS_PRESET') or 'gemini'
+# 预设 → (provider, 抽取模型, 合成模型)
+ANALYSIS_PRESETS = {
+    'gemini':   ('gemini', GEMINI_EXTRACT_MODEL, GEMINI_ANALYSIS_MODEL),
+    'deepseek': ('aliyun', 'deepseek-v4-flash', 'deepseek-v4-pro'),
+    'qwen':     ('aliyun', 'qwen3.7-plus', 'qwen3.7-plus'),
+    'kimi':     ('aliyun', 'kimi-k2.6', 'kimi-k2.6'),
+    'glm':      ('aliyun', 'glm-5.2', 'glm-5.2'),
+}
+
+
+def resolve_analysis(preset):
+    """预设名 → (provider, 抽取模型, 合成模型)。未知则回落 gemini。"""
+    return ANALYSIS_PRESETS.get(preset or ANALYSIS_PRESET_DEFAULT,
+                                ANALYSIS_PRESETS['gemini'])
 # 卡片元数据（标题/标签）生成用 Flash：快、便宜，质量足够
 GEMINI_ENRICH_MODEL = 'gemini-2.5-flash'
 GEMINI_INLINE_LIMIT = 19 * 1024 * 1024  # 19 MB, use File API above this

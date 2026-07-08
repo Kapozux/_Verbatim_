@@ -1274,7 +1274,8 @@ def run_chain(state):
                     )
                     with _chain_analysis_sem:    # 全局分析闸
                         ep = analyze_episode(v['title'], text, state['author'],
-                                             verify=state.get('verify', False))
+                                             verify=state.get('verify', False),
+                                             preset=state.get('analysis_preset'))
                     fname = f"分析_{v['index'] + 1:03d}_{_safe_doc_name(v['title'])}.md"
                     with open(os.path.join(chain_dir, fname),
                               'w', encoding='utf-8') as fh:
@@ -1299,7 +1300,8 @@ def run_chain(state):
                 state['stage'] = 'synthesizing'
                 save()
                 total_md = synthesize(episodes, state['author'],
-                                      critique_level=state.get('critique_level', 'analytical'))
+                                      critique_level=state.get('critique_level', 'analytical'),
+                                      preset=state.get('analysis_preset'))
                 with open(os.path.join(chain_dir, '总分析.md'),
                           'w', encoding='utf-8') as fh:
                     fh.write(total_md)
@@ -1357,7 +1359,8 @@ def _reanalyze_chain(state):
                     f"[{s.get('timestamp', '')}] {s.get('text', '')}" for s in segs)
                 with _chain_analysis_sem:
                     ep = analyze_episode(v['title'], text, state['author'],
-                                         verify=state.get('verify', False))
+                                         verify=state.get('verify', False),
+                                         preset=state.get('analysis_preset'))
                 fname = f"分析_{v['index'] + 1:03d}_{_safe_doc_name(v['title'])}.md"
                 with open(os.path.join(chain_dir, fname),
                           'w', encoding='utf-8') as fh:
@@ -1380,7 +1383,8 @@ def _reanalyze_chain(state):
             state['stage'] = 'synthesizing'
             save()
             total_md = synthesize(episodes, state['author'],
-                                  critique_level=state.get('critique_level', 'analytical'))
+                                  critique_level=state.get('critique_level', 'analytical'),
+                                  preset=state.get('analysis_preset'))
             with open(os.path.join(chain_dir, '总分析.md'),
                       'w', encoding='utf-8') as fh:
                 fh.write(total_md)
@@ -1420,6 +1424,7 @@ def api_chain_create():
         'prefer_subs': bool(data.get('prefer_subs', False)),
         'verify': bool(data.get('verify', False)),
         'critique_level': (data.get('critique_level') or 'analytical'),
+        'analysis_preset': (data.get('analysis_preset') or 'gemini'),
         'author': (data.get('author') or '').strip() or '该博主',
         'stage': 'starting',
         'created_at': __import__('datetime').datetime.now().strftime(
@@ -1484,6 +1489,8 @@ def api_chain_reanalyze(chain_id):
     state['verify'] = bool(body.get('verify', False))
     if body.get('critique_level'):
         state['critique_level'] = body['critique_level']
+    if body.get('analysis_preset'):
+        state['analysis_preset'] = body['analysis_preset']
     state['analyze'] = True
     threading.Thread(target=_reanalyze_chain, args=(state,), daemon=True).start()
     return jsonify({'ok': True})

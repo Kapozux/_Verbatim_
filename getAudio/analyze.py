@@ -18,6 +18,7 @@ from datetime import datetime
 
 from config import (GEMINI_API_KEY, GEMINI_ANALYSIS_MODEL,
                     GEMINI_EXTRACT_MODEL, GEMINI_FALLBACK_MODELS,
+                    DASHSCOPE_API_KEY, ALIYUN_COMPAT_BASE, resolve_analysis,
                     make_gemini_client)
 
 _CALIBRATION_RULES = """【校准兜底 · 必守】
@@ -166,6 +167,43 @@ def _call_gemini(prompt, grounded=False, model=None):
     raise RuntimeError(f'Gemini 调用失败（已试模型 {ladder}）: {last_err}')
 
 
+def _call_openai_compat(prompt, model, base_url, api_key):
+    """OpenAI 兼容端点（阿里云百炼：DeepSeek/Qwen/Kimi/GLM）。带重试，返回文本或抛异常。"""
+    import requests
+    url = base_url.rstrip('/') + '/chat/completions'
+    headers = {'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'}
+    payload = {'model': model, 'messages': [{'role': 'user', 'content': prompt}]}
+    last_err = None
+    for attempt in range(1, _MAX_ATTEMPTS + 1):
+        try:
+            r = requests.post(url, headers=headers, json=payload, timeout=600)
+            if r.status_code == 200:
+                txt = ((r.json().get('choices') or [{}])[0]
+                       .get('message', {}).get('content') or '').strip()
+                if txt:
+                    return txt
+                last_err = RuntimeError('空文本')
+            else:
+                last_err = RuntimeError(f'{r.status_code}: {r.text[:200]}')
+                if r.status_code not in (429, 500, 502, 503, 504):
+                    break               # 4xx（key 错/模型名错）别耗重试
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+        if attempt < _MAX_ATTEMPTS:
+            time.sleep(5 * attempt)
+    raise RuntimeError(f'阿里云({model}) 调用失败: {last_err}')
+
+
+def _llm(prompt, provider, model, grounded=False):
+    """按 provider 分发：gemini 走 google-genai，aliyun 走百炼 OpenAI 兼容。"""
+    if provider == 'aliyun':
+        key = DASHSCOPE_API_KEY or os.environ.get('DASHSCOPE_API_KEY', '')
+        if not key:
+            raise RuntimeError('DASHSCOPE_API_KEY 未设置（阿里云分析需要）')
+        return _call_openai_compat(prompt, model, ALIYUN_COMPAT_BASE, key)
+    return _call_gemini(prompt, grounded=grounded, model=model)
+
+
 def _parse_json_obj(raw):
     m = re.search(r'```json\s*(.*?)\s*```', raw, re.DOTALL)
     if m:
@@ -180,14 +218,14 @@ def _parse_json_obj(raw):
         return None
 
 
-def _extract_cards(title, transcript_text, author):
+def _extract_cards(title, transcript_text, author, provider, model):
     """逐期抽取证据卡。返回 {cards, metrics, asr_suspects} 或 None。"""
     prompt = CARDS_PROMPT.format(
         author=author, title=title, transcript=transcript_text,
         today=datetime.now().strftime('%Y-%m-%d'),
     )
     try:
-        data = _parse_json_obj(_call_gemini(prompt, model=GEMINI_EXTRACT_MODEL))
+        data = _parse_json_obj(_llm(prompt, provider, model))
     except Exception:  # noqa: BLE001
         return None
     if not isinstance(data, dict):
@@ -223,9 +261,10 @@ def _external_claims(data):
             if c.get('layer') == '他的主张' and (c.get('obs') or c.get('quote'))]
 
 
-def analyze_episode(title, transcript_text, author='该博主', verify=False):
+def analyze_episode(title, transcript_text, author='该博主', verify=False, preset=None):
     """逐期 → {title, cards, metrics, asr_suspects, markdown}。verify 时附核实脚注。"""
-    data = _extract_cards(title, transcript_text, author) or {
+    provider, extract_model, _ = resolve_analysis(preset)
+    data = _extract_cards(title, transcript_text, author, provider, extract_model) or {
         'cards': [], 'metrics': {}, 'asr_suspects': [],
     }
     md = _cards_markdown(title, data)
@@ -272,7 +311,7 @@ def _digest(episodes, budget):
 
 
 def synthesize(episodes, author='该博主', critique_level='analytical',
-               impression_bias=''):
+               impression_bias='', preset=None):
     """N 期证据卡 → 一份人物画像。critique_level: descriptive/analytical/sharp。
 
     impression_bias：仅供校准回归测试用——在"综合印象"注入一条语气基线
@@ -283,8 +322,9 @@ def synthesize(episodes, author='该博主', critique_level='analytical',
         raise RuntimeError('没有可综合的证据卡')
     level = critique_level if critique_level in _TONE else 'analytical'
     impression = f'（综合印象的语气基线：{impression_bias}）' if impression_bias else ''
-    return _call_gemini(PORTRAIT_PROMPT.format(
+    provider, _, synth_model = resolve_analysis(preset)
+    return _llm(PORTRAIT_PROMPT.format(
         author=author, n=len(episodes), rules=_rules(),
         level=level, tone=_TONE[level], impression=impression,
         digest=_digest(episodes, _SYNTH_CHAR_LIMIT),
-    ))
+    ), provider, synth_model)
