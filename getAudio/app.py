@@ -933,6 +933,8 @@ _MAX_CHAIN_VIDEOS = 300  # 防手滑整个频道几千个视频全下下来
 
 # 协作式取消：/stop 往里加 chain_id，运行中的链条在安全点自查并收尾（已完成产物保留）。
 _cancel_chains = set()
+# 单视频重转会从别的线程改 chain.json；读-改-写用它串行化，防并发丢更新。
+_chain_write_lock = threading.Lock()
 
 
 def _chain_dir(chain_id):
@@ -1511,6 +1513,103 @@ def api_chain_retry(chain_id):
     _cancel_chains.discard(chain_id)          # 清掉可能残留的取消标记
     # run_chain 会重新 probe + 去重复用（已转写的跳过），只有缺的会真正重下重转
     threading.Thread(target=run_chain, args=(state,), daemon=True).start()
+    return jsonify({'ok': True})
+
+
+def _update_video(chain_id, index, fields):
+    """读-改-写 chain.json 里第 index 个视频的字段（串行化，防并发丢更新）。"""
+    with _chain_write_lock:
+        cpath = os.path.join(_chain_dir(chain_id), 'chain.json')
+        try:
+            with open(cpath, 'r', encoding='utf-8') as f:
+                state = json.load(f)
+        except Exception:
+            return
+        vids = state.get('videos') or []
+        if 0 <= index < len(vids):
+            vids[index].update(fields)
+            _save_chain(state)
+
+
+def _video_target(v):
+    """从视频条目取重下用的 target；没存 video_url 就按 id 重建。"""
+    url = v.get('video_url')
+    vid = v.get('video_id', '') or ''
+    if not url and vid:
+        if len(vid) == 11:                      # YouTube id
+            url = f'https://www.youtube.com/watch?v={vid}'
+        elif vid.startswith('BV'):              # Bilibili
+            url = f'https://www.bilibili.com/video/{vid}'
+    return {'video_url': url, 'video_id': vid, 'title': v.get('title')}
+
+
+def _retranscribe_video(chain_id, index, target, engine):
+    """只对一个视频：重下音频 → 用指定引擎转写 → 回写这张卡的状态。后台线程跑。"""
+    from downloader import download_one
+    dl_dir = os.path.join(_chain_dir(chain_id), 'downloads')
+    try:
+        _update_video(chain_id, index, {'status': 'downloading'})
+        with _chain_download_sem:
+            item = download_one(target, dl_dir)
+        if not item:
+            _update_video(chain_id, index, {'status': 'download_failed'})
+            return
+
+        task_id = str(uuid.uuid4())
+        ext = os.path.splitext(item['path'])[1].lstrip('.') or 'mp3'
+        upload_path = os.path.join(config.UPLOAD_FOLDER, f"{task_id}.{ext}")
+        shutil.move(item['path'], upload_path)
+        display_name = f"{item['title']} [{item['video_id']}].mp3"
+        taskdb.create(task_id, display_name, engine, None, upload_path)
+        q = queue.Queue()
+        tasks[task_id] = q
+        executor.submit(run_transcription, task_id, upload_path, engine,
+                        display_name, q, None)
+        _update_video(chain_id, index, {
+            'task_id': task_id, 'title': item['title'],
+            'video_id': item['video_id'], 'status': 'transcribing',
+            'source': f'retranscribe:{engine}',
+        })
+
+        # 轮询到落定，回写状态
+        while True:
+            time.sleep(5)
+            row = taskdb.get(task_id)
+            if row and row['status'] in ('done', 'failed'):
+                _update_video(chain_id, index, {'status': row['status']})
+                break
+    except Exception:  # noqa: BLE001
+        _update_video(chain_id, index, {'status': 'failed'})
+    finally:
+        shutil.rmtree(dl_dir, ignore_errors=True)
+
+
+@app.route('/api/chain/<chain_id>/video/<int:index>/retranscribe', methods=['POST'])
+def api_chain_retranscribe(chain_id, index):
+    """对链条里第 index 个视频，用指定引擎单独重下+重转（不动其它视频）。"""
+    if not _CHAIN_ID_RE.match(chain_id or ''):
+        return jsonify({'error': 'Invalid chain id'}), 400
+    cpath = os.path.join(_chain_dir(chain_id), 'chain.json')
+    if not os.path.isfile(cpath):
+        return jsonify({'error': 'Not found'}), 404
+    with open(cpath, 'r', encoding='utf-8') as f:
+        state = json.load(f)
+    if state.get('stage') not in ('done', 'failed', 'cancelled'):
+        return jsonify({'ok': False, 'error': '等这条链整体跑完再单独重转'}), 409
+    vids = state.get('videos') or []
+    if not (0 <= index < len(vids)):
+        return jsonify({'error': 'bad index'}), 400
+    v = vids[index]
+    if v.get('status') in ('downloading', 'transcribing'):
+        return jsonify({'ok': False, 'error': '这个视频正在处理'}), 409
+
+    body = request.get_json(silent=True) or {}
+    engine = body.get('engine') or 'whisper'
+    target = _video_target(v)
+    if not target['video_url']:
+        return jsonify({'ok': False, 'error': '没有可用的视频链接，无法重下'}), 400
+    threading.Thread(target=_retranscribe_video,
+                     args=(chain_id, index, target, engine), daemon=True).start()
     return jsonify({'ok': True})
 
 

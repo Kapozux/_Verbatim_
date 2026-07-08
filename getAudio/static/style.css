@@ -344,6 +344,11 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   /* 兜底裁剪：即使个别浏览器 line-clamp 不生效，也不会露出第 4 行 */
   max-height: calc(1.5em * 3 + 21px);
 }
+.vg-retry {
+  font-size: 11.5px; color: var(--faint); padding: 0 12px 11px; margin-top: -4px;
+}
+.vg-retry a { color: var(--coral); cursor: pointer; }
+.vg-retry a:hover { text-decoration: underline; }
 
 /* === Responsive === */
 @media (max-width: 640px) {

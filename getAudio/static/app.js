@@ -1024,7 +1024,8 @@ async function refreshChainDetail() {
         `${CHAIN_STAGE_LABELS[c.stage] || c.stage} · ${chainProgressText(c)}`;
 
     const vids = c.videos || [];
-    chainDetailGrid.innerHTML = vids.map(v => {
+    const chainTerminal = ['done', 'failed', 'cancelled'].includes(c.stage);
+    chainDetailGrid.innerHTML = vids.map((v, idx) => {
         const st = VIDEO_STATUS[v.status] || { label: v.status, cls: '' };
         const clickable = v.status === 'done' && v.task_id;
         const thumb = v.thumbnail
@@ -1038,17 +1039,39 @@ async function refreshChainDetail() {
             ? `<div class="vg-prog" style="--p:${pct}%"><span>${pct}%</span></div>` : '';
         const onclick = clickable
             ? ` onclick="openDetailView('${v.task_id}')" title="View transcript"` : '';
+        // 链条已跑完、且这个视频没成功 → 提供单独换引擎重转
+        const canRetry = chainTerminal && !['done', 'downloading', 'transcribing'].includes(v.status);
+        const retry = canRetry
+            ? `<div class="vg-retry">↻
+                 <a onclick="retranscribe('${c.id}',${idx},'whisper',event)">Whisper</a> ·
+                 <a onclick="retranscribe('${c.id}',${idx},'gemini',event)">Gemini</a>
+               </div>` : '';
         return `<div class="vg-card ${clickable ? 'vg-clickable' : ''}"${onclick}>
             <div class="vg-thumb-wrap">${thumb}${overlay}</div>
             <div class="vg-badge ${st.cls}">${st.label}</div>
             <div class="vg-title" title="${(v.title || '').replace(/"/g, '&quot;')}">${v.title || ''}</div>
+            ${retry}
         </div>`;
     }).join('') || '<p class="history-empty">Resolving episode list…</p>';
 
     clearTimeout(chainDetailTimer);
-    if (!['done', 'failed', 'cancelled'].includes(c.stage) && !document.hidden) {
+    // 链条在跑、或有单个视频在重转中 → 继续轮询刷新
+    const anyBusy = vids.some(v => ['downloading', 'transcribing'].includes(v.status));
+    if ((!chainTerminal || anyBusy) && !document.hidden) {
         chainDetailTimer = setTimeout(refreshChainDetail, 4000);
     }
+}
+
+async function retranscribe(chainId, index, engine, ev) {
+    if (ev) ev.stopPropagation();
+    try {
+        const r = await (await fetch(`/api/chain/${chainId}/video/${index}/retranscribe`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ engine }),
+        })).json();
+        if (!r.ok) { alert(r.error || 'Could not start re-transcribe'); return; }
+    } catch { alert('Could not start re-transcribe'); return; }
+    refreshChainDetail();      // 状态转 downloading → 轮询接管显示进度
 }
 
 function closeChainDetail() {
