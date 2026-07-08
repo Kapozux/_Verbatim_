@@ -17,7 +17,7 @@ ENGINE_CONCURRENCY = {
     'whisper': 2,
     # Paid Tier 1（~150 RPM）下 8 路并发稳妥。注意每个文件不止一次请求
     # （上传 + 长音频分段各一次），所以实际 QPS 会更高；若大量 429/空文本再下调。
-    'gemini': 8,
+    'gemini': int(os.environ.get('GEMINI_CONCURRENCY') or 12),
     'dashscope': 9,
     # 精准模式：单个任务内部会并发跑 Gemini 转写 + 阿里云说话人分离，最后再 Gemini 合并。
     # 一个任务实际打 2~3 次 Gemini + 1 次阿里云，所以并发压低到 4，避免叠加把两边都打爆。
@@ -50,7 +50,7 @@ WHISPER_LANGUAGE = os.environ.get('WHISPER_LANGUAGE') or None
 
 # Gemini
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
-GEMINI_MODEL = 'gemini-2.5-pro'
+GEMINI_MODEL = os.environ.get('GEMINI_TRANSCRIBE_MODEL') or 'gemini-2.5-flash'
 # 分析/综合/核实层的模型。分层后事实判断已交给 grounding（核实模式）而非模型记忆，
 # 所以默认用 2.5-pro（便宜、够用）；想要更晚的知识截止可用环境变量切到 3.x-pro。
 GEMINI_ANALYSIS_MODEL = os.environ.get('GEMINI_ANALYSIS_MODEL') or 'gemini-2.5-pro'
