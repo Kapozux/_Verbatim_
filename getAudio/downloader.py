@@ -13,6 +13,7 @@ YouTube 的反爬会让旧版直接解析失败。
 
 import json
 import os
+import time
 import re
 import shutil
 import subprocess
@@ -158,8 +159,14 @@ def probe(url, max_videos=None):
     }], channel
 
 
+_DOWNLOAD_ATTEMPTS = 3        # B站 412 等间歇性风控：退避重试，绝大多数第二次就过
+
+
 def download_one(target, dest_dir):
-    """下载单个目标的音频，返回 {'path','title','video_id','thumbnail'} 或 None。"""
+    """下载单个目标的音频，返回 {'path','title','video_id','thumbnail'} 或 None。
+
+    带退避重试：B站 412 / 网络抖动这类间歇失败，隔几秒重试常能过。
+    """
     os.makedirs(dest_dir, exist_ok=True)
     binary = _resolve_ytdlp()
     outtmpl = os.path.join(dest_dir, '%(title)s [%(id)s].%(ext)s')
@@ -176,26 +183,25 @@ def download_one(target, dest_dir):
         '--no-simulate',
         target['video_url'],
     ]
-    try:
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=_DOWNLOAD_TIMEOUT,
-        )
-    except subprocess.TimeoutExpired:
-        return None
-    if result.returncode != 0:
-        return None
-    lines = [ln for ln in result.stdout.strip().splitlines() if ln.strip()]
-    if len(lines) < 3:
-        return None
-    path, real_title, video_id = lines[0], lines[1], lines[2]
-    if not os.path.isfile(path):
-        return None
-    return {
-        'path': path,
-        'title': real_title or target.get('title') or 'untitled',
-        'video_id': video_id or target.get('video_id', ''),
-        'thumbnail': target.get('thumbnail', ''),
-    }
+    for attempt in range(1, _DOWNLOAD_ATTEMPTS + 1):
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=_DOWNLOAD_TIMEOUT,
+            )
+        except subprocess.TimeoutExpired:
+            result = None
+        if result is not None and result.returncode == 0:
+            lines = [ln for ln in result.stdout.strip().splitlines() if ln.strip()]
+            if len(lines) >= 3 and os.path.isfile(lines[0]):
+                return {
+                    'path': lines[0],
+                    'title': lines[1] or target.get('title') or 'untitled',
+                    'video_id': lines[2] or target.get('video_id', ''),
+                    'thumbnail': target.get('thumbnail', ''),
+                }
+        if attempt < _DOWNLOAD_ATTEMPTS:
+            time.sleep(4 * attempt)      # 4s, 8s 退避
+    return None
 
 
 _SUB_TIMEOUT = 120
@@ -212,11 +218,17 @@ def _collect_srt(dest_dir, vid):
 
 
 def _pick_sub_lang(tracks, orig):
-    """从可用字幕轨里挑一条：原语言 > 英 > 中 > 任意。避免下成机翻。"""
+    """从可用字幕轨里挑一条：原语言 > 英 > 中(含B站 AI字幕 ai-zh) > 任意。避免下成机翻。"""
     if not tracks:
         return None
-    for code in [c for c in (orig, 'en', 'en-US', 'zh-Hans', 'zh', 'zh-CN') if c]:
+    pref = [orig, 'en', 'en-US', 'zh-Hans', 'zh', 'zh-CN', 'zh-Hant',
+            'ai-zh', 'ai-en']          # ai-zh/ai-en：B站等平台的 AI 自动字幕
+    for code in [c for c in pref if c]:
         if code in tracks:
+            return code
+    # 兜底：任何 zh 开头(含 ai-zh)的轨优先，再不行取第一条
+    for code in tracks:
+        if str(code).lower().startswith(('zh', 'ai-zh')):
             return code
     return next(iter(tracks))
 

@@ -1294,7 +1294,7 @@ def run_chain(state):
             from analyze import analyze_episode, synthesize
 
             def _analyze_one(v):
-                if v['status'] != 'done':
+                if v['status'] != 'done' or chain_id in _cancel_chains:
                     return None
                 tpath = os.path.join(
                     config.RESULTS_FOLDER, v['task_id'], 'transcript.json')
