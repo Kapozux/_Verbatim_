@@ -939,14 +939,14 @@ function renderChains(chains) {
             links += `<a class="chain-doc-link chain-del" href="#"
                 onclick="stopChain('${c.id}',event);return false;">Stop</a>`;
         }
-        if (['done', 'failed', 'cancelled'].includes(c.stage)
-            && (c.videos || []).some(v => v.status !== 'done')) {
-            links += `<a class="chain-doc-link" href="#"
-                onclick="retryChain('${c.id}',event);return false;">Retry failed</a>`;
-        }
         if (['done', 'failed', 'cancelled'].includes(c.stage)) {
+            // Continue：只在还有没跑完的视频时出现，补全缺失（转写失败/未下/未分析都续上）
+            if ((c.videos || []).some(v => v.status !== 'done')) {
+                links += `<a class="chain-doc-link" href="#"
+                    onclick="continueChain('${c.id}',event);return false;">Continue</a>`;
+            }
             links += `<a class="chain-doc-link" href="#"
-                onclick="reanalyzeMenu('${c.id}',event);return false;">Re-analyze</a>
+                onclick="reanalyzeChain('${c.id}',event);return false;">Re-analyze</a>
                 <a class="chain-doc-link" href="#"
                 onclick="gotoDocs();return false;">All documents</a>
                 <a class="chain-doc-link chain-del" href="#"
@@ -1041,18 +1041,10 @@ async function refreshChainDetail() {
             ? `<div class="vg-prog" style="--p:${pct}%"><span>${pct}%</span></div>` : '';
         const onclick = clickable
             ? ` onclick="openDetailView('${v.task_id}')" title="View transcript"` : '';
-        // 链条已跑完、且这个视频没成功 → 提供单独换引擎重转
-        const canRetry = chainTerminal && !['done', 'downloading', 'transcribing'].includes(v.status);
-        const retry = canRetry
-            ? `<div class="vg-retry">↻
-                 <a onclick="retranscribe('${c.id}',${idx},'whisper',event)">Whisper</a> ·
-                 <a onclick="retranscribe('${c.id}',${idx},'gemini',event)">Gemini</a>
-               </div>` : '';
         return `<div class="vg-card ${clickable ? 'vg-clickable' : ''}"${onclick}>
             <div class="vg-thumb-wrap">${thumb}${overlay}</div>
             <div class="vg-badge ${st.cls}">${st.label}</div>
             <div class="vg-title" title="${(v.title || '').replace(/"/g, '&quot;')}">${v.title || ''}</div>
-            ${retry}
         </div>`;
     }).join('') || '<p class="history-empty">Resolving episode list…</p>';
 
@@ -1062,18 +1054,6 @@ async function refreshChainDetail() {
     if ((!chainTerminal || anyBusy) && !document.hidden) {
         chainDetailTimer = setTimeout(refreshChainDetail, 4000);
     }
-}
-
-async function retranscribe(chainId, index, engine, ev) {
-    if (ev) ev.stopPropagation();
-    try {
-        const r = await (await fetch(`/api/chain/${chainId}/video/${index}/retranscribe`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ engine }),
-        })).json();
-        if (!r.ok) { alert(r.error || 'Could not start re-transcribe'); return; }
-    } catch { alert('Could not start re-transcribe'); return; }
-    refreshChainDetail();      // 状态转 downloading → 轮询接管显示进度
 }
 
 function closeChainDetail() {
@@ -1119,13 +1099,18 @@ function gotoDocs() {
     switchLib('docs');
 }
 
-async function retryChain(chainId, ev) {
+// Continue：补全一切缺失——已完成的复用，没下的下，转写失败的（音频在就直接重转、
+// 云引擎失败自动落 Whisper），最后补分析 + 合成。用上面表单的引擎/分析大脑设置。
+async function continueChain(chainId, ev) {
     if (ev) ev.stopPropagation();
-    if (!confirm('Re-run this pipeline? Already-transcribed videos are reused (no re-download); only the missing/failed ones are re-fetched.')) return;
+    if (!confirm('Continue this pipeline?\n复用所有已完成的，只补缺失的：没下的下载、转写失败的重转（云引擎失败自动落本地 Whisper），再补分析 + 合成。用上方表单里的引擎 / 分析大脑设置。')) return;
     try {
-        const r = await (await fetch(`/api/chain/${chainId}/retry`, { method: 'POST' })).json();
-        if (!r.ok) { alert(r.error || 'Could not start retry'); }
-    } catch { alert('Could not start retry'); }
+        const r = await (await fetch(`/api/chain/${chainId}/retry`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ engine: chainEngine.value, analysis_preset: chainProvider.value }),
+        })).json();
+        if (!r.ok) { alert(r.error || 'Could not continue'); }
+    } catch { alert('Could not continue'); }
     loadChains();
 }
 
@@ -1142,29 +1127,20 @@ async function deleteChain(chainId) {
     loadChains();
 }
 
-// 重新分析：只重跑分析+合成（复用已有转写），点开选 默认 / +联网核实
-function reanalyzeMenu(chainId, ev) {
-    ev.stopPropagation();
-    const span = ev.target.closest('.chain-links');
-    if (!span) return;
-    span.innerHTML = `<span class="reanalyze-menu">Re-analyze:
-        <a href="#" onclick="doReanalyze('${chainId}',false,event);return false;">Default</a>
-        <a href="#" onclick="doReanalyze('${chainId}',true,event);return false;">+ Web verify</a>
-        <a href="#" class="chain-del" onclick="event.stopPropagation();loadChains();return false;">cancel</a>
-    </span>`;
-}
-
-async function doReanalyze(chainId, verify, ev) {
-    ev.stopPropagation();
-    if (!confirm('重新分析会对每个视频重跑 AI（消耗 Gemini 付费额度）'
-        + (verify ? '，并联网核实（额外搜索额度）' : '') + '。继续？')) { loadChains(); return; }
+// Re-analyze：只对已有转写重跑分析 + 合成（不碰转写）。用上面表单的分析大脑 / 档位 / 核实。
+async function reanalyzeChain(chainId, ev) {
+    if (ev) ev.stopPropagation();
+    const verify = chainVerify.checked;
+    if (!confirm('Re-analyze：对每个已转写视频重跑 AI 分析'
+        + (verify ? ' + 联网核实（额外搜索额度）' : '')
+        + '，用上方表单选的分析大脑。转写不动。继续？')) return;
     try {
         const r = await (await fetch(`/api/chain/${chainId}/reanalyze`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ verify, critique_level: chainCritique.value,
                                    analysis_preset: chainProvider.value }),
         })).json();
-        if (!r.ok) { alert(r.error || 'Could not start re-analysis'); loadChains(); return; }
+        if (!r.ok) { alert(r.error || 'Could not start re-analysis'); }
     } catch { alert('Could not start re-analysis'); }
     loadChains();   // stage 变 analyzing → 轮询自动接管显示进度
 }

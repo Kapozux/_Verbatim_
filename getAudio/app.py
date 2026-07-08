@@ -286,7 +286,30 @@ def run_transcription(task_id, filepath, engine, original_filename, q,
         segments = []
         summary_data = None
 
-        if engine == 'whisper':
+        def _finish_ok(segs, summary, engine_used):
+            """成功收尾：落盘 + enrich + 标记 done + 压缩音频（主路径/兜底路径共用）。"""
+            _save_results(task_id, original_filename, engine_used, input_path,
+                          segs, summary)
+            try:
+                from enrich import enrich_task
+                enrich_task(os.path.join(config.RESULTS_FOLDER, task_id))
+            except Exception:
+                pass
+            taskdb.set_status(task_id, 'done')
+            q.put(json.dumps({
+                'type': 'done',
+                'task_id': task_id,
+                'segments': segs,
+                'summary': summary,
+            }))
+            try:
+                from audioutil import compress_task
+                compress_task(os.path.join(config.RESULTS_FOLDER, task_id))
+            except Exception:
+                pass
+
+        def _whisper_transcribe():
+            """本地 Whisper 转写（主路径 + 云引擎失败时的兜底路径共用）。"""
             from transcribe_whisper import transcribe_audio
 
             q.put(json.dumps({
@@ -294,21 +317,21 @@ def run_transcription(task_id, filepath, engine, original_filename, q,
                 'percent': 0,
                 'message': '正在加载 Whisper 模型（首次可能需要下载）...',
             }))
-
             raw_segments = transcribe_audio(input_path, progress_callback=progress_cb)
-
+            segs = []
             for seg in raw_segments:
                 item = {
                     'timestamp': format_seconds(seg['start']),
                     'end': format_seconds(seg['end']),
                     'text': seg['text'].strip(),
                 }
-                segments.append(item)
+                segs.append(item)
                 q.put(json.dumps({'type': 'segment', **item}))
+            full = "\n".join(f"[{s['timestamp']}] {s['text']}" for s in segs)
+            return segs, full
 
-            full_text = "\n".join(
-                f"[{s['timestamp']}] {s['text']}" for s in segments
-            )
+        if engine == 'whisper':
+            segments, full_text = _whisper_transcribe()
             summary_data = _run_summary(full_text, q)
 
         elif engine == 'gemini':
@@ -441,46 +464,41 @@ def run_transcription(task_id, filepath, engine, original_filename, q,
             }))
             return
 
-        _save_results(task_id, original_filename, engine, input_path,
-                      segments, summary_data)
-
-        # 生成列表卡片元数据（AI 标题/一句话/标签），失败不影响主流程
-        try:
-            from enrich import enrich_task
-            enrich_task(os.path.join(config.RESULTS_FOLDER, task_id))
-        except Exception:
-            pass
-
-        taskdb.set_status(task_id, 'done')
-        q.put(json.dumps({
-            'type': 'done',
-            'task_id': task_id,
-            'segments': segments,
-            'summary': summary_data,
-        }))
-
-        # 转写已完成，音频只剩回放用途 → 压成 opus 省磁盘（失败不影响结果）
-        try:
-            from audioutil import compress_task
-            compress_task(os.path.join(config.RESULTS_FOLDER, task_id))
-        except Exception:
-            pass
+        _finish_ok(segments, summary_data, engine)
 
     except Exception as e:
-        taskdb.set_status(task_id, 'failed', error=str(e))
-        q.put(json.dumps({
-            'type': 'error',
-            'message': str(e),
-        }))
+        # 云引擎失败（429/网络/任何错）→ 自动落到本地 Whisper 兜底，别让任务死掉
+        fell_back = False
+        if engine != 'whisper':
+            try:
+                q.put(json.dumps({
+                    'type': 'progress', 'percent': 0,
+                    'message': f'{engine} 失败（{str(e)[:60]}），自动改用本地 Whisper 兜底...',
+                }))
+                segments, full_text = _whisper_transcribe()
+                summary_data = _run_summary(full_text, q)
+                _finish_ok(segments, summary_data, 'whisper')
+                fell_back = True
+            except Exception as e2:  # noqa: BLE001
+                e = e2
+        if not fell_back:
+            taskdb.set_status(task_id, 'failed', error=str(e))
+            q.put(json.dumps({
+                'type': 'error',
+                'message': str(e),
+            }))
 
     finally:
         if sem is not None:
             sem.release()
-        for path in cleanup_paths:
-            try:
-                os.remove(path)
-            except OSError:
-                pass
+        # 只在任务成功后删源音频；失败保留（Continue 补全时直接重转，不用重下载）
+        row = taskdb.get(task_id)
+        if row and row.get('status') == 'done':
+            for path in cleanup_paths:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
         # worker 完成后才从全局表里清掉自己，
         # 这样客户端断开/刷新后重连依然能读到队列里剩下的消息。
         tasks.pop(task_id, None)
@@ -1166,6 +1184,23 @@ def run_chain(state):
                 v['status'] = 'skipped'
                 save()
                 return
+
+            # Continue 补全：上次转写失败但音频还留着 → 直接重转，不重下载
+            old_tid = v.get('task_id')
+            if old_tid:
+                row = taskdb.get(old_tid)
+                up = (row or {}).get('upload_path') or ''
+                if up and os.path.isfile(up):
+                    taskdb.set_status(old_tid, 'pending')
+                    q2 = queue.Queue()
+                    tasks[old_tid] = q2
+                    executor.submit(run_transcription, old_tid, up,
+                                    state['engine'], row.get('filename'), q2, None)
+                    v['status'] = 'transcribing'
+                    with lock:
+                        state['download_done'] = state.get('download_done', 0) + 1
+                    save()
+                    return
             sub_segs = sub_source = None
             with _chain_download_sem:            # 全局下载闸
                 with lock:
@@ -1517,6 +1552,11 @@ def api_chain_retry(chain_id):
         state = json.load(f)
     if state.get('stage') not in ('done', 'failed', 'cancelled'):
         return jsonify({'ok': False, 'error': '这条链还在跑'}), 409
+    body = request.get_json(silent=True) or {}
+    if body.get('engine'):
+        state['engine'] = body['engine']
+    if body.get('analysis_preset'):
+        state['analysis_preset'] = body['analysis_preset']
     _cancel_chains.discard(chain_id)          # 清掉可能残留的取消标记
     # run_chain 会重新 probe + 去重复用（已转写的跳过），只有缺的会真正重下重转
     threading.Thread(target=run_chain, args=(state,), daemon=True).start()
