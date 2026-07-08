@@ -239,7 +239,7 @@ def _save_results(task_id, original_filename, engine, audio_source_path,
 
 
 def run_transcription(task_id, filepath, engine, original_filename, q,
-                      speaker_count=None):
+                      speaker_count=None, fallback_whisper=False):
     """Background worker: runs transcription, saves results, pushes events.
 
     每个引擎有独立信号量限流。任务提交后可能先排队（quota 已满），
@@ -467,13 +467,14 @@ def run_transcription(task_id, filepath, engine, original_filename, q,
         _finish_ok(segments, summary_data, engine)
 
     except Exception as e:
-        # 云引擎失败（429/网络/任何错）→ 自动落到本地 Whisper 兜底，别让任务死掉
+        # 默认：失败就失败（原引擎内部已重试；Continue 会用原引擎再试一轮）。
+        # 只有明确勾了"失败兜底 Whisper"才自动改用本地 Whisper——不偷偷换引擎/降质量。
         fell_back = False
-        if engine != 'whisper':
+        if engine != 'whisper' and fallback_whisper:
             try:
                 q.put(json.dumps({
                     'type': 'progress', 'percent': 0,
-                    'message': f'{engine} 失败（{str(e)[:60]}），自动改用本地 Whisper 兜底...',
+                    'message': f'{engine} 失败（{str(e)[:60]}），按设置改用本地 Whisper 兜底...',
                 }))
                 segments, full_text = _whisper_transcribe()
                 summary_data = _run_summary(full_text, q)
@@ -1195,7 +1196,8 @@ def run_chain(state):
                     q2 = queue.Queue()
                     tasks[old_tid] = q2
                     executor.submit(run_transcription, old_tid, up,
-                                    state['engine'], row.get('filename'), q2, None)
+                                    state['engine'], row.get('filename'), q2, None,
+                                    fallback_whisper=state.get('fallback_whisper', False))
                     v['status'] = 'transcribing'
                     with lock:
                         state['download_done'] = state.get('download_done', 0) + 1
@@ -1241,6 +1243,7 @@ def run_chain(state):
             executor.submit(
                 run_transcription, task_id, upload_path, state['engine'],
                 display_name, q, None,
+                fallback_whisper=state.get('fallback_whisper', False),
             )
             v['task_id'] = task_id
             v['title'] = item['title']
@@ -1457,6 +1460,7 @@ def api_chain_create():
         'max_videos': max_videos,
         'analyze': bool(data.get('analyze', True)),
         'prefer_subs': bool(data.get('prefer_subs', False)),
+        'fallback_whisper': bool(data.get('fallback_whisper', False)),
         'verify': bool(data.get('verify', False)),
         'critique_level': (data.get('critique_level') or 'analytical'),
         'analysis_preset': (data.get('analysis_preset') or 'gemini'),

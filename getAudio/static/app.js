@@ -832,6 +832,7 @@ const chainEngine = document.getElementById('chain-engine');
 const chainAnalyze = document.getElementById('chain-analyze');
 const chainPreferSubs = document.getElementById('chain-prefer-subs');
 const chainVerify = document.getElementById('chain-verify');
+const chainFallbackWhisper = document.getElementById('chain-fallback-whisper');
 const chainCritique = document.getElementById('chain-critique');
 const chainProvider = document.getElementById('chain-provider');
 const chainStartBtn = document.getElementById('chain-start');
@@ -873,6 +874,7 @@ chainStartBtn.addEventListener('click', async () => {
                 engine: chainEngine.value,
                 analyze: chainAnalyze.checked,
                 prefer_subs: chainPreferSubs.checked,
+                fallback_whisper: chainFallbackWhisper.checked,
                 verify: chainVerify.checked,
                 critique_level: chainCritique.value,
                 analysis_preset: chainProvider.value,

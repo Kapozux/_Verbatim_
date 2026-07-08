@@ -164,6 +164,10 @@
                                 <input type="checkbox" id="chain-verify">
                                 Verify facts (web)
                             </label>
+                            <label class="chain-check" title="If the cloud engine fails (e.g. quota), fall back to local Whisper for that video instead of leaving it failed. Off by default — otherwise it just fails and you re-run on the same engine (e.g. once your quota is back).">
+                                <input type="checkbox" id="chain-fallback-whisper">
+                                Whisper fallback
+                            </label>
                             <button id="chain-start" type="button" class="btn-primary chain-btn">Start</button>
                         </div>
                     </div>
