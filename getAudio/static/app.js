@@ -852,6 +852,14 @@ let chainPollTimer = null;
 chainStartBtn.addEventListener('click', async () => {
     const url = (chainUrl.value || '').trim();
     if (!url) { chainUrl.focus(); return; }
+    // 花钱确认：分析/合成会按视频数调用付费模型
+    if (chainAnalyze.checked) {
+        const extra = chainVerify.checked ? '\n＋联网核实会额外用 Google 搜索额度。' : '';
+        if (!confirm('这条 pipeline 会对每个视频做 AI 分析 + 合成，按视频数消耗 Gemini 付费额度（可能不便宜）。'
+            + extra + '\n\n只想要转写、自己拿去 Claude 分析？取消，然后取消勾选“Analyze & synthesize”。\n\n继续分析？')) {
+            return;
+        }
+    }
     chainStartBtn.disabled = true;
     try {
         const resp = await fetch('/api/chain', {
@@ -1123,6 +1131,8 @@ function reanalyzeMenu(chainId, ev) {
 
 async function doReanalyze(chainId, verify, ev) {
     ev.stopPropagation();
+    if (!confirm('重新分析会对每个视频重跑 AI（消耗 Gemini 付费额度）'
+        + (verify ? '，并联网核实（额外搜索额度）' : '') + '。继续？')) { loadChains(); return; }
     try {
         const r = await (await fetch(`/api/chain/${chainId}/reanalyze`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },

@@ -16,7 +16,8 @@ import re
 import time
 from datetime import datetime
 
-from config import GEMINI_API_KEY, GEMINI_ANALYSIS_MODEL, make_gemini_client
+from config import (GEMINI_API_KEY, GEMINI_ANALYSIS_MODEL,
+                    GEMINI_EXTRACT_MODEL, make_gemini_client)
 
 _CALIBRATION_RULES = """【校准兜底 · 必守】
 - 今天是 {today}。内容可能涉及你知识截止之后的论文/模型/事件。**不认识 ≠ 不存在 ≠ 编造。**
@@ -119,8 +120,8 @@ def _rules():
     return _CALIBRATION_RULES.format(today=datetime.now().strftime('%Y-%m-%d'))
 
 
-def _call_gemini(prompt, grounded=False):
-    """带重试的 Gemini 调用。grounded=True 开 Google 搜索。返回文本或抛异常。"""
+def _call_gemini(prompt, grounded=False, model=None):
+    """带重试的 Gemini 调用。grounded=True 开 Google 搜索。model 缺省用合成模型。"""
     api_key = GEMINI_API_KEY or os.environ.get('GEMINI_API_KEY', '')
     if not api_key:
         raise RuntimeError('GEMINI_API_KEY 未设置')
@@ -137,7 +138,7 @@ def _call_gemini(prompt, grounded=False):
     for attempt in range(1, _MAX_ATTEMPTS + 1):
         try:
             resp = client.models.generate_content(
-                model=GEMINI_ANALYSIS_MODEL, contents=prompt, config=cfg
+                model=model or GEMINI_ANALYSIS_MODEL, contents=prompt, config=cfg
             )
             text = (resp.text or '').strip()
             if text:
@@ -171,7 +172,7 @@ def _extract_cards(title, transcript_text, author):
         today=datetime.now().strftime('%Y-%m-%d'),
     )
     try:
-        data = _parse_json_obj(_call_gemini(prompt))
+        data = _parse_json_obj(_call_gemini(prompt, model=GEMINI_EXTRACT_MODEL))
     except Exception:  # noqa: BLE001
         return None
     if not isinstance(data, dict):

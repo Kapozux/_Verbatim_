@@ -54,6 +54,9 @@ GEMINI_MODEL = 'gemini-2.5-pro'
 # 分析/综合/核实层的模型。分层后事实判断已交给 grounding（核实模式）而非模型记忆，
 # 所以默认用 2.5-pro（便宜、够用）；想要更晚的知识截止可用环境变量切到 3.x-pro。
 GEMINI_ANALYSIS_MODEL = os.environ.get('GEMINI_ANALYSIS_MODEL') or 'gemini-2.5-pro'
+# 逐期"抽取证据卡"是机械读写、又是调用大头（N 期 × 1）→ 用便宜的 flash（省钱大头）。
+# 合成（人物画像）才用上面的 pro。advisor/orchestrator：大模型动嘴、小模型跑腿。
+GEMINI_EXTRACT_MODEL = os.environ.get('GEMINI_EXTRACT_MODEL') or 'gemini-2.5-flash'
 # 卡片元数据（标题/标签）生成用 Flash：快、便宜，质量足够
 GEMINI_ENRICH_MODEL = 'gemini-2.5-flash'
 GEMINI_INLINE_LIMIT = 19 * 1024 * 1024  # 19 MB, use File API above this
