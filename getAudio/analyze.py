@@ -20,7 +20,7 @@ from config import (GEMINI_API_KEY, GEMINI_ANALYSIS_MODEL,
                     GEMINI_EXTRACT_MODEL, GEMINI_FALLBACK_MODELS,
                     DASHSCOPE_API_KEY, ALIYUN_COMPAT_BASE, resolve_analysis,
                     make_gemini_client)
-from harness import fanout
+from harness import fanout, agent
 
 _CALIBRATION_RULES = """【校准兜底 · 必守】
 - 今天是 {today}。内容可能涉及你知识截止之后的论文/模型/事件。**不认识 ≠ 不存在 ≠ 编造。**
@@ -114,6 +114,45 @@ PORTRAIT_PROMPT = """你会收到「{author}」{n} 期的**证据卡 + 修辞指
 
 证据卡与指标（JSON）：
 {digest}"""
+
+# ---- 证伪层：从画像抽论断 → 逐条 skeptic 反驳 → 撑不住就砍 ----
+CLAIMS_PROMPT = """下面是一份对「{author}」的人物画像。抽出其中**评判性 / 概括性的论断**——即对这个人下的判断（他的思维偏好、修辞风格、盲区、总体印象等），不是纯转述、不是小标题、不是元说明（如"转写质量说明"）。
+
+只输出 JSON：{{"claims": ["论断一（尽量照抄画像原句）", "论断二", "..."]}}
+只抽**可被证据检验**的判断句；最多 25 条，挑最实质的。
+
+画像：
+{portrait}"""
+
+SKEPTIC_PROMPT = """（证伪 · 唱反调）下面有一条对「{author}」的论断，和一批从他视频抽出的证据卡。你的任务是**尽力反驳它**：卡片到底撑不撑得住？
+
+只输出 JSON：{{"verdict": "成立 | 夸大 | 不成立", "why": "一句话依据", "support_quote": "能撑住它的逐字引文，没有留空"}}
+
+判据：
+- 成立：至少一张卡的引文能直接支撑。
+- 夸大：有影子但说过头了（如证据只到"前后不一致"，论断却说成"虚伪/双标"）。
+- 不成立：没有卡片支撑，或与卡片矛盾。
+- **拿不准 → 往"夸大/不成立"靠，别轻易放行。**
+
+论断：{claim}
+
+证据卡（JSON）：
+{cards}"""
+
+REVISE_PROMPT = """下面是一份人物画像，和对其中若干论断的**证伪结果**。据此修订：
+- 判"不成立"的论断：**删掉**。
+- 判"夸大"的论断：**改写softer**，只说到证据撑得住的程度。
+- 其余不动。保持原结构、原语言、原证据层标签。
+
+输出修订后的画像正文，并在**末尾加一节**：
+## 证伪留痕
+逐条列出被删/改的论断 + 判定（不成立/夸大）+ 一句依据。
+
+原画像：
+{portrait}
+
+证伪结果（JSON）：
+{verdicts}"""
 
 _SYNTH_CHAR_LIMIT = 600_000
 _MAX_ATTEMPTS = 3
@@ -360,13 +399,47 @@ def _batch_brief(batch, author, provider, model):
         return None
 
 
+def _verify_portrait(portrait, digest, author, provider, extract_model, synth_model):
+    """证伪层：抽论断 → 逐条 skeptic 反驳（并发、复用画像那步的 digest）→ 撑不住就砍。
+
+    任何一步失败/无可检验论断/全部成立 → 原样返回，绝不把画像搞没。
+    """
+    obj = agent(lambda p: _llm(p, provider, extract_model),
+                CLAIMS_PROMPT.format(author=author, portrait=portrait),
+                schema=['claims'])
+    claims = [c for c in ((obj or {}).get('claims') or []) if isinstance(c, str) and c.strip()]
+    if not claims:
+        return portrait
+
+    def _skeptic(claim):
+        return agent(lambda p: _llm(p, provider, extract_model),
+                     SKEPTIC_PROMPT.format(author=author, claim=claim, cards=digest),
+                     schema=['verdict'])
+
+    verdicts = fanout(claims, _skeptic, concurrency=_BRIEF_CONCURRENCY)
+    bad = [{'claim': c, 'verdict': v.get('verdict'), 'why': v.get('why', '')}
+           for c, v in zip(claims, verdicts)
+           if v and v.get('verdict') in ('夸大', '不成立')]
+    if not bad:
+        return portrait  # 全成立，不动
+
+    revised = _llm(REVISE_PROMPT.format(
+        portrait=portrait,
+        verdicts=json.dumps(bad, ensure_ascii=False, indent=1),
+    ), provider, synth_model)
+    return revised or portrait
+
+
 def synthesize(episodes, author='该博主', critique_level='analytical',
-               impression_bias='', preset=None):
+               impression_bias='', preset=None, self_verify=False):
     """N 期证据卡 → 一份人物画像。critique_level: descriptive/analytical/sharp。
 
     少量期：一次合成（老路）。期数 > _BATCH_SIZE 时走 map-reduce：
     分批做中间简报（便宜模型、并发）→ 简报合成画像（贵模型），
     避免几百期卡片硬塞一个 prompt 被砍。修辞指标用纯 Python 的真实总数。
+
+    self_verify=True：合成后再跑一轮证伪——抽出每条论断、逐条 skeptic 拿证据反驳，
+    证据撑不住的删、夸大的改软，末尾留痕。
 
     impression_bias：仅供校准回归测试用——在"综合印象"注入一条语气基线
     （如"中性 / 略带怀疑 / 略带欣赏"），看结论会不会跟着漂。默认空。
@@ -400,8 +473,13 @@ def synthesize(episodes, author='该博主', critique_level='analytical',
             digest = _digest(episodes, _SYNTH_CHAR_LIMIT)
 
     # reduce：真数字 + 简报（或卡片）→ 人物画像（贵模型）
-    return _llm(PORTRAIT_PROMPT.format(
+    portrait = _llm(PORTRAIT_PROMPT.format(
         author=author, n=len(episodes), rules=_rules(),
         level=level, tone=_TONE[level], impression=impression,
         digest=_metrics_block(agg, len(episodes)) + '\n\n' + digest,
     ), provider, synth_model)
+
+    if self_verify:
+        portrait = _verify_portrait(
+            portrait, digest, author, provider, extract_model, synth_model)
+    return portrait

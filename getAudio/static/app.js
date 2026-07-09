@@ -832,6 +832,7 @@ const chainEngine = document.getElementById('chain-engine');
 const chainAnalyze = document.getElementById('chain-analyze');
 const chainPreferSubs = document.getElementById('chain-prefer-subs');
 const chainVerify = document.getElementById('chain-verify');
+const chainSelfVerify = document.getElementById('chain-self-verify');
 const chainFallbackWhisper = document.getElementById('chain-fallback-whisper');
 const chainCritique = document.getElementById('chain-critique');
 const chainProvider = document.getElementById('chain-provider');
@@ -876,6 +877,7 @@ chainStartBtn.addEventListener('click', async () => {
                 prefer_subs: chainPreferSubs.checked,
                 fallback_whisper: chainFallbackWhisper.checked,
                 verify: chainVerify.checked,
+                self_verify: chainSelfVerify.checked,
                 critique_level: chainCritique.value,
                 analysis_preset: chainProvider.value,
             }),
@@ -1064,6 +1066,7 @@ async function refreshChainDetail() {
                 <span class="ci-v">engine <b>${c.engine || '-'}</b> · analyze <b>${onoff(c.analyze)}</b>
                 · brain <b>${c.analysis_preset || 'gemini'}</b> · level <b>${c.critique_level || 'analytical'}</b>
                 · subs-first <b>${onoff(c.prefer_subs)}</b> · web-verify <b>${onoff(c.verify)}</b>
+                · self-verify <b>${onoff(c.self_verify)}</b>
                 · whisper-fallback <b>${onoff(c.fallback_whisper)}</b></span></div>
             <div class="ci-row"><span class="ci-k">Progress</span>
                 <span class="ci-v">${chainProgressText(c)}${c.finished_at ? ' · finished ' + c.finished_at : ''}</span></div>
@@ -1180,13 +1183,16 @@ async function deleteChain(chainId) {
 async function reanalyzeChain(chainId, ev) {
     if (ev) ev.stopPropagation();
     const verify = chainVerify.checked;
+    const selfVerify = chainSelfVerify.checked;
     if (!confirm('Re-analyze：对每个已转写视频重跑 AI 分析'
         + (verify ? ' + 联网核实（额外搜索额度）' : '')
+        + (selfVerify ? ' + 证伪（额外调用）' : '')
         + '，用上方表单选的分析大脑。转写不动。继续？')) return;
     try {
         const r = await (await fetch(`/api/chain/${chainId}/reanalyze`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ verify, critique_level: chainCritique.value,
+            body: JSON.stringify({ verify, self_verify: selfVerify,
+                                   critique_level: chainCritique.value,
                                    analysis_preset: chainProvider.value }),
         })).json();
         if (!r.ok) { alert(r.error || 'Could not start re-analysis'); }

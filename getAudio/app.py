@@ -1463,7 +1463,8 @@ def run_chain(state):
                 save()
                 total_md = synthesize(episodes, state['author'],
                                       critique_level=state.get('critique_level', 'analytical'),
-                                      preset=state.get('analysis_preset'))
+                                      preset=state.get('analysis_preset'),
+                                      self_verify=state.get('self_verify', False))
                 with open(os.path.join(chain_dir, '总分析.md'),
                           'w', encoding='utf-8') as fh:
                     fh.write(total_md)
@@ -1551,7 +1552,8 @@ def _reanalyze_chain(state):
             save()
             total_md = synthesize(episodes, state['author'],
                                   critique_level=state.get('critique_level', 'analytical'),
-                                  preset=state.get('analysis_preset'))
+                                  preset=state.get('analysis_preset'),
+                                  self_verify=state.get('self_verify', False))
             with open(os.path.join(chain_dir, '总分析.md'),
                       'w', encoding='utf-8') as fh:
                 fh.write(total_md)
@@ -1591,6 +1593,7 @@ def api_chain_create():
         'prefer_subs': bool(data.get('prefer_subs', False)),
         'fallback_whisper': bool(data.get('fallback_whisper', False)),
         'verify': bool(data.get('verify', False)),
+        'self_verify': bool(data.get('self_verify', False)),
         'critique_level': (data.get('critique_level') or 'analytical'),
         'analysis_preset': (data.get('analysis_preset') or 'gemini'),
         'author': (data.get('author') or '').strip() or '该博主',
@@ -1670,6 +1673,7 @@ def api_chain_reanalyze(chain_id):
 
     body = request.get_json(silent=True) or {}
     state['verify'] = bool(body.get('verify', False))
+    state['self_verify'] = bool(body.get('self_verify', False))
     if body.get('critique_level'):
         state['critique_level'] = body['critique_level']
     if body.get('analysis_preset'):
