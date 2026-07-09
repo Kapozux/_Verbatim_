@@ -214,6 +214,38 @@ def _run_summary(full_text, q, use_qwen=False):
         return None
 
 
+def _maybe_sanitize(segments, audio_path):
+    """转写「证伪层」：清掉静音幻听、复读死循环、坏时间戳。
+
+    只处理 {timestamp,text} 形态（Gemini/Precise/阿里云）；Whisper 的
+    {start,end} 形态已在解码层用 condition_on_previous_text=False 等治理，跳过。
+    返回 (clean_segments, report_or_None)；report=None 表示没动过。
+    任何异常都吞掉、原样返回——证伪层绝不许拖垮保存。
+    """
+    if not segments or 'timestamp' not in segments[0]:
+        return segments, None
+    try:
+        from sanitize import (clean_transcript, detect_silence,
+                              _is_micro, _looks_filler, _core)
+    except Exception:
+        return segments, None
+    try:
+        # 先跑纯文字清洗（零成本，抓成片 filler / 复读 / 坏时间戳）
+        clean, report = clean_transcript(segments)
+        # 残留可疑：还剩不少「孤立语气词微段」→ 才值得回音频取静音轴深清一遍
+        residual = sum(1 for s in clean
+                       if _is_micro(s) and _looks_filler(_core(s['text'])))
+        if residual >= 8 and audio_path and os.path.isfile(audio_path):
+            silence = detect_silence(audio_path)
+            if silence:
+                clean, report = clean_transcript(segments, silence_intervals=silence)
+        changed = any(report.get(k) for k in
+                      ('removed', 'loops', 'bad_ts', 'silence_dropped'))
+        return (clean, report) if changed else (clean, None)
+    except Exception:
+        return segments, None
+
+
 def _save_results(task_id, original_filename, engine, audio_source_path,
                   segments, summary):
     """Persist transcription results to results/<task_id>/."""
@@ -226,6 +258,10 @@ def _save_results(task_id, original_filename, engine, audio_source_path,
 
     duration = probe_audio_duration_seconds(audio_dest)
 
+    # 证伪层：清洗前先留住原始稿，只有真删了东西才落 transcript_raw.json
+    raw_segments = segments
+    segments, san_report = _maybe_sanitize(segments, audio_source_path)
+
     meta = {
         'id': task_id,
         'filename': os.path.basename(original_filename or ''),
@@ -236,11 +272,17 @@ def _save_results(task_id, original_filename, engine, audio_source_path,
         'duration_seconds': round(duration, 2) if duration else None,
         'has_summary': bool(summary),
     }
+    if san_report:
+        meta['sanitized'] = san_report
     with open(os.path.join(task_dir, 'meta.json'), 'w', encoding='utf-8') as f:
         json.dump(meta, f, ensure_ascii=False, indent=2)
 
     with open(os.path.join(task_dir, 'transcript.json'), 'w', encoding='utf-8') as f:
         json.dump(segments, f, ensure_ascii=False, indent=2)
+
+    if san_report:  # 保留清洗前的原始稿，随时可回溯 / 对比
+        with open(os.path.join(task_dir, 'transcript_raw.json'), 'w', encoding='utf-8') as f:
+            json.dump(raw_segments, f, ensure_ascii=False, indent=2)
 
     if summary:
         with open(os.path.join(task_dir, 'summary.json'), 'w', encoding='utf-8') as f:

@@ -77,8 +77,14 @@ def _transcribe_faster(model, filepath, progress_callback=None):
     """faster-whisper 路径：流式产出 segment，按已处理时长报进度。"""
     segments_iter, info = model.transcribe(
         filepath,
-        language=WHISPER_LANGUAGE,  # None = 自动检测
-        vad_filter=True,            # 跳过静音，长音频显著提速
+        language=WHISPER_LANGUAGE,      # None = 自动检测
+        vad_filter=True,                # 跳过静音，长音频显著提速、也少幻听
+        # ↓ 反幻听 / 反复读（对着静音编「嗯嗯嗯」、卡进死循环复读整句的根因）：
+        condition_on_previous_text=False,  # 每段独立解码，不被前文污染 → 断掉自我喂养的循环
+        no_repeat_ngram_size=3,            # 禁止 3-gram 立刻重复 → 掐断复读
+        compression_ratio_threshold=2.4,   # 压缩率过高（成片重复）判为幻听丢弃
+        log_prob_threshold=-1.0,           # 置信度过低的段丢弃
+        no_speech_threshold=0.6,           # 判定为静音就不出字
     )
     duration = getattr(info, 'duration', None) or 0
 
@@ -118,6 +124,11 @@ def _transcribe_openai(model, filepath, progress_callback=None):
             language=WHISPER_LANGUAGE,
             verbose=False,
             word_timestamps=False,
+            # 与 faster 路径一致的反幻听 / 反复读设置
+            condition_on_previous_text=False,
+            compression_ratio_threshold=2.4,
+            logprob_threshold=-1.0,
+            no_speech_threshold=0.6,
         )
     finally:
         whisper_transcribe.tqdm.tqdm = original_tqdm
