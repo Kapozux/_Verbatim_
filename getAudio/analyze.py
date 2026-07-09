@@ -20,6 +20,7 @@ from config import (GEMINI_API_KEY, GEMINI_ANALYSIS_MODEL,
                     GEMINI_EXTRACT_MODEL, GEMINI_FALLBACK_MODELS,
                     DASHSCOPE_API_KEY, ALIYUN_COMPAT_BASE, resolve_analysis,
                     make_gemini_client)
+from harness import fanout
 
 _CALIBRATION_RULES = """【校准兜底 · 必守】
 - 今天是 {today}。内容可能涉及你知识截止之后的论文/模型/事件。**不认识 ≠ 不存在 ≠ 编造。**
@@ -116,6 +117,24 @@ PORTRAIT_PROMPT = """你会收到「{author}」{n} 期的**证据卡 + 修辞指
 
 _SYNTH_CHAR_LIMIT = 600_000
 _MAX_ATTEMPTS = 3
+
+# 期数超过这个就走 map-reduce：分批做中间简报再合成，
+# 而不是把几百期卡片硬塞一个 prompt（旧 _digest 会砍卡片、越多期砍越狠）。
+_BATCH_SIZE = 24
+_BRIEF_CONCURRENCY = 6
+
+# ---- map 阶段：把一批期压成紧凑的中间简报（便宜模型、保留代表性引文供溯源）----
+BRIEF_PROMPT = """你会收到「{author}」其中 {n} 期的**证据卡 + 修辞指标**。把这一批压成一份**紧凑的中间简报**（Markdown），供后续跨全部期综合用。**只提炼、不下最终结论、不评判整个人**。
+
+要求：
+- 按**反复出现的母题 / 立场 / 修辞手法**归拢，别按期逐条罗列。
+- 每个母题下保留 1~2 条**最具代表性的逐字引文 + [时间戳] + 期名**，供后续溯源。
+- 保留证据层标签（〔转写自证〕/〔他的主张〕/〔外部核实〕）。
+- 末尾一行汇总本批的 hype / hedge / tradeoff 计数。
+- 跟随卡片语言。
+
+证据卡与指标（JSON）：
+{digest}"""
 
 
 def _rules():
@@ -310,9 +329,44 @@ def _digest(episodes, budget):
     return s  # 尽力而为
 
 
+def _agg_metrics(episodes):
+    """跨期把 hype/hedge/tradeoff 加成**真实总数**（纯 Python，不靠模型估）。"""
+    hype = hedge = tech = trade = 0
+    for ep in episodes:
+        m = ep.get('metrics') or {}
+        hype += (m.get('hype') or {}).get('count', 0) or 0
+        hedge += (m.get('hedge') or {}).get('count', 0) or 0
+        td = m.get('tradeoff') or {}
+        tech += td.get('tech_count', 0) or 0
+        trade += td.get('with_tradeoff', 0) or 0
+    return {'hype': hype, 'hedge': hedge, 'tech': tech, 'tradeoff': trade}
+
+
+def _metrics_block(agg, n):
+    return (f"【跨 {n} 期真实计数 · Python 统计非模型估算】"
+            f"Hype {agg['hype']} 次 · Hedge {agg['hedge']} 次 · "
+            f"介绍技术 {agg['tech']} 个其中提代价 {agg['tradeoff']} 个。"
+            f"（修辞结论以此为准，别自己重估）")
+
+
+def _batch_brief(batch, author, provider, model):
+    """map 叶子：一批期的卡片 → 一份中间简报（失败返回 None）。"""
+    try:
+        return _llm(BRIEF_PROMPT.format(
+            author=author, n=len(batch),
+            digest=_digest(batch, _SYNTH_CHAR_LIMIT),
+        ), provider, model)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def synthesize(episodes, author='该博主', critique_level='analytical',
                impression_bias='', preset=None):
     """N 期证据卡 → 一份人物画像。critique_level: descriptive/analytical/sharp。
+
+    少量期：一次合成（老路）。期数 > _BATCH_SIZE 时走 map-reduce：
+    分批做中间简报（便宜模型、并发）→ 简报合成画像（贵模型），
+    避免几百期卡片硬塞一个 prompt 被砍。修辞指标用纯 Python 的真实总数。
 
     impression_bias：仅供校准回归测试用——在"综合印象"注入一条语气基线
     （如"中性 / 略带怀疑 / 略带欣赏"），看结论会不会跟着漂。默认空。
@@ -322,9 +376,32 @@ def synthesize(episodes, author='该博主', critique_level='analytical',
         raise RuntimeError('没有可综合的证据卡')
     level = critique_level if critique_level in _TONE else 'analytical'
     impression = f'（综合印象的语气基线：{impression_bias}）' if impression_bias else ''
-    provider, _, synth_model = resolve_analysis(preset)
+    provider, extract_model, synth_model = resolve_analysis(preset)
+    agg = _agg_metrics(episodes)
+
+    if len(episodes) <= _BATCH_SIZE:
+        # 少量期：老路，卡片直接进合成
+        digest = _digest(episodes, _SYNTH_CHAR_LIMIT)
+    else:
+        # map：分批做中间简报（便宜模型、并发）
+        batches = [episodes[i:i + _BATCH_SIZE]
+                   for i in range(0, len(episodes), _BATCH_SIZE)]
+        briefs = fanout(
+            batches,
+            lambda b: _batch_brief(b, author, provider, extract_model),
+            concurrency=_BRIEF_CONCURRENCY,
+        )
+        briefs = [b for b in briefs if b]
+        if briefs:
+            digest = '\n\n---\n\n'.join(
+                f'## 简报 {i + 1}/{len(briefs)}\n{b}' for i, b in enumerate(briefs))
+        else:
+            # 全批失败兜底：退回老路（尽力而为，绝不空手）
+            digest = _digest(episodes, _SYNTH_CHAR_LIMIT)
+
+    # reduce：真数字 + 简报（或卡片）→ 人物画像（贵模型）
     return _llm(PORTRAIT_PROMPT.format(
         author=author, n=len(episodes), rules=_rules(),
         level=level, tone=_TONE[level], impression=impression,
-        digest=_digest(episodes, _SYNTH_CHAR_LIMIT),
+        digest=_metrics_block(agg, len(episodes)) + '\n\n' + digest,
     ), provider, synth_model)
