@@ -48,7 +48,16 @@ _SETTING_ENV = {
     'gemini_key': 'GEMINI_API_KEY',
     'gemini_base_url': 'GEMINI_BASE_URL',
     'dashscope_key': 'DASHSCOPE_API_KEY',
+    # Models（非秘密，运行时读 env，保存即生效）
+    'whisper_model': 'WHISPER_MODEL_SIZE',
+    'gemini_transcribe_model': 'GEMINI_TRANSCRIBE_MODEL',
+    'gemini_analysis_model': 'GEMINI_ANALYSIS_MODEL',
+    'gemini_extract_model': 'GEMINI_EXTRACT_MODEL',
 }
+
+# 非秘密、可清空（空 = 回默认）的设置字段
+_PLAIN_FIELDS = ('gemini_base_url', 'whisper_model', 'gemini_transcribe_model',
+                 'gemini_analysis_model', 'gemini_extract_model')
 
 
 def _load_settings():
@@ -476,6 +485,13 @@ def run_transcription(task_id, filepath, engine, original_filename, q,
                     'type': 'progress', 'percent': 0,
                     'message': f'{engine} 失败（{str(e)[:60]}），按设置改用本地 Whisper 兜底...',
                 }))
+                # 换并发闸：放掉云引擎额度，改排 Whisper 的队（本地 CPU 只允许 2 路，
+                # 不然 12 路 whisper 同时烧 CPU）。finally 里统一释放当前 sem。
+                if sem is not None:
+                    sem.release()
+                sem = _engine_semaphores.get('whisper')
+                if sem is not None:
+                    sem.acquire()
                 segments, full_text = _whisper_transcribe()
                 summary_data = _run_summary(full_text, q)
                 _finish_ok(segments, summary_data, 'whisper')
@@ -583,15 +599,20 @@ def recover_unfinished_tasks():
                 task_id, 'failed', error='服务重启且源文件已丢失，请重新上传'
             )
 
-    # 孤儿上传文件清理（不属于任何已恢复任务的残留）
+    # 孤儿上传文件清理。只删真孤儿：taskdb 里查无此任务、或任务已 done
+    # （done 的音频已复制进 results/，upload 副本没用了）。
+    # failed 但音频还在的必须保留——Continue 靠它"直接重转、不用重下载"。
     cleaned = 0
     for name in os.listdir(config.UPLOAD_FOLDER):
-        if not any(name.startswith(tid) for tid in active_ids):
-            try:
-                os.remove(os.path.join(config.UPLOAD_FOLDER, name))
-                cleaned += 1
-            except OSError:
-                pass
+        tid = name.split('.', 1)[0]
+        row = taskdb.get(tid) if _is_valid_task_id(tid) else None
+        if row and row.get('status') != 'done':
+            continue                     # 未完成任务的音频：保留给 Continue
+        try:
+            os.remove(os.path.join(config.UPLOAD_FOLDER, name))
+            cleaned += 1
+        except OSError:
+            pass
 
     if recovered or cleaned:
         print(f"[recover] 找回未完成任务 {recovered} 个，清理孤儿上传文件 {cleaned} 个")
@@ -1028,11 +1049,46 @@ def _save_subtitle_task(task_id, target, segments, source):
         pass
 
 
-def recover_unfinished_chains():
-    """启动时把上次没跑完的链条标记为 failed（pipeline 暂不自动恢复）。
+def _engine_used(task_id):
+    """读任务落盘 meta 里的实际转写引擎（云失败落 whisper 时会与链条引擎不同）。"""
+    try:
+        with open(os.path.join(config.RESULTS_FOLDER, task_id, 'meta.json'),
+                  'r', encoding='utf-8') as f:
+            return json.load(f).get('engine') or ''
+    except Exception:
+        return ''
 
-    否则这些链条永远停在 downloading/transcribing 等非终态，前端会当成
-    “活跃链条”每 4 秒不停轮询，纯白耗电（关机前那次烧电就是这个）。
+
+def _sync_video_with_taskdb(v):
+    """让一个视频条目的状态对齐 taskdb 真实状态。返回是否有改动。
+
+    治"卡片假死"：任务级 recover 重转完成后，链条卡片仍冻在旧状态——
+    这里按 task_id 查真实结果回写。
+    """
+    tid = v.get('task_id')
+    if not tid:
+        return False
+    row = taskdb.get(tid)
+    if not row:
+        return False
+    st = row.get('status')
+    if st == 'done' and v.get('status') != 'done':
+        v['status'] = 'done'
+        v['engine_used'] = _engine_used(tid)      # 降级留痕（如落了 whisper）
+        return True
+    if st == 'failed' and v.get('status') not in ('done', 'failed'):
+        v['status'] = 'failed'
+        v['error'] = row.get('error') or ''
+        return True
+    if st in ('pending', 'running') and v.get('status') not in ('done', 'transcribing'):
+        v['status'] = 'transcribing'     # recover 把它重新入队了
+        return True
+    return False
+
+
+def recover_unfinished_chains():
+    """启动时收尾链条：非终态链标 failed（pipeline 暂不自动恢复），
+    并把所有链条的视频状态与 taskdb 真实状态对齐（修"卡片假死"）。
     """
     if not os.path.isdir(CHAINS_DIR):
         return
@@ -1045,18 +1101,28 @@ def recover_unfinished_chains():
                 state = json.load(f)
         except Exception:
             continue
-        if state.get('stage') in ('done', 'failed', 'cancelled'):
-            continue
-        state['stage'] = 'failed'
-        state['error'] = '服务重启，链条中断（pipeline 暂不自动恢复，请重新发起）'
+
+        changed = False
+        # 1) 视频状态对齐 taskdb（终态链也做——recover 的任务转完后要反映出来）
         for v in state.get('videos', []):
-            if v.get('status') not in ('done', 'failed'):
-                v['status'] = 'failed'
-        try:
-            with open(cpath, 'w', encoding='utf-8') as f:
-                json.dump(state, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
+            if _sync_video_with_taskdb(v):
+                changed = True
+
+        # 2) 非终态链收尾成 failed（防前端永远轮询）
+        if state.get('stage') not in ('done', 'failed', 'cancelled'):
+            state['stage'] = 'failed'
+            state['error'] = '服务重启，链条中断（点 Continue 续跑，已完成的会复用）'
+            for v in state.get('videos', []):
+                if v.get('status') not in ('done', 'failed', 'transcribing'):
+                    v['status'] = 'failed'
+            changed = True
+
+        if changed:
+            try:
+                with open(cpath, 'w', encoding='utf-8') as f:
+                    json.dump(state, f, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
 
 
 def _merged_raw_text(author, videos):
@@ -1277,6 +1343,8 @@ def run_chain(state):
                     v['status'] = row['status']
                     if row['status'] == 'failed':
                         v['error'] = row.get('error') or ''
+                    else:
+                        v['engine_used'] = _engine_used(v['task_id'])  # 降级留痕
                     pending.discard(v['task_id'])
             save()
 
@@ -1304,6 +1372,17 @@ def run_chain(state):
                 if not os.path.isfile(tpath):
                     return None
                 try:
+                    # Continue 省钱：这期的证据卡之前抽过就直接用缓存，不再花钱。
+                    # 校验 task_id：这期若被重转过（新 task），旧卡作废重抽。
+                    cpath2 = os.path.join(chain_dir, f"cards_{v['index'] + 1:03d}.json")
+                    if os.path.isfile(cpath2):
+                        try:
+                            with open(cpath2, 'r', encoding='utf-8') as fh:
+                                ep = json.load(fh)
+                            if ep.get('cards') and ep.get('task_id') == v['task_id']:
+                                return ep
+                        except Exception:
+                            pass
                     with open(tpath, 'r', encoding='utf-8') as fh:
                         segs = json.load(fh)
                     text = '\n'.join(
@@ -1318,6 +1397,9 @@ def run_chain(state):
                     with open(os.path.join(chain_dir, fname),
                               'w', encoding='utf-8') as fh:
                         fh.write(ep['markdown'])
+                    ep['task_id'] = v['task_id']       # 缓存键：重转过就作废
+                    with open(cpath2, 'w', encoding='utf-8') as fh:
+                        json.dump(ep, fh, ensure_ascii=False)
                     return ep
                 except Exception:  # noqa: BLE001  单期失败不拖垮整链
                     return None
@@ -1403,6 +1485,11 @@ def _reanalyze_chain(state):
                 with open(os.path.join(chain_dir, fname),
                           'w', encoding='utf-8') as fh:
                     fh.write(ep['markdown'])
+                # Re-analyze 是显式重做：无视旧缓存、写入新证据卡（供以后 Continue 复用）
+                ep['task_id'] = v['task_id']
+                with open(os.path.join(chain_dir, f"cards_{v['index'] + 1:03d}.json"),
+                          'w', encoding='utf-8') as fh:
+                    json.dump(ep, fh, ensure_ascii=False)
                 return ep
             except Exception:  # noqa: BLE001
                 return None
@@ -1501,6 +1588,21 @@ def api_chain_detail(chain_id):
         return jsonify({'error': 'Not found'}), 404
     with open(cpath, 'r', encoding='utf-8') as f:
         data = json.load(f)
+    # 打开详情时顺手校对：transcribing 的视频按 taskdb 真实状态回写并落盘
+    # （任务级 recover 转完后，链条循环已死不会更新——靠这里自愈）
+    healed = False
+    for v in data.get('videos', []):
+        if v.get('status') in ('transcribing', 'downloading') \
+                and _sync_video_with_taskdb(v):
+            healed = True
+    if healed:
+        with _chain_write_lock:
+            try:
+                with open(cpath, 'w', encoding='utf-8') as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
+
     # 给正在转写的视频挂上实时进度百分比（内存里的 _task_progress）
     for v in data.get('videos', []):
         tid = v.get('task_id')
@@ -1814,12 +1916,14 @@ def _mask_key(env_name):
 def api_settings_get():
     gset, ghint = _mask_key('GEMINI_API_KEY')
     dset, dhint = _mask_key('DASHSCOPE_API_KEY')
-    return jsonify({
+    out = {
         'gemini': {'set': gset, 'hint': ghint},
         'dashscope': {'set': dset, 'hint': dhint},
-        # base URL 不是秘密，直接回显供编辑
-        'gemini_base_url': (os.environ.get('GEMINI_BASE_URL') or '').strip(),
-    })
+    }
+    # 非秘密字段直接回显供编辑（模型名空 = 用默认）
+    for field in _PLAIN_FIELDS:
+        out[field] = (os.environ.get(_SETTING_ENV[field]) or '').strip()
+    return jsonify(out)
 
 
 @app.route('/api/settings', methods=['POST'])
@@ -1833,11 +1937,12 @@ def api_settings_save():
             v = (body.get(field) or '').strip()
             if v:
                 data[field] = v
-    # base URL：允许清空（传空字符串 = 删除代理，回到直连）
-    if 'gemini_base_url' in body:
-        data['gemini_base_url'] = (body.get('gemini_base_url') or '').strip()
-        if not data['gemini_base_url']:
-            os.environ.pop('GEMINI_BASE_URL', None)
+    # 非秘密字段（base URL / 各模型名）：允许清空（空 = 删 env，回默认）
+    for field in _PLAIN_FIELDS:
+        if field in body:
+            data[field] = (body.get(field) or '').strip()
+            if not data[field]:
+                os.environ.pop(_SETTING_ENV[field], None)
 
     try:
         with open(SETTINGS_PATH, 'w', encoding='utf-8') as f:

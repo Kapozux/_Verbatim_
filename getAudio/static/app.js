@@ -1007,9 +1007,20 @@ async function openChainDetail(id) {
     chainDetailId = id;
     mainView.classList.add('hidden');
     chainDetailView.classList.remove('hidden');
+    // 每次打开先收起分集网格：先看设置/模型/进度，要看每期再展开
+    chainDetailGrid.classList.add('hidden');
+    const tg = document.getElementById('chain-episodes-toggle');
+    if (tg) tg.classList.remove('open');
     window.scrollTo({ top: 0 });
     await refreshChainDetail();
 }
+
+// Episodes 折叠开关
+const episodesToggle = document.getElementById('chain-episodes-toggle');
+if (episodesToggle) episodesToggle.addEventListener('click', () => {
+    const open = chainDetailGrid.classList.toggle('hidden');
+    episodesToggle.classList.toggle('open', !open);
+});
 
 async function refreshChainDetail() {
     if (!chainDetailId) return;
@@ -1029,6 +1040,39 @@ async function refreshChainDetail() {
 
     const vids = c.videos || [];
     const chainTerminal = ['done', 'failed', 'cancelled'].includes(c.stage);
+
+    // ===== Info 面板：设置 / 模型（含降级留痕）/ 操作 =====
+    const onoff = b => b ? 'on' : 'off';
+    const fell = vids.filter(v => v.status === 'done' && v.engine_used
+        && v.engine_used !== c.engine).length;
+    const fellNote = fell
+        ? `<div class="ci-warn">⚠ ${fell} episode(s) fell back to a different engine
+            (cloud failed → actual engine recorded per episode)</div>` : '';
+    const err = c.error
+        ? `<div class="ci-warn">${String(c.error).slice(0, 180)}</div>` : '';
+    const actions = chainTerminal
+        ? `<button class="btn-primary ci-btn" onclick="continueChain('${c.id}')">Continue</button>
+           <button class="btn-secondary ci-btn" onclick="reanalyzeChain('${c.id}')">Re-analyze</button>
+           <span class="ci-hint">Continue = fill whatever is missing (reuses everything done).
+           Re-analyze = redo analysis only, with the Pipeline form's brain/level settings.</span>`
+        : `<button class="btn-secondary ci-btn" onclick="stopChain('${c.id}')">Stop</button>`;
+    document.getElementById('chain-detail-info').innerHTML = `
+        <div class="chain-info">
+            <div class="ci-row"><span class="ci-k">Source</span>
+                <span class="ci-v"><a href="${(c.url || '').replace(/"/g, '&quot;')}" target="_blank" rel="noopener">${(c.url || '').replace(/</g, '&lt;').slice(0, 80)}</a></span></div>
+            <div class="ci-row"><span class="ci-k">Settings</span>
+                <span class="ci-v">engine <b>${c.engine || '-'}</b> · analyze <b>${onoff(c.analyze)}</b>
+                · brain <b>${c.analysis_preset || 'gemini'}</b> · level <b>${c.critique_level || 'analytical'}</b>
+                · subs-first <b>${onoff(c.prefer_subs)}</b> · web-verify <b>${onoff(c.verify)}</b>
+                · whisper-fallback <b>${onoff(c.fallback_whisper)}</b></span></div>
+            <div class="ci-row"><span class="ci-k">Progress</span>
+                <span class="ci-v">${chainProgressText(c)}${c.finished_at ? ' · finished ' + c.finished_at : ''}</span></div>
+            ${fellNote}${err}
+            <div class="ci-actions">${actions}</div>
+        </div>`;
+
+    document.getElementById('chain-episodes-count').textContent = `(${vids.length})`;
+
     chainDetailGrid.innerHTML = vids.map((v, idx) => {
         const st = VIDEO_STATUS[v.status] || { label: v.status, cls: '' };
         const clickable = v.status === 'done' && v.task_id;
@@ -1043,9 +1087,12 @@ async function refreshChainDetail() {
             ? `<div class="vg-prog" style="--p:${pct}%"><span>${pct}%</span></div>` : '';
         const onclick = clickable
             ? ` onclick="openDetailView('${v.task_id}')" title="View transcript"` : '';
+        // 降级留痕：这期实际用的引擎和链条引擎不同（如 gemini 链落了 whisper）
+        const engBadge = (v.engine_used && v.engine_used !== c.engine)
+            ? `<span class="vg-eng" title="cloud engine failed; actually transcribed with ${v.engine_used}">${v.engine_used}</span>` : '';
         return `<div class="vg-card ${clickable ? 'vg-clickable' : ''}"${onclick}>
             <div class="vg-thumb-wrap">${thumb}${overlay}</div>
-            <div class="vg-badge ${st.cls}">${st.label}</div>
+            <div class="vg-badge ${st.cls}">${st.label}${engBadge}</div>
             <div class="vg-title" title="${(v.title || '').replace(/"/g, '&quot;')}">${v.title || ''}</div>
         </div>`;
     }).join('') || '<p class="history-empty">Resolving episode list…</p>';
@@ -1489,6 +1536,11 @@ async function openSettings() {
             ? `saved ${s.gemini.hint} · leave blank to keep` : 'paste key…';
         setDashKey.placeholder = s.dashscope.set
             ? `saved ${s.dashscope.hint} · leave blank to keep` : 'paste key…';
+        // Models（空 = 默认）
+        document.getElementById('set-whisper-model').value = s.whisper_model || '';
+        document.getElementById('set-gemini-transcribe').value = s.gemini_transcribe_model || '';
+        document.getElementById('set-gemini-analysis').value = s.gemini_analysis_model || '';
+        document.getElementById('set-gemini-extract').value = s.gemini_extract_model || '';
     } catch { /* 打开即可，拉取失败不阻塞 */ }
     document.getElementById('test-gemini-res').textContent = '';
     document.getElementById('test-dashscope-res').textContent = '';
@@ -1624,7 +1676,13 @@ document.getElementById('test-dashscope').addEventListener('click', () => {
 });
 
 document.getElementById('settings-save').addEventListener('click', async () => {
-    const body = { gemini_base_url: setGeminiBase.value.trim() };
+    const body = {
+        gemini_base_url: setGeminiBase.value.trim(),
+        whisper_model: document.getElementById('set-whisper-model').value.trim(),
+        gemini_transcribe_model: document.getElementById('set-gemini-transcribe').value.trim(),
+        gemini_analysis_model: document.getElementById('set-gemini-analysis').value.trim(),
+        gemini_extract_model: document.getElementById('set-gemini-extract').value.trim(),
+    };
     if (setGeminiKey.value.trim()) body.gemini_key = setGeminiKey.value.trim();
     if (setDashKey.value.trim()) body.dashscope_key = setDashKey.value.trim();
     settingsMsg.className = 'settings-msg';

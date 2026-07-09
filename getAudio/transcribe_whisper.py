@@ -8,42 +8,51 @@ Whisper transcription engine (local).
 Returns 与旧实现完全一致：list of {'start': float, 'end': float, 'text': str}。
 """
 
+import os
 import threading
 
 from config import WHISPER_MODEL_SIZE, WHISPER_DEVICE, WHISPER_LANGUAGE
 
-# Lazy singleton model
-_model = None
-_backend = None  # 'faster' | 'openai'
+# 按型号缓存 (model, backend)：Settings 里换档（如 small→large-v3）保存即生效，
+# 下一个任务用新型号，无需重启。
+_models = {}
 _model_lock = threading.Lock()
 
 
-def get_model():
-    """Load Whisper model (lazy, thread-safe singleton). 优先 faster-whisper。"""
-    global _model, _backend
-    if _model is None:
+def _current_size():
+    """运行时读 Whisper 型号（env 优先，Settings 保存写 env）。"""
+    return (os.environ.get('WHISPER_MODEL_SIZE') or WHISPER_MODEL_SIZE).strip()
+
+
+def _get_model():
+    """Load Whisper model (lazy, per-size cache, thread-safe). 优先 faster-whisper。"""
+    size = _current_size()
+    if size not in _models:
         with _model_lock:
-            if _model is None:
+            if size not in _models:
                 try:
                     from faster_whisper import WhisperModel
 
                     # CPU 上 int8 量化最快且精度损失可忽略
                     compute = 'int8' if WHISPER_DEVICE == 'cpu' else 'float16'
-                    _model = WhisperModel(
-                        WHISPER_MODEL_SIZE,
+                    _models[size] = (WhisperModel(
+                        size,
                         device=WHISPER_DEVICE,
                         compute_type=compute,
-                    )
-                    _backend = 'faster'
+                    ), 'faster')
                 except Exception:
                     # faster-whisper 不可用（未安装/模型下载失败等）→ 回退旧实现
                     import whisper
 
-                    _model = whisper.load_model(
-                        WHISPER_MODEL_SIZE, device=WHISPER_DEVICE
-                    )
-                    _backend = 'openai'
-    return _model
+                    _models[size] = (whisper.load_model(
+                        size, device=WHISPER_DEVICE
+                    ), 'openai')
+    return _models[size]
+
+
+def get_model():
+    """兼容旧调用方：只返回 model。"""
+    return _get_model()[0]
 
 
 def transcribe_audio(filepath, progress_callback=None):
@@ -57,9 +66,9 @@ def transcribe_audio(filepath, progress_callback=None):
     Returns:
         List of segment dicts with keys: start (float), end (float), text (str).
     """
-    model = get_model()
+    model, backend = _get_model()
 
-    if _backend == 'faster':
+    if backend == 'faster':
         return _transcribe_faster(model, filepath, progress_callback)
     return _transcribe_openai(model, filepath, progress_callback)
 

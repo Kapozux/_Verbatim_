@@ -276,14 +276,18 @@
             </div>
         </div>
 
-        <!-- ===== Chain Detail View (episode grid) ===== -->
+        <!-- ===== Chain Detail View (info panel + collapsible episode grid) ===== -->
         <div id="chain-detail-view" class="hidden">
             <div class="detail-top-bar">
                 <button id="chain-detail-back" class="btn-secondary">← Back</button>
                 <span id="chain-detail-title" class="detail-title"></span>
             </div>
             <div id="chain-detail-meta" class="detail-meta"></div>
-            <div id="chain-detail-grid" class="video-grid"></div>
+            <div id="chain-detail-info"></div>
+            <button id="chain-episodes-toggle" class="episodes-toggle" type="button">
+                Episodes <span id="chain-episodes-count"></span> ▸
+            </button>
+            <div id="chain-detail-grid" class="video-grid hidden"></div>
         </div>
 
         <!-- ===== Analysis Doc Reading View ===== -->
@@ -307,6 +311,7 @@
                 <div class="settings-nav-title">Settings</div>
                 <button class="settings-nav-item active" data-pane="gemini">Gemini</button>
                 <button class="settings-nav-item" data-pane="dashscope">DashScope</button>
+                <button class="settings-nav-item" data-pane="models">Models</button>
                 <button class="settings-nav-item" data-pane="storage">Storage</button>
                 <button class="settings-nav-item" data-pane="about">About</button>
             </nav>
@@ -359,6 +364,50 @@
                             <button type="button" id="test-dashscope" class="btn-secondary">Test connection</button>
                             <span id="test-dashscope-res" class="test-res"></span>
                         </div>
+                    </section>
+
+                    <!-- Models -->
+                    <section class="settings-pane" data-pane="models">
+                        <h3>Models</h3>
+                        <p class="settings-desc">
+                            Saved instantly — the next task picks them up, no restart. Leave a field
+                            blank to use the default.
+                        </p>
+                        <label class="settings-field">
+                            <span class="settings-label">Whisper model
+                                <span class="settings-opt">local transcription · bigger = better zh accuracy, slower first load</span>
+                            </span>
+                            <select id="set-whisper-model" class="search-input">
+                                <option value="">small (default)</option>
+                                <option value="tiny">tiny — fastest, rough</option>
+                                <option value="base">base</option>
+                                <option value="small">small</option>
+                                <option value="medium">medium</option>
+                                <option value="large-v3">large-v3 — best (needs ~4GB RAM, fine on 48GB)</option>
+                            </select>
+                        </label>
+                        <label class="settings-field">
+                            <span class="settings-label">Gemini · transcription model
+                                <span class="settings-opt">default gemini-2.5-flash</span>
+                            </span>
+                            <input type="text" id="set-gemini-transcribe" class="search-input"
+                                   placeholder="gemini-2.5-flash (default) · e.g. gemini-2.5-pro" autocomplete="off">
+                        </label>
+                        <label class="settings-field">
+                            <span class="settings-label">Gemini · analysis (synthesis) model
+                                <span class="settings-opt">default gemini-2.5-pro</span>
+                            </span>
+                            <input type="text" id="set-gemini-analysis" class="search-input"
+                                   placeholder="gemini-2.5-pro (default) · e.g. gemini-3.1-pro-preview" autocomplete="off">
+                        </label>
+                        <label class="settings-field">
+                            <span class="settings-label">Gemini · extraction model
+                                <span class="settings-opt">default gemini-2.5-flash · cheap mechanical step</span>
+                            </span>
+                            <input type="text" id="set-gemini-extract" class="search-input"
+                                   placeholder="gemini-2.5-flash (default)" autocomplete="off">
+                        </label>
+                        <p class="settings-opt">DeepSeek / Kimi / GLM / Qwen model names are per-pipeline presets (pick the brain in the Pipeline form).</p>
                     </section>
 
                     <!-- Storage -->

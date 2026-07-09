@@ -81,9 +81,18 @@ ANALYSIS_PRESETS = {
 
 
 def resolve_analysis(preset):
-    """预设名 → (provider, 抽取模型, 合成模型)。未知则回落 gemini。"""
-    return ANALYSIS_PRESETS.get(preset or ANALYSIS_PRESET_DEFAULT,
-                                ANALYSIS_PRESETS['gemini'])
+    """预设名 → (provider, 抽取模型, 合成模型)。未知则回落 gemini。
+
+    运行时读 env（Settings 保存即生效，不用重启）：gemini 预设的两档模型
+    可被 GEMINI_EXTRACT_MODEL / GEMINI_ANALYSIS_MODEL 覆盖。
+    """
+    p = ANALYSIS_PRESETS.get(preset or ANALYSIS_PRESET_DEFAULT,
+                             ANALYSIS_PRESETS['gemini'])
+    if p[0] == 'gemini':
+        return ('gemini',
+                os.environ.get('GEMINI_EXTRACT_MODEL') or p[1],
+                os.environ.get('GEMINI_ANALYSIS_MODEL') or p[2])
+    return p
 # 卡片元数据（标题/标签）生成用 Flash：快、便宜，质量足够
 GEMINI_ENRICH_MODEL = 'gemini-2.5-flash'
 GEMINI_INLINE_LIMIT = 19 * 1024 * 1024  # 19 MB, use File API above this

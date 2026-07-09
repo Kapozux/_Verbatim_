@@ -350,6 +350,37 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .vg-retry a { color: var(--coral); cursor: pointer; }
 .vg-retry a:hover { text-decoration: underline; }
 
+/* ===== 链条详情：info 面板 + Episodes 折叠 ===== */
+.chain-info {
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--r-lg);
+  padding: 18px 22px; margin-bottom: 16px; box-shadow: var(--e1);
+}
+.ci-row { display: flex; gap: 14px; margin: 5px 0; font-size: 13px; line-height: 1.6; }
+.ci-k { flex: none; width: 68px; color: var(--faint); font-size: 11.5px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .05em; padding-top: 2px; }
+.ci-v { color: var(--ink-soft); min-width: 0; overflow-wrap: anywhere; }
+.ci-v b { color: var(--ink); font-weight: 600; }
+.ci-v a { color: var(--coral); text-decoration: none; }
+.ci-v a:hover { text-decoration: underline; }
+.ci-warn { margin: 8px 0 0 82px; font-size: 12.5px; color: var(--coral-deep); }
+.ci-actions { display: flex; align-items: center; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+.ci-btn { padding: 8px 18px; }
+.ci-hint { font-size: 11.5px; color: var(--faint); line-height: 1.5; max-width: 480px; }
+
+.episodes-toggle {
+  display: inline-flex; align-items: center; gap: 6px; margin-bottom: 14px;
+  background: none; border: none; font-family: inherit; font-size: 13.5px;
+  font-weight: 600; color: var(--ink-soft); cursor: pointer; padding: 4px 0;
+}
+.episodes-toggle:hover { color: var(--coral); }
+.episodes-toggle.open { color: var(--ink); }
+
+.vg-eng {
+  margin-left: 7px; font-size: 9.5px; font-weight: 600; letter-spacing: .03em;
+  color: var(--coral-deep); background: var(--coral-soft);
+  padding: 2px 7px; border-radius: 999px; text-transform: none;
+}
+
 /* === Responsive === */
 @media (max-width: 640px) {
   .container { padding: 0 16px 48px; }

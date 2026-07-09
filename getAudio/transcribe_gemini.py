@@ -199,7 +199,7 @@ def _transcribe_single_file(client, filepath, progress_callback=None):
                 progress_callback(min(95, 30 + attempt * 10))
 
             response = client.models.generate_content(
-                model=GEMINI_MODEL,
+                model=os.environ.get('GEMINI_TRANSCRIBE_MODEL') or GEMINI_MODEL,
                 contents=content_parts,
             )
             text = response.text or ""
