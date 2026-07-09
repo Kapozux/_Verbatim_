@@ -25,11 +25,15 @@ from collections import Counter
 
 # —— 阈值（保守）——
 _MICRO_MAX = 4        # 「核心字数 <= 4」算微段（嗯/然後/我/对…）
+_SHORT_MAX = 12       # 「核心字数 <= 12」算短句（含 `我再拍一次` 这种 5~11 字的循环词）
 _FILLER_RUN_MIN = 6   # 连续微段成片 >= 6 且只在少数几个词里打转 → 整段丢
 _DUP_COLLAPSE_MIN = 2 # 连续「完全相同的短核心」>= 2 → 只留 1 条
 _LOOP_MIN_CORE = 12   # 长句（核心 >= 12 字）
 _LOOP_MIN_COUNT = 3   # 逐字重复 >= 3 次 → 只留首次
-_DISTINCT_IN_RUN = 2  # 成片里不同核心种类 <= 2 才判为幻听打转
+# 「短句循环」判定：一段连续短句里，不同核心种类占比极低 = 死循环打转
+_LOOP_RUN_MIN = 8         # 连续短句成片至少这么长才考虑
+_LOOP_DIVERSITY = 0.35    # 不同核心数 / 段数 <= 此值 → 判为循环
+_LOOP_DROP_ALL = 5        # 循环片里，某短句重复 >= 此次数 → 全删（含首条）
 
 # 常见语气词/口水词（仅在「成片重复」时才据此判假，单独出现一律保留）
 _FILLER_CHARS = set('嗯呃啊哦唔呐呗哈嘛呀么呢哎诶嗨欸')
@@ -116,23 +120,42 @@ def clean_transcript(segments, silence_intervals=None):
                 drop[i] = True
                 report['silence_dropped'] += 1
 
-    # —— 2) 成片幻听/打转：在「够长的连续微段」里，逐段判——
-    #    是纯语气词、或在片内重复出现 → 丢；单独出现的实义短句（如「那要評估」）留。
+    # —— 2) 成片幻听 / 短句死循环：在「够长的连续短句片」里逐段判 ——
+    #    片内多样性极低（翻来覆去就那几个短词）才动手：
+    #      · 纯语气词（嗯/啊…）             → 丢
+    #      · 高频重复（>= _LOOP_DROP_ALL 次）→ 全丢（含首条，`我再拍一次`×几百就是它）
+    #      · 中频重复（2~4 次）             → 只留首条
+    #    片内唯一出现的实义短句（如「好，青和」「那要評評」）一律保留。
     i = 0
     while i < n:
-        if not _is_micro(segs[i]):
+        if len(_core(segs[i]['text'])) > _SHORT_MAX:
             i += 1
             continue
         j = i
-        while j < n and _is_micro(segs[j]):
+        while j < n and len(_core(segs[j]['text'])) <= _SHORT_MAX:
             j += 1
         run = range(i, j)
-        if (j - i) >= _FILLER_RUN_MIN:
-            cnt = Counter(_core(segs[k]['text']) for k in run)
+        run_len = j - i
+        cnt = Counter(_core(segs[k]['text']) for k in run)
+        is_loop = (run_len >= _LOOP_RUN_MIN
+                   and len(cnt) / run_len <= _LOOP_DIVERSITY)
+        # 旧规则兜底：短小的纯微段片（长度 6~7、多样性没那么低）
+        is_micro_run = (run_len >= _FILLER_RUN_MIN
+                        and all(len(_core(segs[k]['text'])) <= _MICRO_MAX for k in run))
+        if is_loop or is_micro_run:
+            seen = set()
             fired = False
             for k in run:
                 c = _core(segs[k]['text'])
-                if not drop[k] and (_looks_filler(c) or cnt[c] >= 2):
+                drop_it = False
+                if _looks_filler(c):
+                    drop_it = True
+                elif cnt[c] >= _LOOP_DROP_ALL:
+                    drop_it = True
+                elif cnt[c] >= 2:
+                    drop_it = c in seen
+                    seen.add(c)
+                if drop_it and not drop[k]:
                     drop[k] = True
                     report['removed'] += 1
                     fired = True
