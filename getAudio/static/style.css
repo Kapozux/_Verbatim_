@@ -375,6 +375,20 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .episodes-toggle:hover { color: var(--coral); }
 .episodes-toggle.open { color: var(--ink); }
 
+/* 链条表单：折叠的高级选项（原生 <details>，无 JS） */
+.chain-advanced { margin-top: 10px; }
+.chain-advanced > summary {
+  cursor: pointer; list-style: none;
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 12.5px; font-weight: 600; color: var(--faint);
+  padding: 4px 2px; user-select: none;
+}
+.chain-advanced > summary::-webkit-details-marker { display: none; }
+.chain-advanced > summary::before { content: '▸'; font-size: 10px; }
+.chain-advanced[open] > summary::before { content: '▾'; }
+.chain-advanced > summary:hover { color: var(--coral); }
+.chain-advanced[open] > summary { color: var(--ink-soft); margin-bottom: 8px; }
+
 .vg-eng {
   margin-left: 7px; font-size: 9.5px; font-weight: 600; letter-spacing: .03em;
   color: var(--coral-deep); background: var(--coral-soft);

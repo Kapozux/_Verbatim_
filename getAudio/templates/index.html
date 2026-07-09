@@ -129,20 +129,14 @@
                     <div class="chain-form">
                         <input type="url" id="chain-url" class="search-input"
                                placeholder="https://www.youtube.com/@creator/videos  ·  or a single video">
+                        <!-- 主行：每次都要决定的（URL 在上；这里是 谁/用什么脑/要不要分析）-->
                         <div class="chain-form-row">
                             <input type="text" id="chain-author" class="search-input chain-small"
                                    placeholder="Author (optional)">
-                            <input type="number" id="chain-max" class="search-input chain-small"
-                                   min="1" max="300" placeholder="Max videos">
-                            <select id="chain-engine" class="search-input chain-small">
+                            <select id="chain-engine" class="search-input chain-small"
+                                    title="Transcription engine.">
                                 <option value="gemini">Gemini (recommended)</option>
                                 <option value="whisper">Whisper (local)</option>
-                            </select>
-                            <select id="chain-critique" class="search-input chain-small"
-                                    title="How sharp the persona portrait's judgment is. Evidence tagging is enforced at every level — only the tone changes.">
-                                <option value="descriptive">Descriptive</option>
-                                <option value="analytical" selected>Analytical</option>
-                                <option value="sharp">Sharp</option>
                             </select>
                             <select id="chain-provider" class="search-input chain-small"
                                     title="Which model does the analysis. Aliyun (DeepSeek/Kimi/GLM/Qwen) reuses your DashScope key and dodges the Gemini quota — but it moderates content, so use it only for non-sensitive creators.">
@@ -156,24 +150,38 @@
                                 <input type="checkbox" id="chain-analyze" checked>
                                 Analyze &amp; synthesize
                             </label>
-                            <label class="chain-check" title="If a video already has captions, use them instead of downloading + transcribing the audio (much faster, no API cost). Manual subs preferred; falls back to the video's auto-captions, then to audio.">
-                                <input type="checkbox" id="chain-prefer-subs">
-                                Prefer subtitles
-                            </label>
-                            <label class="chain-check" title="Let the analysis model verify papers, models, data, and mangled entity names with live Google Search before judging them. Fixes 'confidently calls real recent things fake' — but slower and uses search quota. Worth it for time-sensitive / technical content.">
-                                <input type="checkbox" id="chain-verify">
-                                Verify facts (web)
-                            </label>
-                            <label class="chain-check" title="If the cloud engine fails (e.g. quota), fall back to local Whisper for that video instead of leaving it failed. Off by default — otherwise it just fails and you re-run on the same engine (e.g. once your quota is back).">
-                                <input type="checkbox" id="chain-fallback-whisper">
-                                Whisper fallback
-                            </label>
-                            <label class="chain-check" title="After building the portrait, run a self-critique pass: pull out every evaluative claim, send a skeptic per claim to refute it against the evidence cards, then cut the unsupported ones and soften the overstated ones (with a 证伪留痕 appendix). Costs extra calls; on for high-stakes reads.">
-                                <input type="checkbox" id="chain-self-verify">
-                                Self-verify (证伪)
-                            </label>
                             <button id="chain-start" type="button" class="btn-primary chain-btn">Start</button>
                         </div>
+                        <!-- 折叠：默认设置 + 专家旋钮，多数人不动 -->
+                        <details class="chain-advanced">
+                            <summary>⚙ More options</summary>
+                            <div class="chain-form-row chain-adv-row">
+                                <input type="number" id="chain-max" class="search-input chain-small"
+                                       min="1" max="300" placeholder="Max videos">
+                                <select id="chain-critique" class="search-input chain-small"
+                                        title="How sharp the persona portrait's judgment is. Evidence tagging is enforced at every level — only the tone changes.">
+                                    <option value="descriptive">Descriptive</option>
+                                    <option value="analytical" selected>Analytical</option>
+                                    <option value="sharp">Sharp</option>
+                                </select>
+                                <label class="chain-check" title="If a video already has captions, use them instead of downloading + transcribing the audio (much faster, no API cost). Manual subs preferred; falls back to the video's auto-captions, then to audio.">
+                                    <input type="checkbox" id="chain-prefer-subs">
+                                    Prefer subtitles
+                                </label>
+                                <label class="chain-check" title="Let the analysis model verify papers, models, data, and mangled entity names with live Google Search before judging them. Fixes 'confidently calls real recent things fake' — but slower and uses search quota. Worth it for time-sensitive / technical content.">
+                                    <input type="checkbox" id="chain-verify">
+                                    Verify facts (web)
+                                </label>
+                                <label class="chain-check" title="If the cloud engine fails (e.g. quota), fall back to local Whisper for that video instead of leaving it failed. Off by default — otherwise it just fails and you re-run on the same engine (e.g. once your quota is back).">
+                                    <input type="checkbox" id="chain-fallback-whisper">
+                                    Whisper fallback
+                                </label>
+                                <label class="chain-check" title="After building the portrait, run a self-critique pass: pull out every evaluative claim, send a skeptic per claim to refute it against the evidence cards, then cut the unsupported ones and soften the overstated ones (with a 证伪留痕 appendix). Costs extra calls; on for high-stakes reads.">
+                                    <input type="checkbox" id="chain-self-verify">
+                                    Self-verify (证伪)
+                                </label>
+                            </div>
+                        </details>
                     </div>
                     <p class="chain-hint">YouTube tip: use <code>channel/videos</code>. Bilibili &amp; other
                        yt-dlp sites work too. <b>Prefer subtitles</b> skips download + transcription when a
