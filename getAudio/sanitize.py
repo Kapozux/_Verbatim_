@@ -86,15 +86,61 @@ def _in_silence(sec, silence_intervals):
     return False
 
 
-def clean_transcript(segments, silence_intervals=None):
+def _fmt_ts(v):
+    v = max(0, int(round(v)))
+    return f"{v // 3600:02d}:{v % 3600 // 60:02d}:{v % 60:02d}"
+
+
+def repair_timeline(segments, duration):
+    """重建单调时间轴（Precise 合并会把时间戳算错，飙到 21h、倒流）。
+
+    段基本按说话顺序排 → 越界(>音频时长) / 倒流的时间戳判坏，用左右最近的
+    「好锚点」线性插值填回。返回 (segments_new, n_repaired)。
+    duration 无效时原样返回，绝不动。正常稿(时间戳都好)是 no-op。
+    """
+    if not duration or duration <= 0 or not segments:
+        return segments, 0
+    lim = duration + 60  # 容一点边界误差
+    raw = [_ts_to_seconds(s.get('timestamp', '')) for s in segments]
+    n = len(segments)
+    good = [False] * n
+    last = -1
+    for i, v in enumerate(raw):
+        if v is not None and 0 <= v <= lim and v >= last - 2:
+            good[i] = True
+            last = v
+    gi = [i for i in range(n) if good[i]]
+    if len(gi) == n:
+        return segments, 0  # 时间戳都好，不动
+    out = []
+    for i, s in enumerate(segments):
+        if good[i]:
+            out.append(s)
+            continue
+        L = max((j for j in gi if j < i), default=None)
+        R = min((j for j in gi if j > i), default=None)
+        if L is not None and R is not None and R > L:
+            v = raw[L] + (raw[R] - raw[L]) * (i - L) / (R - L)
+        elif L is not None:
+            v = min(duration, raw[L] + 1)
+        elif R is not None:
+            v = max(0, raw[R] - 1)
+        else:
+            v = 0
+        out.append({**s, 'timestamp': _fmt_ts(v)})
+    return out, n - len(gi)
+
+
+def clean_transcript(segments, silence_intervals=None, duration=None):
     """清洗一份转写稿，返回 (clean_segments, report)。
 
     report = {'removed': int, 'filler_runs': int, 'loops': int,
-              'bad_ts': int, 'silence_dropped': int}
+              'bad_ts': int, 'silence_dropped': int, 'ts_repaired': int}
+    duration（音频秒数）给了就顺带重建单调时间轴，修 Precise 的坏时间戳。
     绝不原地改传入的 list。
     """
     report = {'removed': 0, 'filler_runs': 0, 'loops': 0,
-              'bad_ts': 0, 'silence_dropped': 0}
+              'bad_ts': 0, 'silence_dropped': 0, 'ts_repaired': 0}
 
     # —— 0) 逐段清文字 + 修时间戳 ——
     segs = []
@@ -194,6 +240,11 @@ def clean_transcript(segments, silence_intervals=None):
             report['loops'] += 1
 
     clean = [segs[i] for i in range(n) if not drop[i]]
+
+    # —— 5) 重建单调时间轴（修 Precise 合并的坏时间戳）——
+    if duration:
+        clean, report['ts_repaired'] = repair_timeline(clean, duration)
+
     return clean, report
 
 

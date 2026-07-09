@@ -214,8 +214,8 @@ def _run_summary(full_text, q, use_qwen=False):
         return None
 
 
-def _maybe_sanitize(segments, audio_path):
-    """转写「证伪层」：清掉静音幻听、复读死循环、坏时间戳。
+def _maybe_sanitize(segments, audio_path, duration=None):
+    """转写「证伪层」：清掉静音幻听、复读死循环、坏时间戳 + 重建单调时间轴。
 
     只处理 {timestamp,text} 形态（Gemini/Precise/阿里云）；Whisper 的
     {start,end} 形态已在解码层用 condition_on_previous_text=False 等治理，跳过。
@@ -230,17 +230,18 @@ def _maybe_sanitize(segments, audio_path):
     except Exception:
         return segments, None
     try:
-        # 先跑纯文字清洗（零成本，抓成片 filler / 复读 / 坏时间戳）
-        clean, report = clean_transcript(segments)
+        # 先跑纯文字清洗 + 时间轴重建（零成本，抓成片 filler / 复读 / 坏时间戳 / Precise 乱时间戳）
+        clean, report = clean_transcript(segments, duration=duration)
         # 残留可疑：还剩不少「孤立语气词微段」→ 才值得回音频取静音轴深清一遍
         residual = sum(1 for s in clean
                        if _is_micro(s) and _looks_filler(_core(s['text'])))
         if residual >= 8 and audio_path and os.path.isfile(audio_path):
             silence = detect_silence(audio_path)
             if silence:
-                clean, report = clean_transcript(segments, silence_intervals=silence)
+                clean, report = clean_transcript(
+                    segments, silence_intervals=silence, duration=duration)
         changed = any(report.get(k) for k in
-                      ('removed', 'loops', 'bad_ts', 'silence_dropped'))
+                      ('removed', 'loops', 'bad_ts', 'silence_dropped', 'ts_repaired'))
         return (clean, report) if changed else (clean, None)
     except Exception:
         return segments, None
@@ -260,7 +261,7 @@ def _save_results(task_id, original_filename, engine, audio_source_path,
 
     # 证伪层：清洗前先留住原始稿，只有真删了东西才落 transcript_raw.json
     raw_segments = segments
-    segments, san_report = _maybe_sanitize(segments, audio_source_path)
+    segments, san_report = _maybe_sanitize(segments, audio_source_path, duration)
 
     meta = {
         'id': task_id,
