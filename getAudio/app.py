@@ -241,7 +241,8 @@ def _maybe_sanitize(segments, audio_path, duration=None):
                 clean, report = clean_transcript(
                     segments, silence_intervals=silence, duration=duration)
         changed = any(report.get(k) for k in
-                      ('removed', 'loops', 'bad_ts', 'silence_dropped', 'ts_repaired'))
+                      ('removed', 'loops', 'bad_ts', 'silence_dropped',
+                       'ts_repaired', 'intra_loops'))
         return (clean, report) if changed else (clean, None)
     except Exception:
         return segments, None

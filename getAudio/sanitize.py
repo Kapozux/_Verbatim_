@@ -59,9 +59,18 @@ def _looks_filler(core):
     return all(ch in _FILLER_CHARS for ch in core)
 
 
+# 段内单字死循环：同一字符连打 >= 6 次（Gemini 解码卡死，如「他」×2199）
+_CHAR_LOOP = re.compile(r'(.)\1{5,}')
+# 段内短语死循环：同一 2~8 字短语连续重复 >= 4 次（「我再拍一次我再拍一次…」在一段里）
+_PHRASE_LOOP = re.compile(r'(.{2,8}?)\1{3,}')
+
+
 def _clean_text(text):
-    """剥掉文字里漏出的畸形时间戳残片；首尾清一下。"""
-    return _BROKEN_TS_IN_TEXT.sub('', text or '').strip()
+    """剥掉畸形时间戳残片 + 折叠段内死循环（单字连打 / 短语复读）；首尾清一下。"""
+    text = _BROKEN_TS_IN_TEXT.sub('', text or '')
+    text = _CHAR_LOOP.sub(lambda m: m.group(1) * 2, text)      # 6+ 连打 → 留 2
+    text = _PHRASE_LOOP.sub(lambda m: m.group(1) * 2, text)    # 短语复读 → 留 2
+    return text.strip()
 
 
 def _ts_to_seconds(ts):
@@ -140,12 +149,16 @@ def clean_transcript(segments, silence_intervals=None, duration=None):
     绝不原地改传入的 list。
     """
     report = {'removed': 0, 'filler_runs': 0, 'loops': 0,
-              'bad_ts': 0, 'silence_dropped': 0, 'ts_repaired': 0}
+              'bad_ts': 0, 'silence_dropped': 0, 'ts_repaired': 0,
+              'intra_loops': 0}
 
-    # —— 0) 逐段清文字 + 修时间戳 ——
+    # —— 0) 逐段清文字（含段内死循环折叠）+ 修时间戳 ——
     segs = []
     for s in segments:
-        text = _clean_text(s.get('text', ''))
+        raw = s.get('text', '')
+        text = _clean_text(raw)
+        if len(raw) - len(text) >= 40:  # 一段里折掉了一大片 → 记一次段内死循环
+            report['intra_loops'] += 1
         if not text:
             report['removed'] += 1
             continue
