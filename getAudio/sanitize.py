@@ -101,26 +101,22 @@ def _fmt_ts(v):
 
 
 def repair_timeline(segments, duration):
-    """重建单调时间轴（Precise 合并会把时间戳算错，飙到 21h、倒流）。
+    """只修「无法解析 / 越界」的时间戳（负数、> 音频时长，如飙到 21h 的）。
 
-    段基本按说话顺序排 → 越界(>音频时长) / 倒流的时间戳判坏，用左右最近的
-    「好锚点」线性插值填回。返回 (segments_new, n_repaired)。
-    duration 无效时原样返回，绝不动。正常稿(时间戳都好)是 no-op。
+    ⚠ 只碰确凿非法的。**绝不因为「比前一段小」就判坏**——文件里段的排列
+    顺序不一定等于时间顺序，那样会把正确的时间戳误杀（曾把 02:06 的英文
+    段一路夹到 02:50）。非法的用左右最近「合法锚点」按位置插值填回。
+    返回 (segments_new, n_repaired)。时间戳都合法时是 no-op。
     """
     if not duration or duration <= 0 or not segments:
         return segments, 0
     lim = duration + 60  # 容一点边界误差
     raw = [_ts_to_seconds(s.get('timestamp', '')) for s in segments]
     n = len(segments)
-    good = [False] * n
-    last = -1
-    for i, v in enumerate(raw):
-        if v is not None and 0 <= v <= lim and v >= last - 2:
-            good[i] = True
-            last = v
+    good = [v is not None and 0 <= v <= lim for v in raw]  # 只看合法性，不看单调
     gi = [i for i in range(n) if good[i]]
-    if len(gi) == n:
-        return segments, 0  # 时间戳都好，不动
+    if len(gi) == n or not gi:
+        return segments, 0  # 都合法（或全非法无从插值）→ 不动
     out = []
     for i, s in enumerate(segments):
         if good[i]:
@@ -128,12 +124,12 @@ def repair_timeline(segments, duration):
             continue
         L = max((j for j in gi if j < i), default=None)
         R = min((j for j in gi if j > i), default=None)
-        if L is not None and R is not None and R > L:
+        if L is not None and R is not None and raw[R] >= raw[L]:
             v = raw[L] + (raw[R] - raw[L]) * (i - L) / (R - L)
         elif L is not None:
-            v = min(duration, raw[L] + 1)
+            v = raw[L]
         elif R is not None:
-            v = max(0, raw[R] - 1)
+            v = raw[R]
         else:
             v = 0
         out.append({**s, 'timestamp': _fmt_ts(v)})
