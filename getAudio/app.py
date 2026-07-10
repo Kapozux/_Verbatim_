@@ -1188,6 +1188,49 @@ def recover_unfinished_chains():
                 pass
 
 
+def _review_episode_transcript(task_id, preset=None):
+    """白嫖分析流程：这一集分析时顺手给它的转写做一次模型体检（模型标、代码删）。
+
+    清洗后回写 transcript.json（原始留 transcript_raw.json），落一个 .model_reviewed
+    标记避免 Continue/Re-analyze 重复体检。用分析同一个 provider（不新增隐私暴露）。
+    返回清洗后的 segments；失败/已体检过/非 {timestamp} 形态 → 返回现有 segments。
+    """
+    d = os.path.join(config.RESULTS_FOLDER, task_id)
+    tpath = os.path.join(d, 'transcript.json')
+    try:
+        with open(tpath, 'r', encoding='utf-8') as f:
+            segs = json.load(f)
+    except Exception:
+        return None
+    marker = os.path.join(d, '.model_reviewed')
+    if os.path.exists(marker) or not segs or 'timestamp' not in (segs[0] or {}):
+        return segs
+    try:
+        from analyze import review_transcript
+        drop = review_transcript(segs, preset=preset)
+    except Exception:  # noqa: BLE001
+        drop = set()
+    try:
+        open(marker, 'w').close()   # 标记体检过（哪怕没删），避免重复花钱
+    except OSError:
+        pass
+    if drop:
+        rawp = os.path.join(d, 'transcript_raw.json')
+        if not os.path.exists(rawp):
+            try:
+                with open(rawp, 'w', encoding='utf-8') as f:
+                    json.dump(segs, f, ensure_ascii=False, indent=2)
+            except OSError:
+                pass
+        segs = [s for i, s in enumerate(segs) if i not in drop]
+        try:
+            with open(tpath, 'w', encoding='utf-8') as f:
+                json.dump(segs, f, ensure_ascii=False, indent=2)
+        except OSError:
+            pass
+    return segs
+
+
 def _merged_raw_text(author, videos):
     """把所有转写成功的视频拼成一份纯文本合集（无 AI 分析）。空则返回 ''。"""
     parts = []
@@ -1446,8 +1489,11 @@ def run_chain(state):
                                 return ep
                         except Exception:
                             pass
-                    with open(tpath, 'r', encoding='utf-8') as fh:
-                        segs = json.load(fh)
+                    # 白嫖：分析读转写时顺手做一次模型体检（模型标、代码删）
+                    segs = _review_episode_transcript(
+                        v['task_id'], preset=state.get('analysis_preset'))
+                    if not segs:
+                        return None
                     text = '\n'.join(
                         f"[{s.get('timestamp', '')}] {s.get('text', '')}"
                         for s in segs
@@ -1537,8 +1583,11 @@ def _reanalyze_chain(state):
             if not os.path.isfile(tpath):
                 return None
             try:
-                with open(tpath, 'r', encoding='utf-8') as fh:
-                    segs = json.load(fh)
+                # 白嫖：分析读转写时顺手做一次模型体检（模型标、代码删）
+                segs = _review_episode_transcript(
+                    v['task_id'], preset=state.get('analysis_preset'))
+                if not segs:
+                    return None
                 text = '\n'.join(
                     f"[{s.get('timestamp', '')}] {s.get('text', '')}" for s in segs)
                 with _chain_analysis_sem:
