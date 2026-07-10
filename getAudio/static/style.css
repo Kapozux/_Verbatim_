@@ -389,6 +389,16 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .chain-advanced > summary:hover { color: var(--coral); }
 .chain-advanced[open] > summary { color: var(--ink-soft); margin-bottom: 8px; }
 
+/* 镜头按钮（换个角度看博主）*/
+.lens-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.lens-btn {
+  font-family: inherit; font-size: 12.5px; font-weight: 600;
+  color: var(--ink-soft); background: var(--coral-soft);
+  border: 1px solid var(--line); border-radius: 999px;
+  padding: 5px 12px; cursor: pointer; transition: all .12s;
+}
+.lens-btn:hover { color: #fff; background: var(--coral); border-color: var(--coral); }
+
 .vg-eng {
   margin-left: 7px; font-size: 9.5px; font-weight: 600; letter-spacing: .03em;
   color: var(--coral-deep); background: var(--coral-soft);

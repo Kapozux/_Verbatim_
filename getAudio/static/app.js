@@ -1058,6 +1058,16 @@ async function refreshChainDetail() {
            <span class="ci-hint">Continue = fill whatever is missing (reuses everything done).
            Re-analyze = redo analysis only, with the Pipeline form's brain/level settings.</span>`
         : `<button class="btn-secondary ci-btn" onclick="stopChain('${c.id}')">Stop</button>`;
+    // 镜头：拿现成证据卡换个角度看这个博主（分析完才有卡）
+    const LENSES = [['roast', '🔥 锐评'], ['craft', '✍️ 写作拆解'],
+        ['fun', '😂 看点'], ['quotes', '💬 金句'], ['worldview', '🗺 世界观']];
+    const lensRow = (chainTerminal && c.analyze !== false)
+        ? `<div class="ci-row"><span class="ci-k">换个角度</span>
+             <span class="ci-v lens-row">`
+          + LENSES.map(([k, label]) =>
+              `<button class="lens-btn" onclick="runLens('${c.id}','${k}')">${label}</button>`).join('')
+          + `<span class="ci-hint">同一批证据卡、不同角度，几乎不额外花钱</span></span></div>`
+        : '';
     document.getElementById('chain-detail-info').innerHTML = `
         <div class="chain-info">
             <div class="ci-row"><span class="ci-k">Source</span>
@@ -1070,6 +1080,7 @@ async function refreshChainDetail() {
                 · whisper-fallback <b>${onoff(c.fallback_whisper)}</b></span></div>
             <div class="ci-row"><span class="ci-k">Progress</span>
                 <span class="ci-v">${chainProgressText(c)}${c.finished_at ? ' · finished ' + c.finished_at : ''}</span></div>
+            ${lensRow}
             ${fellNote}${err}
             <div class="ci-actions">${actions}</div>
         </div>`;
@@ -1320,6 +1331,31 @@ function closeDocView() {
     mainView.classList.remove('hidden');
     docContent.innerHTML = '';
     window.scrollTo({ top: 0 });
+}
+
+// 换个角度看博主：拿现成证据卡跑一个镜头 → 后台生成 → 轮询 → 用 openDocView 展示
+async function runLens(chainId, lens) {
+    const open = () => openDocView(chainId, encodeURIComponent(`镜头_${lens}.md`));
+    showToast('生成中…（同一批卡换角度，稍等）');
+    try {
+        const r = await (await fetch(`/api/chain/${chainId}/lens`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ lens }),
+        })).json();
+        if (r.error) { showToast(r.error); return; }
+        if (r.ready) { open(); return; }
+        let n = 40;   // 最多轮询 ~2 分钟（大链条 map-reduce 要点时间）
+        const poll = async () => {
+            if (n-- <= 0) { showToast('还在生成，稍后在文档列表里看'); return; }
+            try {
+                const g = await (await fetch(`/api/chain/${chainId}/lens/${lens}`)).json();
+                if (g.ready) { open(); return; }
+                if (g.error) { showToast('生成失败：' + g.error); return; }
+            } catch { /* 抖动忽略，继续轮 */ }
+            setTimeout(poll, 3000);
+        };
+        setTimeout(poll, 3000);
+    } catch { showToast('生成失败'); }
 }
 
 if (docBackBtn) docBackBtn.addEventListener('click', closeDocView);

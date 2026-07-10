@@ -1753,6 +1753,81 @@ def api_chain_reanalyze(chain_id):
     return jsonify({'ok': True})
 
 
+def _load_chain_cards(chain_id):
+    """从链条目录读回所有证据卡 → episodes 列表（镜头/重合成共用）。"""
+    import glob
+    eps = []
+    for f in sorted(glob.glob(os.path.join(_chain_dir(chain_id), 'cards_*.json'))):
+        try:
+            with open(f, 'r', encoding='utf-8') as fh:
+                data = json.load(fh)
+            if data.get('cards'):
+                eps.append(data)
+        except Exception:  # noqa: BLE001
+            pass
+    return eps
+
+
+_lens_jobs = {}  # (chain_id, lens) -> 'running' | 'done' | 'error:...'
+
+
+@app.route('/api/chain/<chain_id>/lens', methods=['POST'])
+def api_chain_lens(chain_id):
+    """换个角度看这个博主：拿现成证据卡跑一个镜头（roast/craft/fun/...）。
+    后台生成 → 存 镜头_<lens>.md；前端轮询 GET 取。"""
+    if not _CHAIN_ID_RE.match(chain_id or ''):
+        return jsonify({'error': 'Invalid chain id'}), 400
+    from analyze import LENSES
+    lens = (request.get_json(silent=True) or {}).get('lens')
+    if lens not in LENSES:
+        return jsonify({'error': '未知镜头'}), 400
+    cpath = os.path.join(_chain_dir(chain_id), 'chain.json')
+    if not os.path.isfile(cpath):
+        return jsonify({'error': 'Not found'}), 404
+    fpath = os.path.join(_chain_dir(chain_id), f'镜头_{lens}.md')
+    if os.path.isfile(fpath):   # 已生成过，直接给
+        with open(fpath, 'r', encoding='utf-8') as f:
+            return jsonify({'ok': True, 'ready': True, 'markdown': f.read()})
+    key = (chain_id, lens)
+    if _lens_jobs.get(key) == 'running':
+        return jsonify({'ok': True, 'ready': False, 'status': 'running'})
+    with open(cpath, 'r', encoding='utf-8') as f:
+        state = json.load(f)
+    eps = _load_chain_cards(chain_id)
+    if not eps:
+        return jsonify({'error': '这条链还没有证据卡，先跑一次分析'}), 400
+
+    def _run():
+        try:
+            from analyze import render_lens
+            md = render_lens(eps, lens, author=state.get('author', '该博主'),
+                             preset=state.get('analysis_preset'))
+            with open(fpath, 'w', encoding='utf-8') as fh:
+                fh.write(md or '')
+            _lens_jobs[key] = 'done'
+        except Exception as e:  # noqa: BLE001
+            _lens_jobs[key] = f'error:{e}'
+
+    _lens_jobs[key] = 'running'
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({'ok': True, 'ready': False, 'status': 'running'})
+
+
+@app.route('/api/chain/<chain_id>/lens/<lens>')
+def api_chain_lens_get(chain_id, lens):
+    """轮询取镜头结果。"""
+    if not _CHAIN_ID_RE.match(chain_id or ''):
+        return jsonify({'error': 'Invalid chain id'}), 400
+    fpath = os.path.join(_chain_dir(chain_id), f'镜头_{lens}.md')
+    if os.path.isfile(fpath):
+        with open(fpath, 'r', encoding='utf-8') as f:
+            return jsonify({'ready': True, 'markdown': f.read()})
+    st = _lens_jobs.get((chain_id, lens), '')
+    if st.startswith('error:'):
+        return jsonify({'ready': False, 'error': st[6:]})
+    return jsonify({'ready': False, 'status': st or 'idle'})
+
+
 @app.route('/api/chain/<chain_id>/stop', methods=['POST'])
 def api_chain_stop(chain_id):
     """请求停止一条运行中的链条（协作式）：已完成的转写/分析保留，不再继续推进。"""

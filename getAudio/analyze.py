@@ -473,19 +473,33 @@ def _verify_portrait(portrait, digest, author, provider, extract_model, synth_mo
     return revised or portrait
 
 
+def _build_digest(episodes, author, provider, extract_model):
+    """把 N 期证据卡压成合成层的输入：少量期直接进卡片；多期走 map-reduce
+    分批简报，避免几百期硬塞一个 prompt 被砍。合成和各镜头共用。"""
+    if len(episodes) <= _BATCH_SIZE:
+        return _digest(episodes, _SYNTH_CHAR_LIMIT)
+    batches = [episodes[i:i + _BATCH_SIZE]
+               for i in range(0, len(episodes), _BATCH_SIZE)]
+    briefs = fanout(
+        batches,
+        lambda b: _batch_brief(b, author, provider, extract_model),
+        concurrency=_BRIEF_CONCURRENCY,
+    )
+    briefs = [b for b in briefs if b]
+    if briefs:
+        return '\n\n---\n\n'.join(
+            f'## 简报 {i + 1}/{len(briefs)}\n{b}' for i, b in enumerate(briefs))
+    return _digest(episodes, _SYNTH_CHAR_LIMIT)  # 全批失败兜底
+
+
 def synthesize(episodes, author='该博主', critique_level='analytical',
                impression_bias='', preset=None, self_verify=False):
     """N 期证据卡 → 一份人物画像。critique_level: descriptive/analytical/sharp。
 
-    少量期：一次合成（老路）。期数 > _BATCH_SIZE 时走 map-reduce：
-    分批做中间简报（便宜模型、并发）→ 简报合成画像（贵模型），
-    避免几百期卡片硬塞一个 prompt 被砍。修辞指标用纯 Python 的真实总数。
-
     self_verify=True：合成后再跑一轮证伪——抽出每条论断、逐条 skeptic 拿证据反驳，
     证据撑不住的删、夸大的改软，末尾留痕。
 
-    impression_bias：仅供校准回归测试用——在"综合印象"注入一条语气基线
-    （如"中性 / 略带怀疑 / 略带欣赏"），看结论会不会跟着漂。默认空。
+    impression_bias：仅供校准回归测试用——注入一条语气基线看结论会不会跟着漂。
     """
     episodes = [e for e in episodes if e and e.get('cards') is not None]
     if not episodes:
@@ -494,28 +508,8 @@ def synthesize(episodes, author='该博主', critique_level='analytical',
     impression = f'（综合印象的语气基线：{impression_bias}）' if impression_bias else ''
     provider, extract_model, synth_model = resolve_analysis(preset)
     agg = _agg_metrics(episodes)
+    digest = _build_digest(episodes, author, provider, extract_model)
 
-    if len(episodes) <= _BATCH_SIZE:
-        # 少量期：老路，卡片直接进合成
-        digest = _digest(episodes, _SYNTH_CHAR_LIMIT)
-    else:
-        # map：分批做中间简报（便宜模型、并发）
-        batches = [episodes[i:i + _BATCH_SIZE]
-                   for i in range(0, len(episodes), _BATCH_SIZE)]
-        briefs = fanout(
-            batches,
-            lambda b: _batch_brief(b, author, provider, extract_model),
-            concurrency=_BRIEF_CONCURRENCY,
-        )
-        briefs = [b for b in briefs if b]
-        if briefs:
-            digest = '\n\n---\n\n'.join(
-                f'## 简报 {i + 1}/{len(briefs)}\n{b}' for i, b in enumerate(briefs))
-        else:
-            # 全批失败兜底：退回老路（尽力而为，绝不空手）
-            digest = _digest(episodes, _SYNTH_CHAR_LIMIT)
-
-    # reduce：真数字 + 简报（或卡片）→ 人物画像（贵模型）
     portrait = _llm(PORTRAIT_PROMPT.format(
         author=author, n=len(episodes), rules=_rules(),
         level=level, tone=_TONE[level], impression=impression,
@@ -526,3 +520,98 @@ def synthesize(episodes, author='该博主', critique_level='analytical',
         portrait = _verify_portrait(
             portrait, digest, author, provider, extract_model, synth_model)
     return portrait
+
+
+# ==== 镜头（lenses）：同一批证据卡 + 不同的合成 prompt，边际成本≈0 ====
+_LENS_GROUND = """铁律（违反就是编造真人 = 造谣，不是解读）：
+- 每条判断/吐槽/结论**必须挂得回某张卡的原话**（给〔证据层〕和「原话」），点不回引文的**一律不许写**。
+- 他的主张挂〔他的主张〕，别洗成客观事实；跨语境不一致如实说"不一致"，别升级成诛心。
+- 只评他的【内容/主张/修辞/自相矛盾】，不捏造私德、隐私、人身。"""
+
+LENSES = {
+    'roast': """你是吐槽大会的毒舌选手。下面是「{author}」{n} 期视频的证据卡。写一段辛辣的 roast，像脱口秀 roast 那样损、刻薄、可以粗俗——**但最狠的弹药永远是"他自己打自己脸"**（跨期自相矛盾、又当又立）。
+
+""" + _LENS_GROUND + """
+
+结构：
+## 罪状清单
+（每条：一句损的话 —— 挂〔证据层〕「他的原话」，矛盾就并列两句原话）
+## 总结陈词
+（一段，收个狠的）
+
+证据卡（JSON）：
+{digest}""",
+
+    'craft': """你是内容创作教练。下面是「{author}」{n} 期视频的证据卡。拆解**他是怎么做内容/写稿子的**，给想偷师、想模仿他的人一份可操作的说明书。
+
+""" + _LENS_GROUND + """
+
+结构（每条都挂原话举例）：
+## 开头怎么钩人
+## 常用结构 / 套路
+## 修辞与话术手法（用 hype/hedge/tradeoff 分布佐证）
+## 节奏与信息密度
+## 可复制的招 vs 学不来的
+证据卡（JSON）：
+{digest}""",
+
+    'fun': """你是选题/追更判断官。下面是「{author}」{n} 期视频的证据卡。回答一个问题：**这个人有意思吗？看点在哪？**
+
+""" + _LENS_GROUND + """
+
+结构：
+## 看点在哪（幽默/反转/信息量/人设魅力，挂原话）
+## 什么样的人会爱看 / 会划走
+## 最出彩 vs 最无聊的部分
+## 一句话结论：值不值得追
+证据卡（JSON）：
+{digest}""",
+
+    'quotes': """下面是「{author}」{n} 期视频的证据卡。挑出他**最有代表性 / 最出圈 / 最能体现其风格**的原话，做一份金句集。
+
+铁律：**只用卡片里的逐字原话**，不许改写、不许编。每条标出处集名（若有）。
+
+结构：
+## 金句集
+- 按主题归类，每条：「逐字原话」—— 一句话点评它为什么有代表性
+证据卡（JSON）：
+{digest}""",
+
+    'worldview': """下面是「{author}」{n} 期视频的证据卡。把他对各类事物的立场整理成一张**世界观地图**。
+
+""" + _LENS_GROUND + """
+
+结构：
+## 世界观地图
+| 议题 | 他的立场 | 证据〔层〕「原话」 |
+（每行一个议题；跨期不一致的，在立场里如实写"不一致：A / B"并各挂原话）
+## 底层母题
+（这些立场背后反复出现的 1~3 个底层假设）
+证据卡（JSON）：
+{digest}""",
+}
+
+LENS_META = {
+    'roast': ('🔥 锐评 / 吐槽', '拿证据损他，最狠的是他自己打脸的地方'),
+    'craft': ('✍️ 写作 / 内容拆解', '他怎么做内容，给想偷师的人'),
+    'fun': ('😂 看点 / 有意思吗', '值不值得追'),
+    'quotes': ('💬 金句集', '他最有代表性的原话'),
+    'worldview': ('🗺 世界观地图', '他对各类事的立场一张表'),
+}
+
+
+def render_lens(episodes, lens, author='该博主', preset=None):
+    """同一批证据卡 → 指定镜头的报告（Markdown）。复用合成层的证据卡逻辑。"""
+    episodes = [e for e in episodes if e and e.get('cards') is not None]
+    if not episodes:
+        raise RuntimeError('没有可用的证据卡')
+    tpl = LENSES.get(lens)
+    if not tpl:
+        raise ValueError(f'未知镜头：{lens}')
+    provider, extract_model, synth_model = resolve_analysis(preset)
+    agg = _agg_metrics(episodes)
+    digest = _build_digest(episodes, author, provider, extract_model)
+    return _llm(tpl.format(
+        author=author, n=len(episodes),
+        digest=_metrics_block(agg, len(episodes)) + '\n\n' + digest,
+    ), provider, synth_model)
