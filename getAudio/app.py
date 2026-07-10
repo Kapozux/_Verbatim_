@@ -249,8 +249,12 @@ def _maybe_sanitize(segments, audio_path, duration=None):
 
 
 def _save_results(task_id, original_filename, engine, audio_source_path,
-                  segments, summary):
-    """Persist transcription results to results/<task_id>/."""
+                  segments, summary, model_review=False):
+    """Persist transcription results to results/<task_id>/。
+
+    model_review=True：规则清洗之后，再送模型体检一遍（模型只标垃圾、代码删），
+    捞规则漏掉的循环/复读/碎片。单文件转写路径开、链条走白嫖不在这开。
+    """
     task_dir = os.path.join(config.RESULTS_FOLDER, task_id)
     os.makedirs(task_dir, exist_ok=True)
 
@@ -263,6 +267,18 @@ def _save_results(task_id, original_filename, engine, audio_source_path,
     # 证伪层：清洗前先留住原始稿，只有真删了东西才落 transcript_raw.json
     raw_segments = segments
     segments, san_report = _maybe_sanitize(segments, audio_source_path, duration)
+
+    # 模型体检（可选）：在规则清洗后的稿上，让模型标出残余垃圾，代码删
+    if model_review and segments and 'timestamp' in (segments[0] or {}):
+        try:
+            from analyze import review_transcript
+            drop = review_transcript(segments)
+            if drop:
+                segments = [s for i, s in enumerate(segments) if i not in drop]
+                san_report = dict(san_report or {})
+                san_report['model_dropped'] = len(drop)
+        except Exception:  # noqa: BLE001  体检失败绝不拖垮保存
+            pass
 
     meta = {
         'id': task_id,
@@ -292,7 +308,8 @@ def _save_results(task_id, original_filename, engine, audio_source_path,
 
 
 def run_transcription(task_id, filepath, engine, original_filename, q,
-                      speaker_count=None, fallback_whisper=False):
+                      speaker_count=None, fallback_whisper=False,
+                      model_review=False):
     """Background worker: runs transcription, saves results, pushes events.
 
     每个引擎有独立信号量限流。任务提交后可能先排队（quota 已满），
@@ -342,7 +359,7 @@ def run_transcription(task_id, filepath, engine, original_filename, q,
         def _finish_ok(segs, summary, engine_used):
             """成功收尾：落盘 + enrich + 标记 done + 压缩音频（主路径/兜底路径共用）。"""
             _save_results(task_id, original_filename, engine_used, input_path,
-                          segs, summary)
+                          segs, summary, model_review=model_review)
             try:
                 from enrich import enrich_task
                 enrich_task(os.path.join(config.RESULTS_FOLDER, task_id))
@@ -608,9 +625,11 @@ def _enqueue_task(file, engine, speaker_count=None):
     q = queue.Queue()
     tasks[task_id] = q
 
+    # 模型体检：只对【云引擎】转的稿开（内容本就上了云，体检不增加隐私暴露）；
+    # 本地 Whisper 转的（多半是为隐私留本地的）不送云体检。
     executor.submit(
         run_transcription, task_id, filepath, engine, file.filename, q,
-        speaker_count,
+        speaker_count, False, engine != 'whisper',
     )
 
     return task_id, None

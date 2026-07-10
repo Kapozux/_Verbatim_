@@ -67,6 +67,49 @@ VERIFY_PROMPT = """（联网核实 · 仅作脚注）下面是从一期抽出的
 claims：
 {claims}"""
 
+# ---- 转写体检：模型只「标」出识别垃圾，删除交给确定性代码 ----
+REVIEW_PROMPT = """下面是一段语音转写（ASR），每行 [编号] 文字。找出【明显是识别垃圾】的段：静音幻听、模型卡死的重复循环、无意义碎片、整段逐字复读。
+
+只输出 JSON：{{"drop": [[起,止], ...]}}（闭区间编号）。
+铁律：
+- 只删明显垃圾；真实说话内容一律保留，再短也留（"对""OK""好"）。
+- 逐字复读只删重复的那几条，保留第一条。
+- 拿不准 → 不删。**不要改写任何文字**，只返回要删的编号区间。
+
+段：
+{body}"""
+
+
+def review_transcript(segments, preset=None, window=180):
+    """模型体检：返回「该删的段索引」集合（模型只标，代码删）。
+
+    分窗送（每窗 window 段）控 token；用便宜的抽取模型。
+    无 key / 出错 / 无结果 → 返回空集合，绝不误伤。
+    """
+    if not segments:
+        return set()
+    provider, extract_model, _ = resolve_analysis(preset)
+    drop = set()
+    for base in range(0, len(segments), window):
+        chunk = segments[base:base + window]
+        body = '\n'.join(
+            "[%d] %s" % (i, re.sub(r'\s+', '', (s.get('text') or ''))[:60])
+            for i, s in enumerate(chunk))
+        try:
+            obj = agent(lambda p: _llm(p, provider, extract_model),
+                        REVIEW_PROMPT.format(body=body), schema=['drop'])
+        except Exception:  # noqa: BLE001
+            obj = None
+        for r in (obj or {}).get('drop', []) or []:
+            try:
+                a, b = int(r[0]), int(r[1])
+            except (ValueError, TypeError, IndexError):
+                continue
+            for k in range(max(0, a), min(len(chunk), b + 1)):
+                drop.add(base + k)
+    return drop
+
+
 # ---- 合并层：人物画像（只吃卡片；批判档位只调语气）----
 _TONE = {
     'descriptive': '只描述、不评判：呈现他的母题/风格/指标分布，不下价值判断、不展开"盲区/缺陷"。',
