@@ -1750,8 +1750,8 @@ def api_chain_detail(chain_id):
             except Exception:
                 pass
 
-    # 老链条补频道信息（订阅数/头像）：一次性后台重探，下次刷新就有
-    if 'followers' not in data and data.get('url') \
+    # 老链条补频道信息（订阅数/头像）：followers 缺失或为 0（早期 bug 存的）都重探
+    if not data.get('followers') and data.get('url') \
             and chain_id not in _channel_backfilling:
         _channel_backfilling.add(chain_id)
         threading.Thread(target=_backfill_channel,

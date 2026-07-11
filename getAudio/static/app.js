@@ -1035,10 +1035,8 @@ async function refreshChainDetail() {
         chainDetailGrid.innerHTML = '<p class="history-empty">Could not load</p>';
         return;
     }
-    chainDetailTitle.textContent =
-        (c.author && c.author !== '该博主') ? c.author : (c.url || 'Pipeline');
-    chainDetailMeta.textContent =
-        `${CHAIN_STAGE_LABELS[c.stage] || c.stage} · ${chainProgressText(c)}`;
+    chainDetailTitle.textContent = '博主库';   // 顶栏只当面包屑，名字在下面的封面里
+    chainDetailMeta.textContent = '';          // 卡片已含状态，别重复这行灰字
 
     const vids = c.videos || [];
     const chainTerminal = ['done', 'failed', 'cancelled'].includes(c.stage);
@@ -1105,10 +1103,11 @@ async function refreshChainDetail() {
                 ${lensBlock}
             </div>
         </div>
-        ${fellNote}${err}
+        ${fellNote}
         <details class="chain-ops"${opsOpen}>
-            <summary>⚙ 运行详情 & 操作</summary>
+            <summary>⚙ 运行详情 & 操作${err ? ' · <span class="ops-flag">有报错</span>' : ''}</summary>
             <div class="chain-info">
+                ${err}
                 <div class="ci-row"><span class="ci-k">Source</span>
                     <span class="ci-v"><a href="${(c.url || '').replace(/"/g, '&quot;')}" target="_blank" rel="noopener">${(c.url || '').replace(/</g, '&lt;').slice(0, 80)}</a></span></div>
                 <div class="ci-row"><span class="ci-k">Settings</span>

@@ -441,7 +441,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .cd-sub { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
 
 .cd-stats { display: flex; flex-wrap: wrap; border-top: 1px solid var(--line); background: #FCFBF8; }
-.cd-stat { flex: 1; min-width: 110px; padding: 15px 22px; border-right: 1px solid var(--line); }
+/* 左对齐、按内容宽——2 个也不会被拉出中间的大空档 */
+.cd-stat { padding: 14px 26px; border-right: 1px solid var(--line); }
 .cd-stat:last-child { border-right: none; }
 .cd-stat .n {
   font-family: var(--mono); font-size: 21px; font-weight: 600; color: var(--ink);
@@ -492,6 +493,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .chain-ops[open] > summary::before { content: '▾'; }
 .chain-ops > summary:hover { color: var(--coral); }
 .chain-ops[open] > summary { margin-bottom: 8px; }
+.ops-flag { color: var(--bad); font-weight: 600; }
+/* 运维里的报错盒（从主区收进来的）*/
+.chain-ops .cd-alert { margin: 0 0 12px; }
 
 .vg-eng {
   margin-left: 7px; font-size: 9.5px; font-weight: 600; letter-spacing: .03em;
