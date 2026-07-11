@@ -1048,10 +1048,10 @@ async function refreshChainDetail() {
     const fell = vids.filter(v => v.status === 'done' && v.engine_used
         && v.engine_used !== c.engine).length;
     const fellNote = fell
-        ? `<div class="ci-warn">⚠ ${fell} episode(s) fell back to a different engine
+        ? `<div class="cd-alert">⚠ ${fell} episode(s) fell back to a different engine
             (cloud failed → actual engine recorded per episode)</div>` : '';
     const err = c.error
-        ? `<div class="ci-warn">${String(c.error).slice(0, 180)}</div>` : '';
+        ? `<div class="cd-alert">⚠ ${String(c.error).replace(/</g, '&lt;').slice(0, 180)}</div>` : '';
     const actions = chainTerminal
         ? `<button class="btn-primary ci-btn" onclick="continueChain('${c.id}')">Continue</button>
            <button class="btn-secondary ci-btn" onclick="reanalyzeChain('${c.id}')">Re-analyze</button>
@@ -1367,6 +1367,8 @@ async function loadDocs() {
     }
 }
 
+let docReturnTo = 'main';   // 打开文档前在哪：'main' | 'chainDetail'
+
 async function openDocView(chainId, encName) {
     const name = decodeURIComponent(encName);
     try {
@@ -1376,7 +1378,11 @@ async function openDocView(chainId, encName) {
         currentDoc = { chainId, name, raw };
         docTitle.textContent = name.replace(/\.md$/, '');
         docContent.innerHTML = renderMarkdown(raw);
+        // 记住来源并把它藏掉（之前只藏 mainView，从详情页打开会两个视图叠在一起）
+        docReturnTo = (chainDetailView && !chainDetailView.classList.contains('hidden'))
+            ? 'chainDetail' : 'main';
         mainView.classList.add('hidden');
+        if (chainDetailView) chainDetailView.classList.add('hidden');
         docView.classList.remove('hidden');
         window.scrollTo({ top: 0 });
     } catch {
@@ -1386,7 +1392,11 @@ async function openDocView(chainId, encName) {
 
 function closeDocView() {
     docView.classList.add('hidden');
-    mainView.classList.remove('hidden');
+    if (docReturnTo === 'chainDetail' && chainDetailView) {
+        chainDetailView.classList.remove('hidden');   // 回到博主详情，不是回主页
+    } else {
+        mainView.classList.remove('hidden');
+    }
     docContent.innerHTML = '';
     window.scrollTo({ top: 0 });
 }
