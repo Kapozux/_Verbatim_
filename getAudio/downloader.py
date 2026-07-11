@@ -97,7 +97,7 @@ def _thumbnail_for(entry):
 
 
 def _channel_from_info(info):
-    """从 yt-dlp 信息里取频道名 + 头像 URL（尽力而为，取不到就空字符串）。"""
+    """从 yt-dlp 信息里取频道名 + 头像 + 订阅数（尽力而为，取不到留空/0）。"""
     name = (info.get('channel') or info.get('uploader')
             or info.get('playlist_uploader') or '')
     avatar = ''
@@ -107,7 +107,28 @@ def _channel_from_info(info):
             if 'avatar' in str(t.get('id', '')).lower() and t.get('url'):
                 avatar = t['url']
                 break
-    return {'name': (name or '').strip(), 'avatar': avatar}
+        if not avatar and thumbs and thumbs[0].get('url'):
+            avatar = thumbs[0]['url']        # 兜底：第一张缩略图
+    followers = (info.get('channel_follower_count')
+                 or info.get('subscriber_count') or 0)
+    return {'name': (name or '').strip(), 'avatar': avatar,
+            'followers': int(followers) if followers else 0}
+
+
+def channel_followers(url):
+    """单独取订阅数。YouTube 在 lang=zh-CN 下会把 channel_follower_count 抹成 None，
+    所以这里用**不带 lang**的干净命令探一次（cookies 保留）。取不到返回 0。"""
+    try:
+        binary = _resolve_ytdlp()
+        cmd = [binary, '--flat-playlist', '-J', '--no-warnings',
+               *_cookie_args(), '--playlist-end', '1', _normalize_url(url)]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=_PROBE_TIMEOUT)
+        if r.returncode == 0 and r.stdout.strip():
+            fc = json.loads(r.stdout).get('channel_follower_count') or 0
+            return int(fc) if fc else 0
+    except Exception:  # noqa: BLE001
+        pass
+    return 0
 
 
 def probe(url, max_videos=None):
@@ -148,6 +169,7 @@ def probe(url, max_videos=None):
                 'title': e.get('title', ''),
                 'video_id': e.get('id', ''),
                 'thumbnail': _thumbnail_for(e),
+                'view_count': int(e.get('view_count') or 0),  # flat 常为 0，B站等有时给
             })
         return targets, channel
 
@@ -180,6 +202,7 @@ def download_one(target, dest_dir):
         '--print', 'after_move:filepath',
         '--print', 'after_move:title',
         '--print', 'after_move:id',
+        '--print', 'after_move:view_count',
         '--no-simulate',
         target['video_url'],
     ]
@@ -193,11 +216,18 @@ def download_one(target, dest_dir):
         if result is not None and result.returncode == 0:
             lines = [ln for ln in result.stdout.strip().splitlines() if ln.strip()]
             if len(lines) >= 3 and os.path.isfile(lines[0]):
+                vc = 0
+                if len(lines) >= 4:
+                    try:
+                        vc = int(lines[3])
+                    except (ValueError, TypeError):
+                        vc = 0
                 return {
                     'path': lines[0],
                     'title': lines[1] or target.get('title') or 'untitled',
                     'video_id': lines[2] or target.get('video_id', ''),
                     'thumbnail': target.get('thumbnail', ''),
+                    'view_count': vc or int(target.get('view_count') or 0),
                 }
         if attempt < _DOWNLOAD_ATTEMPTS:
             time.sleep(4 * attempt)      # 4s, 8s 退避

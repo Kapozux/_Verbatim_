@@ -1305,7 +1305,8 @@ def run_chain(state):
             _save_chain(state)
 
     try:
-        from downloader import probe, download_one, fetch_subtitle, parse_srt
+        from downloader import (probe, download_one, fetch_subtitle, parse_srt,
+                                channel_followers)
 
         # ---- 1. 解析目标（拿到标题 + 封面 + 频道名/头像）----
         state['stage'] = 'downloading'
@@ -1318,6 +1319,8 @@ def run_chain(state):
         if channel.get('name') and state.get('author') in ('', '该博主'):
             state['author'] = channel['name']
         state['avatar'] = channel.get('avatar', '')
+        # 订阅数单独取（probe 带 lang=zh-CN 时 YouTube 会返 None）
+        state['followers'] = channel.get('followers', 0) or channel_followers(state['url'])
         _save_chain(state)
 
         # 预置视频网格：一开始就把全部目标铺出来，前端详情页能立刻看到
@@ -1327,6 +1330,7 @@ def run_chain(state):
             'video_id': t.get('video_id', ''),
             'video_url': t.get('video_url', ''),   # 供 retry 重下用
             'thumbnail': t.get('thumbnail', ''),
+            'view_count': int(t.get('view_count') or 0),
             'status': 'downloading',
             'task_id': None,
         } for i, t in enumerate(targets)]
@@ -1420,6 +1424,8 @@ def run_chain(state):
             v['task_id'] = task_id
             v['title'] = item['title']
             v['video_id'] = item['video_id']
+            if item.get('view_count'):
+                v['view_count'] = int(item['view_count'])   # 下载时抓到的播放量
             v['status'] = 'transcribing'
             save()
 
@@ -1694,6 +1700,32 @@ def api_chains():
     return jsonify(entries)
 
 
+_channel_backfilling = set()   # 正在补频道信息的链条，防重复重探
+
+
+def _backfill_channel(chain_id, url):
+    """老链条重探一次频道元信息（订阅数/头像），只取频道级、不列全部视频。"""
+    try:
+        from downloader import probe, channel_followers
+        _, channel = probe(url, max_videos=1)
+        followers = channel_followers(url)   # 单独取（不带 lang，否则 YouTube 返 None）
+    except Exception:  # noqa: BLE001
+        channel, followers = None, 0
+    cpath = os.path.join(_chain_dir(chain_id), 'chain.json')
+    with _chain_write_lock:
+        try:
+            with open(cpath, 'r', encoding='utf-8') as f:
+                st = json.load(f)
+            st['followers'] = followers or (channel or {}).get('followers', 0)
+            if not st.get('avatar') and (channel or {}).get('avatar'):
+                st['avatar'] = channel['avatar']
+            with open(cpath, 'w', encoding='utf-8') as f:
+                json.dump(st, f, ensure_ascii=False, indent=2)
+        except Exception:  # noqa: BLE001
+            pass
+    _channel_backfilling.discard(chain_id)
+
+
 @app.route('/api/chain/<chain_id>')
 def api_chain_detail(chain_id):
     if not _CHAIN_ID_RE.match(chain_id or ''):
@@ -1717,6 +1749,13 @@ def api_chain_detail(chain_id):
                     json.dump(data, f, ensure_ascii=False, indent=2)
             except Exception:
                 pass
+
+    # 老链条补频道信息（订阅数/头像）：一次性后台重探，下次刷新就有
+    if 'followers' not in data and data.get('url') \
+            and chain_id not in _channel_backfilling:
+        _channel_backfilling.add(chain_id)
+        threading.Thread(target=_backfill_channel,
+                         args=(chain_id, data['url']), daemon=True).start()
 
     # 给正在转写的视频挂上实时进度百分比（内存里的 _task_progress）
     for v in data.get('videos', []):

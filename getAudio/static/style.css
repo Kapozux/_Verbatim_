@@ -415,18 +415,42 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 }
 .creator-meta { margin-top: 4px; font-size: 12px; color: var(--faint); }
 
-/* ===== 博主详情页：博主为主角，运维折叠 ===== */
-.cd-header {
-  background: var(--card); border: 1px solid var(--line); border-radius: var(--r-lg);
-  padding: 26px 28px 22px; margin-bottom: 14px; box-shadow: var(--e1);
+/* ===== 博主详情页：档案封面（头像 + 大名 + 真数据），运维折叠 ===== */
+.cd-cover {
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--r-xl);
+  box-shadow: var(--e2); overflow: hidden; margin-bottom: 14px;
+}
+.cd-cover-top { display: flex; gap: 24px; padding: 30px 32px 24px; align-items: center; }
+.cd-avatar {
+  position: relative; flex: none; width: 96px; height: 96px; border-radius: 50%;
+  overflow: hidden; display: flex; align-items: center; justify-content: center;
+  font-family: var(--serif); font-size: 44px; color: #fff;
+  background: radial-gradient(120% 120% at 30% 25%, #F6C9B4 0%, var(--coral) 55%, var(--coral-deep) 100%);
+  box-shadow: inset 0 2px 6px rgba(255,255,255,.25), 0 6px 18px rgba(217,119,87,.26);
+}
+.cd-avatar-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.cd-id { min-width: 0; flex: 1; }
+.cd-eyebrow {
+  font-size: 11px; font-weight: 700; letter-spacing: .13em; text-transform: uppercase;
+  color: var(--coral-deep);
 }
 .cd-name {
-  font-family: var(--serif);
-  font-size: 30px; font-weight: 600; color: var(--ink);
-  line-height: 1.2; overflow-wrap: anywhere;
+  font-family: var(--serif); font-size: 40px; font-weight: 600; color: var(--ink);
+  line-height: 1.08; margin: 7px 0 3px; overflow-wrap: anywhere; text-wrap: balance;
 }
-.cd-sub { margin-top: 6px; font-size: 13.5px; color: var(--muted); }
-.cd-ctas { display: flex; gap: 12px; margin-top: 18px; flex-wrap: wrap; }
+.cd-sub { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+.cd-stats { display: flex; flex-wrap: wrap; border-top: 1px solid var(--line); background: #FCFBF8; }
+.cd-stat { flex: 1; min-width: 110px; padding: 15px 22px; border-right: 1px solid var(--line); }
+.cd-stat:last-child { border-right: none; }
+.cd-stat .n {
+  font-family: var(--mono); font-size: 21px; font-weight: 600; color: var(--ink);
+  font-variant-numeric: tabular-nums; line-height: 1;
+}
+.cd-stat .l { font-size: 11.5px; color: var(--muted); margin-top: 6px; }
+
+.cd-body { padding: 22px 32px 26px; }
+.cd-ctas { display: flex; gap: 12px; flex-wrap: wrap; }
 .cd-cta {
   display: inline-flex; align-items: center; justify-content: center;
   width: auto;              /* 盖掉 .btn-primary 的 width:100%，别拉成通栏 */

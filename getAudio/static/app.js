@@ -1079,12 +1079,31 @@ async function refreshChainDetail() {
         : '';
     // 运维细节 + 次要操作：折叠（活跃时展开显进度）
     const opsOpen = chainTerminal ? '' : ' open';
+    // 真头像（取不到/加载失败 → 名字首字的珊瑚章）+ 真数据条
+    const ch = (author || c.url || '?').trim().slice(0, 1) || '?';
+    const avatarHtml = `<div class="cd-avatar">${ch}${c.avatar
+        ? `<img class="cd-avatar-img" src="${(c.avatar || '').replace(/"/g, '&quot;')}" alt="" onerror="this.remove()">`
+        : ''}</div>`;
+    const totalViews = vids.reduce((s, v) => s + (v.view_count || 0), 0);
+    const stats = [`<div class="cd-stat"><div class="n">${doneN}</div><div class="l">期已解读</div></div>`];
+    if (c.followers) stats.push(`<div class="cd-stat"><div class="n">${fmtCount(c.followers)}</div><div class="l">订阅</div></div>`);
+    if (totalViews) stats.push(`<div class="cd-stat"><div class="n">${fmtCount(totalViews)}</div><div class="l">总播放</div></div>`);
+    stats.push(`<div class="cd-stat"><div class="n">${c.analysis_preset || 'gemini'}</div><div class="l">解读大脑</div></div>`);
     document.getElementById('chain-detail-info').innerHTML = `
-        <div class="cd-header">
-            <div class="cd-name">${(author || c.url || 'Creator').replace(/</g, '&lt;').slice(0, 60)}</div>
-            <div class="cd-sub">${doneN} 期已解读 · brain ${c.analysis_preset || 'gemini'} · ${CHAIN_STAGE_LABELS[c.stage] || c.stage}${c.finished_at ? ' · ' + c.finished_at : ''}</div>
-            <div class="cd-ctas">${ctas}</div>
-            ${lensBlock}
+        <div class="cd-cover">
+            <div class="cd-cover-top">
+                ${avatarHtml}
+                <div class="cd-id">
+                    <div class="cd-eyebrow">博主解读 · 基于 ${doneN} 期</div>
+                    <div class="cd-name">${(author || c.url || 'Creator').replace(/</g, '&lt;').slice(0, 60)}</div>
+                    <div class="cd-sub">${CHAIN_STAGE_LABELS[c.stage] || c.stage}${c.finished_at ? ' · ' + c.finished_at : ''}</div>
+                </div>
+            </div>
+            <div class="cd-stats">${stats.join('')}</div>
+            <div class="cd-body">
+                <div class="cd-ctas">${ctas}</div>
+                ${lensBlock}
+            </div>
         </div>
         ${fellNote}${err}
         <details class="chain-ops"${opsOpen}>
@@ -1251,6 +1270,14 @@ function switchTab(name) {
     if (name === 'creators') { renderCreators(); }
 }
 
+// 大数字人性化：万 / 亿
+function fmtCount(n) {
+    n = Number(n) || 0;
+    if (n >= 1e8) return (n / 1e8).toFixed(1).replace(/\.0$/, '') + '亿';
+    if (n >= 1e4) return (n / 1e4).toFixed(1).replace(/\.0$/, '') + '万';
+    return String(n);
+}
+
 // ========== 博主库：已解读完的博主陈列 ==========
 async function renderCreators() {
     const grid = document.getElementById('creators-grid');
@@ -1270,11 +1297,12 @@ async function renderCreators() {
             const author = (c.author && c.author !== '该博主') ? c.author : (c.url || 'Creator');
             const safe = author.replace(/"/g, '&quot;');
             const vids = c.videos || [];
-            const thumb = (vids.find(v => v.thumbnail) || {}).thumbnail || '';
+            // 优先真头像，退回视频封面
+            const img = c.avatar || (vids.find(v => v.thumbnail) || {}).thumbnail || '';
             const nEp = vids.filter(v => v.status === 'done').length || vids.length;
             const brain = c.analysis_preset || 'gemini';
-            const ts = thumb
-                ? `<div class="creator-thumb" style="background-image:url('${thumb.replace(/'/g, '')}')"></div>`
+            const ts = img
+                ? `<div class="creator-thumb" style="background-image:url('${img.replace(/'/g, '')}')"></div>`
                 : `<div class="creator-thumb creator-noimg">▷</div>`;
             return `<div class="creator-card" onclick="openChainDetail('${c.id}')" title="${safe}">
                 ${ts}
