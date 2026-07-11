@@ -389,6 +389,32 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .chain-advanced > summary:hover { color: var(--coral); }
 .chain-advanced[open] > summary { color: var(--ink-soft); margin-bottom: 8px; }
 
+/* 博主库（Creators gallery）*/
+.creators-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 16px; margin-top: 8px;
+}
+.creator-card {
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--r-lg);
+  overflow: hidden; cursor: pointer; box-shadow: var(--e1);
+  transition: transform .12s, box-shadow .12s;
+}
+.creator-card:hover { transform: translateY(-3px); box-shadow: var(--e2); }
+.creator-thumb {
+  height: 120px; background-size: cover; background-position: center;
+  background-color: var(--coral-soft);
+}
+.creator-noimg {
+  display: flex; align-items: center; justify-content: center;
+  font-size: 32px; color: var(--coral); background: var(--coral-soft);
+}
+.creator-body { padding: 12px 14px; }
+.creator-name {
+  font-weight: 700; font-size: 14.5px; color: var(--ink);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.creator-meta { margin-top: 4px; font-size: 12px; color: var(--faint); }
+
 /* 镜头按钮（换个角度看博主）*/
 .lens-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .lens-btn {

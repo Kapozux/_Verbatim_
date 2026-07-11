@@ -19,6 +19,7 @@
                 <nav class="main-nav">
                     <button class="nav-tab active" data-tab="transcribe">Transcribe</button>
                     <button class="nav-tab" data-tab="chain">Pipeline</button>
+                    <button class="nav-tab" data-tab="creators">博主库</button>
                     <button class="nav-tab" data-tab="library">Library</button>
                 </nav>
             </header>
@@ -190,6 +191,16 @@
                 </form>
 
                 <div id="chain-list" class="chain-list"></div>
+            </section>
+
+            <!-- ===== Tab: 博主库 (Creators) ===== -->
+            <section id="tab-creators" class="tab-panel">
+                <div class="hero">
+                    <h1>博主库<span class="accent">.</span></h1>
+                    <p>已经解读过的博主。点开看人物画像，换个角度看他——🔥 锐评 / ✍️ 写作拆解 / 😂 看点 / 💬 金句 / 🗺 世界观。</p>
+                </div>
+                <div id="creators-grid" class="creators-grid"></div>
+                <p id="creators-empty" class="history-empty hidden">还没有解读完的博主 —— 去 Pipeline 跑一个。</p>
             </section>
 
             <!-- ===== Tab: Library ===== -->

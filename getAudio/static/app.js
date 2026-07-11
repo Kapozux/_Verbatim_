@@ -1218,6 +1218,7 @@ const navTabs = document.querySelectorAll('.nav-tab');
 const tabPanels = {
     transcribe: document.getElementById('tab-transcribe'),
     chain: document.getElementById('tab-chain'),
+    creators: document.getElementById('tab-creators'),
     library: document.getElementById('tab-library'),
 };
 
@@ -1228,6 +1229,44 @@ function switchTab(name) {
     });
     if (name === 'library') { renderHistory(); }
     if (name === 'chain') { loadChains(); }
+    if (name === 'creators') { renderCreators(); }
+}
+
+// ========== 博主库：已解读完的博主陈列 ==========
+async function renderCreators() {
+    const grid = document.getElementById('creators-grid');
+    const empty = document.getElementById('creators-empty');
+    if (!grid) return;
+    try {
+        const chains = await (await fetch('/api/chains')).json();
+        // 有合成文档 = 真解读完了；按最近在前
+        const done = chains.filter(c => c.final_doc);
+        if (!done.length) {
+            grid.innerHTML = '';
+            if (empty) empty.classList.remove('hidden');
+            return;
+        }
+        if (empty) empty.classList.add('hidden');
+        grid.innerHTML = done.map(c => {
+            const author = (c.author && c.author !== '该博主') ? c.author : (c.url || 'Creator');
+            const safe = author.replace(/"/g, '&quot;');
+            const vids = c.videos || [];
+            const thumb = (vids.find(v => v.thumbnail) || {}).thumbnail || '';
+            const nEp = vids.filter(v => v.status === 'done').length || vids.length;
+            const brain = c.analysis_preset || 'gemini';
+            const ts = thumb
+                ? `<div class="creator-thumb" style="background-image:url('${thumb.replace(/'/g, '')}')"></div>`
+                : `<div class="creator-thumb creator-noimg">▷</div>`;
+            return `<div class="creator-card" onclick="openChainDetail('${c.id}')" title="${safe}">
+                ${ts}
+                <div class="creator-body">
+                    <div class="creator-name">${author.slice(0, 60)}</div>
+                    <div class="creator-meta">${nEp} 期 · brain ${brain}</div>
+                </div></div>`;
+        }).join('');
+    } catch {
+        grid.innerHTML = '<p class="history-empty">Could not load</p>';
+    }
 }
 
 navTabs.forEach(btn => {
