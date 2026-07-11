@@ -1058,32 +1058,51 @@ async function refreshChainDetail() {
            <span class="ci-hint">Continue = fill whatever is missing (reuses everything done).
            Re-analyze = redo analysis only, with the Pipeline form's brain/level settings.</span>`
         : `<button class="btn-secondary ci-btn" onclick="stopChain('${c.id}')">Stop</button>`;
-    // 镜头：拿现成证据卡换个角度看这个博主（分析完才有卡）
+    // ===== 布局原则：主角是「这个博主 + 读他的解读」；运维细节全部折叠 =====
+    const author = (c.author && c.author !== '该博主') ? c.author : '';
+    const doneN = vids.filter(v => v.status === 'done').length;
+    // 主 CTA：读画像 / 合并原文（核心内容，做大）
+    let ctas = '';
+    if (c.final_doc) ctas += `<button class="btn-primary cd-cta"
+        onclick="openDocView('${c.id}','${encodeURIComponent(c.final_doc)}')">📖 读画像</button>`;
+    if (c.raw_doc) ctas += `<button class="btn-secondary cd-cta"
+        onclick="openDocView('${c.id}','${encodeURIComponent(c.raw_doc)}')">📜 合并原文</button>`;
+    // 镜头：核心动作，大 chip
     const LENSES = [['roast', '🔥 锐评'], ['craft', '✍️ 写作拆解'],
         ['fun', '😂 看点'], ['quotes', '💬 金句'], ['worldview', '🗺 世界观']];
-    const lensRow = (chainTerminal && c.analyze !== false)
-        ? `<div class="ci-row"><span class="ci-k">换个角度</span>
-             <span class="ci-v lens-row">`
+    const lensBlock = (chainTerminal && c.analyze !== false)
+        ? `<div class="cd-lens-title">换个角度看他 <span class="ci-hint">同一批证据卡、不同角度，几乎不额外花钱</span></div>
+           <div class="cd-lens-row">`
           + LENSES.map(([k, label]) =>
               `<button class="lens-btn" onclick="runLens('${c.id}','${k}')">${label}</button>`).join('')
-          + `<span class="ci-hint">同一批证据卡、不同角度，几乎不额外花钱</span></span></div>`
+          + `</div>`
         : '';
+    // 运维细节 + 次要操作：折叠（活跃时展开显进度）
+    const opsOpen = chainTerminal ? '' : ' open';
     document.getElementById('chain-detail-info').innerHTML = `
-        <div class="chain-info">
-            <div class="ci-row"><span class="ci-k">Source</span>
-                <span class="ci-v"><a href="${(c.url || '').replace(/"/g, '&quot;')}" target="_blank" rel="noopener">${(c.url || '').replace(/</g, '&lt;').slice(0, 80)}</a></span></div>
-            <div class="ci-row"><span class="ci-k">Settings</span>
-                <span class="ci-v">engine <b>${c.engine || '-'}</b> · analyze <b>${onoff(c.analyze)}</b>
-                · brain <b>${c.analysis_preset || 'gemini'}</b> · level <b>${c.critique_level || 'analytical'}</b>
-                · subs-first <b>${onoff(c.prefer_subs)}</b> · web-verify <b>${onoff(c.verify)}</b>
-                · self-verify <b>${onoff(c.self_verify)}</b>
-                · whisper-fallback <b>${onoff(c.fallback_whisper)}</b></span></div>
-            <div class="ci-row"><span class="ci-k">Progress</span>
-                <span class="ci-v">${chainProgressText(c)}${c.finished_at ? ' · finished ' + c.finished_at : ''}</span></div>
-            ${lensRow}
-            ${fellNote}${err}
-            <div class="ci-actions">${actions}</div>
-        </div>`;
+        <div class="cd-header">
+            <div class="cd-name">${(author || c.url || 'Creator').replace(/</g, '&lt;').slice(0, 60)}</div>
+            <div class="cd-sub">${doneN} 期已解读 · brain ${c.analysis_preset || 'gemini'} · ${CHAIN_STAGE_LABELS[c.stage] || c.stage}${c.finished_at ? ' · ' + c.finished_at : ''}</div>
+            <div class="cd-ctas">${ctas}</div>
+            ${lensBlock}
+        </div>
+        ${fellNote}${err}
+        <details class="chain-ops"${opsOpen}>
+            <summary>⚙ 运行详情 & 操作</summary>
+            <div class="chain-info">
+                <div class="ci-row"><span class="ci-k">Source</span>
+                    <span class="ci-v"><a href="${(c.url || '').replace(/"/g, '&quot;')}" target="_blank" rel="noopener">${(c.url || '').replace(/</g, '&lt;').slice(0, 80)}</a></span></div>
+                <div class="ci-row"><span class="ci-k">Settings</span>
+                    <span class="ci-v">engine <b>${c.engine || '-'}</b> · analyze <b>${onoff(c.analyze)}</b>
+                    · brain <b>${c.analysis_preset || 'gemini'}</b> · level <b>${c.critique_level || 'analytical'}</b>
+                    · subs-first <b>${onoff(c.prefer_subs)}</b> · web-verify <b>${onoff(c.verify)}</b>
+                    · self-verify <b>${onoff(c.self_verify)}</b>
+                    · whisper-fallback <b>${onoff(c.fallback_whisper)}</b></span></div>
+                <div class="ci-row"><span class="ci-k">Progress</span>
+                    <span class="ci-v">${chainProgressText(c)}</span></div>
+                <div class="ci-actions">${actions}</div>
+            </div>
+        </details>`;
 
     document.getElementById('chain-episodes-count').textContent = `(${vids.length})`;
 

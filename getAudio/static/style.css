@@ -415,15 +415,50 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 }
 .creator-meta { margin-top: 4px; font-size: 12px; color: var(--faint); }
 
-/* 镜头按钮（换个角度看博主）*/
-.lens-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-.lens-btn {
-  font-family: inherit; font-size: 12.5px; font-weight: 600;
-  color: var(--ink-soft); background: var(--coral-soft);
-  border: 1px solid var(--line); border-radius: 999px;
-  padding: 5px 12px; cursor: pointer; transition: all .12s;
+/* ===== 博主详情页：博主为主角，运维折叠 ===== */
+.cd-header {
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--r-lg);
+  padding: 26px 28px 22px; margin-bottom: 14px; box-shadow: var(--e1);
 }
-.lens-btn:hover { color: #fff; background: var(--coral); border-color: var(--coral); }
+.cd-name {
+  font-family: var(--serif);
+  font-size: 30px; font-weight: 600; color: var(--ink);
+  line-height: 1.2; overflow-wrap: anywhere;
+}
+.cd-sub { margin-top: 6px; font-size: 13.5px; color: var(--muted); }
+.cd-ctas { display: flex; gap: 12px; margin-top: 18px; flex-wrap: wrap; }
+.cd-cta {
+  font-size: 15px; font-weight: 700; padding: 12px 26px; border-radius: var(--r-md);
+  cursor: pointer;
+}
+.cd-lens-title {
+  margin-top: 22px; font-size: 13px; font-weight: 700; color: var(--ink-soft);
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+}
+.cd-lens-row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
+
+/* 镜头按钮（核心动作，做大）*/
+.lens-btn {
+  font-family: inherit; font-size: 15px; font-weight: 600;
+  color: var(--ink); background: var(--coral-soft);
+  border: 1px solid var(--line); border-radius: 999px;
+  padding: 10px 20px; cursor: pointer; transition: all .12s;
+}
+.lens-btn:hover { color: #fff; background: var(--coral); border-color: var(--coral);
+  transform: translateY(-1px); }
+
+/* 运维细节折叠 */
+.chain-ops { margin-bottom: 16px; }
+.chain-ops > summary {
+  cursor: pointer; list-style: none; user-select: none;
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12.5px; font-weight: 600; color: var(--faint); padding: 4px 2px;
+}
+.chain-ops > summary::-webkit-details-marker { display: none; }
+.chain-ops > summary::before { content: '▸'; font-size: 10px; }
+.chain-ops[open] > summary::before { content: '▾'; }
+.chain-ops > summary:hover { color: var(--coral); }
+.chain-ops[open] > summary { margin-bottom: 8px; }
 
 .vg-eng {
   margin-left: 7px; font-size: 9.5px; font-weight: 600; letter-spacing: .03em;
