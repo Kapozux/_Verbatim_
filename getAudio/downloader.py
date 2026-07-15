@@ -21,6 +21,7 @@ import subprocess
 from config import YTDLP_LANG, YTDLP_COOKIES_FROM_BROWSER
 
 _PROBE_TIMEOUT = 120        # 元数据解析超时（秒）
+_PROBE_ATTEMPTS = 3         # B站 412 等间歇风控：解析链接也退避重试
 _DOWNLOAD_TIMEOUT = 1800    # 单个视频音频下载超时（秒）
 
 _YT_ID_RE = re.compile(r'^[A-Za-z0-9_-]{11}$')
@@ -146,12 +147,23 @@ def probe(url, max_videos=None):
         cmd += ['--playlist-end', str(max_videos)]
     cmd.append(url)
 
-    result = subprocess.run(
-        cmd, capture_output=True, text=True, timeout=_PROBE_TIMEOUT,
-    )
-    if result.returncode != 0 or not result.stdout.strip():
-        err = (result.stderr or '').strip().splitlines()
-        detail = err[-1][:200] if err else 'unknown error'
+    # B站 412 / 网络抖动这类间歇性风控：退避重试（download_one 早就这么干，
+    # probe 之前漏了，一次 412 就把整条链判死）。
+    result = None
+    for attempt in range(1, _PROBE_ATTEMPTS + 1):
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=_PROBE_TIMEOUT,
+            )
+        except subprocess.TimeoutExpired:
+            result = None
+        if result is not None and result.returncode == 0 and result.stdout.strip():
+            break
+        if attempt < _PROBE_ATTEMPTS:
+            time.sleep(4 * attempt)     # 4s, 8s 退避
+    if result is None or result.returncode != 0 or not result.stdout.strip():
+        err = (result.stderr or '').strip().splitlines() if result else []
+        detail = err[-1][:200] if err else 'timeout / unknown error'
         raise RuntimeError(f'Could not parse link: {detail}')
 
     info = json.loads(result.stdout)
