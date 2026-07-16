@@ -19,6 +19,7 @@
                 <nav class="main-nav">
                     <button class="nav-tab active" data-tab="transcribe">Transcribe</button>
                     <button class="nav-tab" data-tab="chain">Pipeline</button>
+                    <button class="nav-tab" data-tab="xhs">小红书</button>
                     <button class="nav-tab" data-tab="creators">博主库</button>
                     <button class="nav-tab" data-tab="library">Library</button>
                 </nav>
@@ -191,6 +192,30 @@
                 </form>
 
                 <div id="chain-list" class="chain-list"></div>
+            </section>
+
+            <!-- ===== Tab: 小红书采集 ===== -->
+            <section id="tab-xhs" class="tab-panel">
+                <div class="hero">
+                    <h1>小红书<span class="accent">.</span></h1>
+                    <p>填关键词、要几篇 —— Verbatim 起浏览器自己搜、下原图、抓一级评论，落成数据集。<b>首次会弹出浏览器要扫码登录</b>（之后免扫）。</p>
+                </div>
+                <form class="chain-form-shell" onsubmit="return false">
+                    <div class="chain-form">
+                        <textarea id="xhs-keywords" class="search-input" rows="4"
+                            placeholder="一行一个关键词，分别搜、去重合并：&#10;uiuc cs 美本&#10;美本 cs 选校&#10;美本 计算机 录取"></textarea>
+                        <div class="chain-form-row">
+                            <input type="number" id="xhs-max-notes" class="search-input chain-small"
+                                   min="1" max="300" value="20" placeholder="要几篇">
+                            <input type="number" id="xhs-max-comments" class="search-input chain-small"
+                                   min="50" max="2000" value="400" placeholder="每篇评论上限">
+                            <button id="xhs-start" type="button" class="btn-primary chain-btn">开始采集</button>
+                        </div>
+                        <p class="chain-hint">采集与分析解耦、每篇即时落盘（中途关掉也保留已采的）。
+                           风控提示：一次 70+ 篇容易被限流，想稳就分小批、放慢。数据落在 <code>xhs_dataset/</code>。</p>
+                    </div>
+                </form>
+                <div id="xhs-progress" class="xhs-progress hidden"></div>
             </section>
 
             <!-- ===== Tab: 博主库 (Creators) ===== -->

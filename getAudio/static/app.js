@@ -1255,6 +1255,7 @@ const navTabs = document.querySelectorAll('.nav-tab');
 const tabPanels = {
     transcribe: document.getElementById('tab-transcribe'),
     chain: document.getElementById('tab-chain'),
+    xhs: document.getElementById('tab-xhs'),
     creators: document.getElementById('tab-creators'),
     library: document.getElementById('tab-library'),
 };
@@ -1267,7 +1268,50 @@ function switchTab(name) {
     if (name === 'library') { renderHistory(); }
     if (name === 'chain') { loadChains(); }
     if (name === 'creators') { renderCreators(); }
+    if (name === 'xhs') { pollXhs(); }
 }
+
+// ========== 小红书采集 ==========
+let xhsTimer = null;
+async function pollXhs() {
+    const box = document.getElementById('xhs-progress');
+    if (!box) return;
+    let s;
+    try { s = await (await fetch('/api/xhs/status')).json(); }
+    catch { return; }
+    clearTimeout(xhsTimer);
+    if (!s.running && !s.log?.length) { box.classList.add('hidden'); return; }
+    box.classList.remove('hidden');
+    const dot = s.running ? '<span class="xhs-live">● 采集中</span>' : '<span class="xhs-done">✓ 已停止</span>';
+    box.innerHTML = `
+        <div class="xhs-head">${dot}
+            <span>本次已采 <b>${s.scraped}</b> 篇 · 库存共 ${s.total} 篇${s.kw ? ' · ' + s.kw.replace(/</g, '&lt;') : ''}</span></div>
+        <pre class="xhs-log">${(s.log || []).map(l => l.replace(/</g, '&lt;')).join('\n')}</pre>`;
+    const startBtn = document.getElementById('xhs-start');
+    if (startBtn) startBtn.disabled = s.running;
+    if (s.running && !document.hidden) xhsTimer = setTimeout(pollXhs, 3000);
+}
+
+const xhsStartBtn = document.getElementById('xhs-start');
+if (xhsStartBtn) xhsStartBtn.addEventListener('click', async () => {
+    const keywords = document.getElementById('xhs-keywords').value.trim();
+    if (!keywords) { document.getElementById('xhs-keywords').focus(); return; }
+    if (!confirm('开始采集？会弹出一个浏览器窗口（首次要扫码登录小红书）。\n'
+        + '高频容易被风控，建议一次别太多篇。继续？')) return;
+    xhsStartBtn.disabled = true;
+    try {
+        const r = await (await fetch('/api/xhs/scrape', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                keywords,
+                max_notes: parseInt(document.getElementById('xhs-max-notes').value, 10) || 20,
+                max_comments: parseInt(document.getElementById('xhs-max-comments').value, 10) || 400,
+            }),
+        })).json();
+        if (!r.ok) { alert(r.error || '启动失败'); xhsStartBtn.disabled = false; return; }
+        pollXhs();
+    } catch { alert('启动失败'); xhsStartBtn.disabled = false; }
+});
 
 // 大数字人性化：万 / 亿
 function fmtCount(n) {

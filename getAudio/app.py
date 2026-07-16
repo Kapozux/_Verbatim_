@@ -2333,6 +2333,80 @@ def api_compress_status():
         return jsonify(dict(_compress_state))
 
 
+# ==== 小红书采集：Verbatim 驱动外部爬虫（uv/3.12 子进程，复用现成 xhs_pipeline.py）====
+_XHS_UV = os.environ.get('XHS_UV') or '/opt/homebrew/bin/uv'
+_XHS_PROJECT = os.environ.get('XHS_PROJECT') or '/Users/kapozux/Documents/XHS-Downloader'
+_XHS_ROOT = os.environ.get('XHS_ROOT') or '/Users/kapozux/Documents/CODEelse'
+_XHS_SCRIPT = os.path.join(_XHS_ROOT, 'xhs_pipeline.py')
+_XHS_NOTES = os.path.join(_XHS_ROOT, 'xhs_dataset', 'notes')
+_xhs_job = {'running': False, 'log': [], 'started': None, 'base': 0, 'kw': ''}
+
+
+def _xhs_notes_count():
+    try:
+        return sum(1 for n in os.listdir(_XHS_NOTES)
+                   if os.path.isdir(os.path.join(_XHS_NOTES, n)))
+    except OSError:
+        return 0
+
+
+def _run_xhs(keywords, max_notes, max_comments):
+    env = dict(os.environ, XHS_KEYWORDS=keywords,
+               XHS_MAX_NOTES=str(max_notes), XHS_MAX_COMMENTS=str(max_comments))
+    _xhs_job.update(running=True, log=[], base=_xhs_notes_count())
+    try:
+        proc = subprocess.Popen(
+            [_XHS_UV, 'run', '--project', _XHS_PROJECT, 'python', _XHS_SCRIPT],
+            cwd=_XHS_ROOT, env=env,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, bufsize=1,
+        )
+        for line in proc.stdout:
+            _xhs_job['log'].append(line.rstrip()[:200])
+            del _xhs_job['log'][:-60]          # 只留最后 60 行
+        proc.wait()
+        _xhs_job['log'].append(f'[完成] 退出码 {proc.returncode}')
+    except Exception as e:  # noqa: BLE001
+        _xhs_job['log'].append(f'[错误] {e}')
+    finally:
+        _xhs_job['running'] = False
+
+
+@app.route('/api/xhs/scrape', methods=['POST'])
+def api_xhs_scrape():
+    """填关键词 + 数量 → 后台起 uv 子进程采集。会弹出有头浏览器（首次要扫码）。"""
+    if _xhs_job['running']:
+        return jsonify({'ok': False, 'error': '已有采集在跑，等它结束'}), 409
+    if not os.path.isfile(_XHS_SCRIPT):
+        return jsonify({'ok': False, 'error': f'找不到爬虫脚本：{_XHS_SCRIPT}'}), 500
+    body = request.get_json(silent=True) or {}
+    kws = (body.get('keywords') or '').strip()
+    if not kws:
+        return jsonify({'ok': False, 'error': '至少填一个关键词'}), 400
+    try:
+        mn = max(1, min(300, int(body.get('max_notes') or 20)))
+        mc = max(50, min(2000, int(body.get('max_comments') or 400)))
+    except (ValueError, TypeError):
+        mn, mc = 20, 400
+    _xhs_job['started'] = __import__('datetime').datetime.now().strftime('%H:%M:%S')
+    _xhs_job['kw'] = kws.replace('\n', ' / ')[:120]
+    threading.Thread(target=_run_xhs, args=(kws, mn, mc), daemon=True).start()
+    return jsonify({'ok': True})
+
+
+@app.route('/api/xhs/status')
+def api_xhs_status():
+    total = _xhs_notes_count()
+    return jsonify({
+        'running': _xhs_job['running'],
+        'scraped': max(0, total - _xhs_job.get('base', 0)),
+        'total': total,
+        'started': _xhs_job.get('started'),
+        'kw': _xhs_job.get('kw', ''),
+        'log': _xhs_job.get('log', [])[-30:],
+    })
+
+
 if __name__ == '__main__':
     # 生产（Docker/公网）用 FLASK_DEBUG=0 关掉调试器（debug=True 的 Werkzeug 调试器
     # 在公网上等于 RCE 漏洞）。本地默认开 debug（热重载方便）。

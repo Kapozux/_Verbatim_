@@ -389,6 +389,24 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .chain-advanced > summary:hover { color: var(--coral); }
 .chain-advanced[open] > summary { color: var(--ink-soft); margin-bottom: 8px; }
 
+/* 小红书采集进度 */
+.xhs-progress {
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--r-lg);
+  padding: 16px 20px; margin-top: 16px; box-shadow: var(--e1);
+}
+.xhs-head { font-size: 13.5px; color: var(--ink-soft); display: flex; gap: 12px;
+  align-items: center; flex-wrap: wrap; }
+.xhs-head b { color: var(--ink); font-variant-numeric: tabular-nums; }
+.xhs-live { color: var(--coral); font-weight: 700; }
+.xhs-done { color: var(--muted); font-weight: 700; }
+.xhs-log {
+  margin-top: 12px; max-height: 260px; overflow: auto; background: var(--code-bg);
+  border-radius: var(--r-sm); padding: 12px 14px; font-family: var(--mono);
+  font-size: 12px; line-height: 1.6; color: var(--ink-soft); white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+#xhs-keywords { resize: vertical; min-height: 84px; line-height: 1.6; }
+
 /* 博主库（Creators gallery）*/
 .creators-grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
