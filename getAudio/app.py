@@ -307,6 +307,19 @@ def _save_results(task_id, original_filename, engine, audio_source_path,
             json.dump(summary, f, ensure_ascii=False, indent=2)
 
 
+# 云引擎「内容拦截」标记：确定性拒绝（版权/安全/敏感），重试同一引擎毫无意义
+_CONTENT_BLOCK_MARKERS = (
+    'RECITATION', 'PROHIBITED_CONTENT', 'SAFETY', 'BLOCKLIST', 'SPII',
+    '内容被安全过滤', '提示词被拦截', '重试无效', 'block_reason',
+)
+
+
+def _is_content_block(err):
+    """是不是云引擎的确定性内容拦截（区别于网络/限流这类间歇失败）。"""
+    s = str(err)
+    return any(m in s for m in _CONTENT_BLOCK_MARKERS)
+
+
 def run_transcription(task_id, filepath, engine, original_filename, q,
                       speaker_count=None, fallback_whisper=False,
                       model_review=False):
@@ -539,12 +552,17 @@ def run_transcription(task_id, filepath, engine, original_filename, q,
     except Exception as e:
         # 默认：失败就失败（原引擎内部已重试；Continue 会用原引擎再试一轮）。
         # 只有明确勾了"失败兜底 Whisper"才自动改用本地 Whisper——不偷偷换引擎/降质量。
+        # 例外：**内容拦截**（RECITATION/PROHIBITED 等确定性拒绝）无视开关直接落 Whisper——
+        # 因为重试同一云引擎永远是白搭，只有 Whisper 或放弃两条路。
+        content_block = _is_content_block(e)
         fell_back = False
-        if engine != 'whisper' and fallback_whisper:
+        if engine != 'whisper' and (fallback_whisper or content_block):
             try:
+                why = ('内容被 Gemini 拦截（确定性，重试无用）' if content_block
+                       else f'{engine} 失败（{str(e)[:50]}）')
                 q.put(json.dumps({
                     'type': 'progress', 'percent': 0,
-                    'message': f'{engine} 失败（{str(e)[:60]}），按设置改用本地 Whisper 兜底...',
+                    'message': f'{why}，改用本地 Whisper...',
                 }))
                 # 换并发闸：放掉云引擎额度，改排 Whisper 的队（本地 CPU 只允许 2 路，
                 # 不然 12 路 whisper 同时烧 CPU）。finally 里统一释放当前 sem。

@@ -1203,7 +1203,7 @@ function gotoDocs() {
 // 云引擎失败自动落 Whisper），最后补分析 + 合成。用上面表单的引擎/分析大脑设置。
 async function continueChain(chainId, ev) {
     if (ev) ev.stopPropagation();
-    if (!confirm('Continue this pipeline?\n复用所有已完成的，只补缺失的：没下的下载、转写失败的重转（云引擎失败自动落本地 Whisper），再补分析 + 合成。用上方表单里的引擎 / 分析大脑设置。')) return;
+    if (!confirm('Continue this pipeline?\n复用所有已完成的，只补缺失的：没下的下载、转写失败的重转、再补分析 + 合成。用上方表单里的引擎 / 分析大脑设置。\n\n注意：被 Gemini 内容拦截（RECITATION/敏感）的会自动改用本地 Whisper 救回；其它类型的失败只有你勾了「Whisper fallback」才会落 Whisper。')) return;
     try {
         const r = await (await fetch(`/api/chain/${chainId}/retry`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
