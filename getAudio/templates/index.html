@@ -19,8 +19,8 @@
                 <nav class="main-nav">
                     <button class="nav-tab active" data-tab="transcribe">Transcribe</button>
                     <button class="nav-tab" data-tab="chain">Pipeline</button>
-                    <button class="nav-tab" data-tab="xhs">小红书</button>
-                    <button class="nav-tab" data-tab="creators">博主库</button>
+                    <button class="nav-tab" data-tab="xhs">Xiaohongshu</button>
+                    <button class="nav-tab" data-tab="creators">Creators</button>
                     <button class="nav-tab" data-tab="library">Library</button>
                 </nav>
             </header>
@@ -139,7 +139,7 @@
                                     title="Transcription engine.">
                                 <option value="gemini">Gemini (recommended)</option>
                                 <option value="whisper">Whisper (local)</option>
-                                <option value="dashscope">阿里云 Paraformer (中文·不被 Gemini 过滤拦)</option>
+                                <option value="dashscope">Alibaba Paraformer (zh ASR · no Gemini filter)</option>
                             </select>
                             <select id="chain-provider" class="search-input chain-small"
                                     title="Which model does the analysis. Aliyun (DeepSeek/Kimi/GLM/Qwen) reuses your DashScope key and dodges the Gemini quota — but it moderates content, so use it only for non-sensitive creators.">
@@ -161,6 +161,12 @@
                             <div class="chain-form-row chain-adv-row">
                                 <input type="number" id="chain-max" class="search-input chain-small"
                                        min="1" max="300" placeholder="Max videos">
+                                <select id="chain-lang" class="search-input chain-small"
+                                        title="Language of the analysis documents (portrait, per-episode notes, lenses). Auto = follow the content's language. Verbatim quotes always stay original.">
+                                    <option value="auto" selected>Output: Auto (follow content)</option>
+                                    <option value="en">Output: English</option>
+                                    <option value="zh">Output: 中文</option>
+                                </select>
                                 <select id="chain-critique" class="search-input chain-small"
                                         title="How sharp the persona portrait's judgment is. Evidence tagging is enforced at every level — only the tone changes.">
                                     <option value="descriptive">Descriptive</option>
@@ -181,7 +187,7 @@
                                 </label>
                                 <label class="chain-check" title="After building the portrait, run a self-critique pass: pull out every evaluative claim, send a skeptic per claim to refute it against the evidence cards, then cut the unsupported ones and soften the overstated ones (with a 证伪留痕 appendix). Costs extra calls; on for high-stakes reads.">
                                     <input type="checkbox" id="chain-self-verify" checked>
-                                    Self-verify (证伪)
+                                    Self-verify
                                 </label>
                             </div>
                         </details>
@@ -197,22 +203,23 @@
             <!-- ===== Tab: 小红书采集 ===== -->
             <section id="tab-xhs" class="tab-panel">
                 <div class="hero">
-                    <h1>小红书<span class="accent">.</span></h1>
-                    <p>填关键词、要几篇 —— Verbatim 起浏览器自己搜、下原图、抓一级评论，落成数据集。<b>首次会弹出浏览器要扫码登录</b>（之后免扫）。</p>
+                    <h1>Xiaohongshu<span class="accent">.</span></h1>
+                    <p>Enter keywords and how many notes — Verbatim drives a real browser to search, download full-res images, and pull top-level comments into a dataset. <b>First run pops a browser asking for a QR login</b> (remembered afterwards).</p>
                 </div>
                 <form class="chain-form-shell" onsubmit="return false">
                     <div class="chain-form">
                         <textarea id="xhs-keywords" class="search-input" rows="4"
-                            placeholder="一行一个关键词，分别搜、去重合并：&#10;uiuc cs 美本&#10;美本 cs 选校&#10;美本 计算机 录取"></textarea>
+                            placeholder="One keyword per line — searched separately, de-duplicated, merged:&#10;uiuc cs admissions&#10;college essay tips&#10;对象出轨"></textarea>
                         <div class="chain-form-row">
+                            <label class="xhs-num"><span>Notes to scrape</span>
                             <input type="number" id="xhs-max-notes" class="search-input chain-small"
-                                   min="1" max="300" value="20" placeholder="要几篇">
+                                   min="1" max="300" value="20"></label>
+                            <label class="xhs-num"><span>Comments cap / note</span>
                             <input type="number" id="xhs-max-comments" class="search-input chain-small"
-                                   min="50" max="2000" value="400" placeholder="每篇评论上限">
-                            <button id="xhs-start" type="button" class="btn-primary chain-btn">开始采集</button>
+                                   min="50" max="2000" value="400"></label>
+                            <button id="xhs-start" type="button" class="btn-primary chain-btn">Start scraping</button>
                         </div>
-                        <p class="chain-hint">采集与分析解耦、每篇即时落盘（中途关掉也保留已采的）。
-                           风控提示：一次 70+ 篇容易被限流，想稳就分小批、放慢。数据落在 <code>xhs_dataset/</code>。</p>
+                        <p class="chain-hint">Scraping and analysis are decoupled; every note is saved as it lands (safe to interrupt). Anti-bot warning: 70+ notes in one run risks rate-limiting — go in small batches. Data lands in <code>xhs_dataset/</code>.</p>
                     </div>
                 </form>
                 <div id="xhs-progress" class="xhs-progress hidden"></div>
@@ -220,10 +227,15 @@
                 <div class="xhs-analyze-card">
                     <div class="xhs-an-head">
                         <div>
-                            <b>分析【上方关键词】的笔记 → 调研报告</b>
-                            <span class="ci-hint">只跑上方关键词这次采到的笔记（按来源词圈定，不混别的话题）。逐篇读图 + 评论 → 聚合。留空关键词=全部。用 Gemini 多模态，按篇数花点额度。</span>
+                            <b>Analyze the notes from the keywords above → research report</b>
+                            <span class="ci-hint">Scoped to notes scraped by those exact keywords (topics never mix). Reads images + comments per note, then aggregates. Empty keywords = whole dataset. Uses Gemini multimodal; costs scale with note count.</span>
+                            <select id="xhs-lang" class="search-input chain-small" style="margin-top:8px">
+                                <option value="auto" selected>Report: Auto (follow content)</option>
+                                <option value="en">Report: English</option>
+                                <option value="zh">Report: 中文</option>
+                            </select>
                         </div>
-                        <button id="xhs-analyze-btn" type="button" class="btn-primary chain-btn">分析本次笔记</button>
+                        <button id="xhs-analyze-btn" type="button" class="btn-primary chain-btn">Analyze this batch</button>
                     </div>
                     <div id="xhs-analyze-progress" class="hidden"></div>
                 </div>
@@ -232,11 +244,11 @@
             <!-- ===== Tab: 博主库 (Creators) ===== -->
             <section id="tab-creators" class="tab-panel">
                 <div class="hero">
-                    <h1>博主库<span class="accent">.</span></h1>
-                    <p>已经解读过的博主。点开看人物画像，换个角度看他——🔥 锐评 / ✍️ 写作拆解 / 😂 看点 / 💬 金句 / 🗺 世界观。</p>
+                    <h1>Creators<span class="accent">.</span></h1>
+                    <p>Every creator you've analyzed. Open one for the portrait, then re-read them through a lens — 🔥 Roast / ✍️ Craft / 😂 Watchability / 💬 Quotes / 🗺 Worldview.</p>
                 </div>
                 <div id="creators-grid" class="creators-grid"></div>
-                <p id="creators-empty" class="history-empty hidden">还没有解读完的博主 —— 去 Pipeline 跑一个。</p>
+                <p id="creators-empty" class="history-empty hidden">No analyzed creators yet — run one in Pipeline.</p>
             </section>
 
             <!-- ===== Tab: Library ===== -->

@@ -878,6 +878,7 @@ chainStartBtn.addEventListener('click', async () => {
                 fallback_whisper: chainFallbackWhisper.checked,
                 verify: chainVerify.checked,
                 self_verify: chainSelfVerify.checked,
+                lang: (document.getElementById('chain-lang') || {}).value || 'auto',
                 critique_level: chainCritique.value,
                 analysis_preset: chainProvider.value,
             }),
@@ -1035,7 +1036,7 @@ async function refreshChainDetail() {
         chainDetailGrid.innerHTML = '<p class="history-empty">Could not load</p>';
         return;
     }
-    chainDetailTitle.textContent = '博主库';   // 顶栏只当面包屑，名字在下面的封面里
+    chainDetailTitle.textContent = 'Creators';   // 顶栏只当面包屑，名字在下面的封面里
     chainDetailMeta.textContent = '';          // 卡片已含状态，别重复这行灰字
 
     const vids = c.videos || [];
@@ -1062,14 +1063,14 @@ async function refreshChainDetail() {
     // 主 CTA：读画像 / 合并原文（核心内容，做大）
     let ctas = '';
     if (c.final_doc) ctas += `<button class="btn-primary cd-cta"
-        onclick="openDocView('${c.id}','${encodeURIComponent(c.final_doc)}')">📖 读画像</button>`;
+        onclick="openDocView('${c.id}','${encodeURIComponent(c.final_doc)}')">📖 Read portrait</button>`;
     if (c.raw_doc) ctas += `<button class="btn-secondary cd-cta"
-        onclick="openDocView('${c.id}','${encodeURIComponent(c.raw_doc)}')">📜 合并原文</button>`;
+        onclick="openDocView('${c.id}','${encodeURIComponent(c.raw_doc)}')">📜 Merged transcript</button>`;
     // 镜头：核心动作，大 chip
-    const LENSES = [['roast', '🔥 锐评'], ['craft', '✍️ 写作拆解'],
-        ['fun', '😂 看点'], ['quotes', '💬 金句'], ['worldview', '🗺 世界观']];
+    const LENSES = [['roast', '🔥 Roast'], ['craft', '✍️ Craft'],
+        ['fun', '😂 Watchability'], ['quotes', '💬 Quotes'], ['worldview', '🗺 Worldview']];
     const lensBlock = (chainTerminal && c.analyze !== false)
-        ? `<div class="cd-lens-title">换个角度看他 <span class="ci-hint">同一批证据卡、不同角度，几乎不额外花钱</span></div>
+        ? `<div class="cd-lens-title">Read him through a lens <span class="ci-hint">same evidence cards, different angle — nearly free</span></div>
            <div class="cd-lens-row">`
           + LENSES.map(([k, label]) =>
               `<button class="lens-btn" onclick="runLens('${c.id}','${k}')">${label}</button>`).join('')
@@ -1083,16 +1084,16 @@ async function refreshChainDetail() {
         ? `<img class="cd-avatar-img" src="${(c.avatar || '').replace(/"/g, '&quot;')}" alt="" onerror="this.remove()">`
         : ''}</div>`;
     const totalViews = vids.reduce((s, v) => s + (v.view_count || 0), 0);
-    const stats = [`<div class="cd-stat"><div class="n">${doneN}</div><div class="l">期已解读</div></div>`];
-    if (c.followers) stats.push(`<div class="cd-stat"><div class="n">${fmtCount(c.followers)}</div><div class="l">订阅</div></div>`);
-    if (totalViews) stats.push(`<div class="cd-stat"><div class="n">${fmtCount(totalViews)}</div><div class="l">总播放</div></div>`);
-    stats.push(`<div class="cd-stat"><div class="n">${c.analysis_preset || 'gemini'}</div><div class="l">解读大脑</div></div>`);
+    const stats = [`<div class="cd-stat"><div class="n">${doneN}</div><div class="l">episodes read</div></div>`];
+    if (c.followers) stats.push(`<div class="cd-stat"><div class="n">${fmtCount(c.followers)}</div><div class="l">followers</div></div>`);
+    if (totalViews) stats.push(`<div class="cd-stat"><div class="n">${fmtCount(totalViews)}</div><div class="l">total plays</div></div>`);
+    stats.push(`<div class="cd-stat"><div class="n">${c.analysis_preset || 'gemini'}</div><div class="l">analysis brain</div></div>`);
     document.getElementById('chain-detail-info').innerHTML = `
         <div class="cd-cover">
             <div class="cd-cover-top">
                 ${avatarHtml}
                 <div class="cd-id">
-                    <div class="cd-eyebrow">博主解读 · 基于 ${doneN} 期</div>
+                    <div class="cd-eyebrow">CREATOR READ · ${doneN} EPISODES</div>
                     <div class="cd-name">${(author || c.url || 'Creator').replace(/</g, '&lt;').slice(0, 60)}</div>
                     <div class="cd-sub">${CHAIN_STAGE_LABELS[c.stage] || c.stage}${c.finished_at ? ' · ' + c.finished_at : ''}</div>
                 </div>
@@ -1105,7 +1106,7 @@ async function refreshChainDetail() {
         </div>
         ${fellNote}
         <details class="chain-ops"${opsOpen}>
-            <summary>⚙ 运行详情 & 操作${err ? ' · <span class="ops-flag">有报错</span>' : ''}</summary>
+            <summary>⚙ Run details & actions${err ? ' · <span class="ops-flag">has errors</span>' : ''}</summary>
             <div class="chain-info">
                 ${err}
                 <div class="ci-row"><span class="ci-k">Source</span>
@@ -1203,7 +1204,7 @@ function gotoDocs() {
 // 云引擎失败自动落 Whisper），最后补分析 + 合成。用上面表单的引擎/分析大脑设置。
 async function continueChain(chainId, ev) {
     if (ev) ev.stopPropagation();
-    if (!confirm('Continue this pipeline?\n复用所有已完成的，只补缺失的：没下的下载、转写失败的重转、再补分析 + 合成。用上方表单里的引擎 / 分析大脑设置。\n\n注意：被 Gemini 内容拦截（RECITATION/敏感）的会自动改用本地 Whisper 救回；其它类型的失败只有你勾了「Whisper fallback」才会落 Whisper。')) return;
+    if (!confirm('Continue this pipeline?\nReuses everything finished; only fills gaps: downloads what is missing, re-transcribes failures, then completes analysis + synthesis, using the form settings above.\n\nNote: videos content-blocked by Gemini (RECITATION/safety) auto-fall-back to local Whisper; other failures only fall back if Whisper fallback is checked.')) return;
     try {
         const r = await (await fetch(`/api/chain/${chainId}/retry`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1232,14 +1233,15 @@ async function reanalyzeChain(chainId, ev) {
     if (ev) ev.stopPropagation();
     const verify = chainVerify.checked;
     const selfVerify = chainSelfVerify.checked;
-    if (!confirm('Re-analyze：对每个已转写视频重跑 AI 分析'
-        + (verify ? ' + 联网核实（额外搜索额度）' : '')
-        + (selfVerify ? ' + 证伪（额外调用）' : '')
-        + '，用上方表单选的分析大脑。转写不动。继续？')) return;
+    if (!confirm('Re-analyze: rerun AI analysis on every transcribed video'
+        + (verify ? ' + web fact-check (extra search quota)' : '')
+        + (selfVerify ? ' + self-verify (extra calls)' : '')
+        + ', using the analysis brain selected above. Transcripts untouched. Continue?')) return;
     try {
         const r = await (await fetch(`/api/chain/${chainId}/reanalyze`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ verify, self_verify: selfVerify,
+                                   lang: (document.getElementById('chain-lang') || {}).value || 'auto',
                                    critique_level: chainCritique.value,
                                    analysis_preset: chainProvider.value }),
         })).json();
@@ -1282,10 +1284,10 @@ async function pollXhs() {
     clearTimeout(xhsTimer);
     if (!s.running && !s.log?.length) { box.classList.add('hidden'); return; }
     box.classList.remove('hidden');
-    const dot = s.running ? '<span class="xhs-live">● 采集中</span>' : '<span class="xhs-done">✓ 已停止</span>';
+    const dot = s.running ? '<span class="xhs-live">● Scraping</span>' : '<span class="xhs-done">✓ Stopped</span>';
     box.innerHTML = `
         <div class="xhs-head">${dot}
-            <span>本次已采 <b>${s.scraped}</b> 篇 · 库存共 ${s.total} 篇${s.kw ? ' · ' + s.kw.replace(/</g, '&lt;') : ''}</span></div>
+            <span>scraped <b>${s.scraped}</b> this run · ${s.total} in dataset${s.kw ? ' · ' + s.kw.replace(/</g, '&lt;') : ''}</span></div>
         <pre class="xhs-log">${(s.log || []).map(l => l.replace(/</g, '&lt;')).join('\n')}</pre>`;
     const startBtn = document.getElementById('xhs-start');
     if (startBtn) startBtn.disabled = s.running;
@@ -1304,7 +1306,7 @@ async function pollXhsAnalyze() {
     clearTimeout(xhsAnTimer);
     if (s.running) {
         box.classList.remove('hidden');
-        box.innerHTML = `<span class="xhs-live">● 分析中</span> 已读 <b>${s.done}</b>/${s.total} 篇…（读图+评论）`;
+        box.innerHTML = `<span class="xhs-live">● Analyzing</span> read <b>${s.done}</b>/${s.total} notes… (images + comments)`;
         if (btn) btn.disabled = true;
         if (!document.hidden) xhsAnTimer = setTimeout(pollXhsAnalyze, 2000);
         return;
@@ -1312,11 +1314,11 @@ async function pollXhsAnalyze() {
     if (btn) btn.disabled = false;
     if (s.error) {
         box.classList.remove('hidden');
-        box.innerHTML = `<span class="xhs-done">分析失败：${String(s.error).replace(/</g, '&lt;')}</span>`;
+        box.innerHTML = `<span class="xhs-done">Analysis failed: ${String(s.error).replace(/</g, '&lt;')}</span>`;
     } else if (s.has_report) {
         box.classList.remove('hidden');
-        box.innerHTML = `<span class="xhs-done">✓ 报告已生成</span>
-            <button class="lens-btn" onclick="openXhsReport()">📖 看报告</button>`;
+        box.innerHTML = `<span class="xhs-done">✓ Report ready</span>
+            <button class="lens-btn" onclick="openXhsReport()">📖 Read report</button>`;
     } else {
         box.classList.add('hidden');
     }
@@ -1324,12 +1326,12 @@ async function pollXhsAnalyze() {
 async function openXhsReport() {
     try {
         const r = await (await fetch('/api/xhs/report')).json();
-        if (r.markdown) showXhsReport(r.markdown); else alert(r.error || '没有报告');
-    } catch { alert('读取报告失败'); }
+        if (r.markdown) showXhsReport(r.markdown); else alert(r.error || 'No report yet');
+    } catch { alert('Could not load the report'); }
 }
 function showXhsReport(md) {
     currentDoc = { chainId: null, name: '小红书报告.md', raw: md };
-    docTitle.textContent = '小红书调研报告';
+    docTitle.textContent = 'Xiaohongshu research report';
     docContent.innerHTML = renderMarkdown(md);
     docReturnTo = 'main';
     mainView.classList.add('hidden');
@@ -1341,26 +1343,27 @@ const xhsAnalyzeBtn = document.getElementById('xhs-analyze-btn');
 if (xhsAnalyzeBtn) xhsAnalyzeBtn.addEventListener('click', async () => {
     const keywords = (document.getElementById('xhs-keywords').value || '').trim();
     const scopeMsg = keywords
-        ? '只分析上方这些关键词采到的笔记（不会混进别的话题）。'
-        : '⚠ 关键词为空 = 分析【数据集全部笔记】（会把不同话题混一起）。';
-    if (!confirm(scopeMsg + '\n逐篇读图+评论、聚合成报告，按篇数花 Gemini 额度。继续？')) return;
+        ? 'Only notes scraped by the keywords above will be analyzed (topics never mix).'
+        : '⚠ Keywords empty = analyze the WHOLE dataset (topics will mix).';
+    if (!confirm(scopeMsg + '\nReads images + comments per note, then aggregates into a report. Gemini cost scales with note count. Continue?')) return;
     xhsAnalyzeBtn.disabled = true;
     try {
         const r = await (await fetch('/api/xhs/analyze', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ keywords }),
+            body: JSON.stringify({ keywords,
+                lang: (document.getElementById('xhs-lang') || {}).value || 'auto' }),
         })).json();
-        if (!r.ok) { alert(r.error || '启动失败'); xhsAnalyzeBtn.disabled = false; return; }
+        if (!r.ok) { alert(r.error || 'Failed to start'); xhsAnalyzeBtn.disabled = false; return; }
         pollXhsAnalyze();
-    } catch { alert('启动失败'); xhsAnalyzeBtn.disabled = false; }
+    } catch { alert('Failed to start'); xhsAnalyzeBtn.disabled = false; }
 });
 
 const xhsStartBtn = document.getElementById('xhs-start');
 if (xhsStartBtn) xhsStartBtn.addEventListener('click', async () => {
     const keywords = document.getElementById('xhs-keywords').value.trim();
     if (!keywords) { document.getElementById('xhs-keywords').focus(); return; }
-    if (!confirm('开始采集？会弹出一个浏览器窗口（首次要扫码登录小红书）。\n'
-        + '高频容易被风控，建议一次别太多篇。继续？')) return;
+    if (!confirm('Start scraping? A browser window will pop up (first run asks for a Xiaohongshu QR login).\n'
+        + 'High volume risks rate-limiting — keep batches small. Continue?')) return;
     xhsStartBtn.disabled = true;
     try {
         const r = await (await fetch('/api/xhs/scrape', {
@@ -1371,9 +1374,9 @@ if (xhsStartBtn) xhsStartBtn.addEventListener('click', async () => {
                 max_comments: parseInt(document.getElementById('xhs-max-comments').value, 10) || 400,
             }),
         })).json();
-        if (!r.ok) { alert(r.error || '启动失败'); xhsStartBtn.disabled = false; return; }
+        if (!r.ok) { alert(r.error || 'Failed to start'); xhsStartBtn.disabled = false; return; }
         pollXhs();
-    } catch { alert('启动失败'); xhsStartBtn.disabled = false; }
+    } catch { alert('Failed to start'); xhsStartBtn.disabled = false; }
 });
 
 // 大数字人性化：万 / 亿
@@ -1414,7 +1417,7 @@ async function renderCreators() {
                 ${ts}
                 <div class="creator-body">
                     <div class="creator-name">${author.slice(0, 60)}</div>
-                    <div class="creator-meta">${nEp} 期 · brain ${brain}</div>
+                    <div class="creator-meta">${nEp} eps · brain ${brain}</div>
                 </div></div>`;
         }).join('');
     } catch {
@@ -1538,7 +1541,7 @@ function closeDocView() {
 // 换个角度看博主：拿现成证据卡跑一个镜头 → 后台生成 → 轮询 → 用 openDocView 展示
 async function runLens(chainId, lens) {
     const open = () => openDocView(chainId, encodeURIComponent(`镜头_${lens}.md`));
-    showToast('生成中…（同一批卡换角度，稍等）');
+    showToast('Generating… (same cards, new lens)');
     try {
         const r = await (await fetch(`/api/chain/${chainId}/lens`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1548,16 +1551,16 @@ async function runLens(chainId, lens) {
         if (r.ready) { open(); return; }
         let n = 40;   // 最多轮询 ~2 分钟（大链条 map-reduce 要点时间）
         const poll = async () => {
-            if (n-- <= 0) { showToast('还在生成，稍后在文档列表里看'); return; }
+            if (n-- <= 0) { showToast('Still generating — check the doc list shortly'); return; }
             try {
                 const g = await (await fetch(`/api/chain/${chainId}/lens/${lens}`)).json();
                 if (g.ready) { open(); return; }
-                if (g.error) { showToast('生成失败：' + g.error); return; }
+                if (g.error) { showToast('Generation failed: ' + g.error); return; }
             } catch { /* 抖动忽略，继续轮 */ }
             setTimeout(poll, 3000);
         };
         setTimeout(poll, 3000);
-    } catch { showToast('生成失败'); }
+    } catch { showToast('Generation failed'); }
 }
 
 if (docBackBtn) docBackBtn.addEventListener('click', closeDocView);

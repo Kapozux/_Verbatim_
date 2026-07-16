@@ -334,7 +334,7 @@ def run_transcription(task_id, filepath, engine, original_filename, q,
         q.put(json.dumps({
             'type': 'progress',
             'percent': percent,
-            'message': f'转写中... {percent}%',
+            'message': f'Transcribing... {percent}%',
         }))
 
     cleanup_paths = [filepath]
@@ -342,7 +342,7 @@ def run_transcription(task_id, filepath, engine, original_filename, q,
 
     # 排队等待本引擎的并发额度
     sem = _engine_semaphores.get(engine)
-    q.put(json.dumps({'type': 'queued', 'message': '排队中...'}))
+    q.put(json.dumps({'type': 'queued', 'message': 'Queued...'}))
     if sem is not None:
         sem.acquire()
 
@@ -351,13 +351,13 @@ def run_transcription(task_id, filepath, engine, original_filename, q,
         q.put(json.dumps({
             'type': 'progress',
             'percent': 1,
-            'message': '开始转写...',
+            'message': 'Starting transcription...',
         }))
         if is_video_file(filepath):
             q.put(json.dumps({
                 'type': 'progress',
                 'percent': 2,
-                'message': '正在从视频中提取音频...',
+                'message': 'Extracting audio from video...',
             }))
             audio_path = os.path.join(
                 app.config['UPLOAD_FOLDER'],
@@ -398,7 +398,7 @@ def run_transcription(task_id, filepath, engine, original_filename, q,
             q.put(json.dumps({
                 'type': 'progress',
                 'percent': 0,
-                'message': '正在加载 Whisper 模型（首次可能需要下载）...',
+                'message': 'Loading Whisper model (first run may download)...',
             }))
             raw_segments = transcribe_audio(input_path, progress_callback=progress_cb)
             segs = []
@@ -522,7 +522,7 @@ def run_transcription(task_id, filepath, engine, original_filename, q,
                 q.put(json.dumps({
                     'type': 'progress',
                     'percent': 70,
-                    'message': '阿里云分离未成功，仅输出文字（无说话人）',
+                    'message': 'Diarization failed — text only (no speakers)',
                 }))
                 segments = g
                 full_text = "\n".join(
@@ -558,11 +558,11 @@ def run_transcription(task_id, filepath, engine, original_filename, q,
         fell_back = False
         if engine != 'whisper' and (fallback_whisper or content_block):
             try:
-                why = ('内容被 Gemini 拦截（确定性，重试无用）' if content_block
-                       else f'{engine} 失败（{str(e)[:50]}）')
+                why = ('Content-blocked by Gemini (deterministic)' if content_block
+                       else f'{engine} failed ({str(e)[:50]})')
                 q.put(json.dumps({
                     'type': 'progress', 'percent': 0,
-                    'message': f'{why}，改用本地 Whisper...',
+                    'message': f'{why} — falling back to local Whisper...',
                 }))
                 # 换并发闸：放掉云引擎额度，改排 Whisper 的队（本地 CPU 只允许 2 路，
                 # 不然 12 路 whisper 同时烧 CPU）。finally 里统一释放当前 sem。
@@ -1555,7 +1555,8 @@ def run_chain(state):
                 total_md = synthesize(episodes, state['author'],
                                       critique_level=state.get('critique_level', 'analytical'),
                                       preset=state.get('analysis_preset'),
-                                      self_verify=state.get('self_verify', False))
+                                      self_verify=state.get('self_verify', False),
+                                      lang=state.get('lang', 'auto'))
                 with open(os.path.join(chain_dir, '总分析.md'),
                           'w', encoding='utf-8') as fh:
                     fh.write(total_md)
@@ -1647,7 +1648,8 @@ def _reanalyze_chain(state):
             total_md = synthesize(episodes, state['author'],
                                   critique_level=state.get('critique_level', 'analytical'),
                                   preset=state.get('analysis_preset'),
-                                  self_verify=state.get('self_verify', False))
+                                  self_verify=state.get('self_verify', False),
+                                  lang=state.get('lang', 'auto'))
             with open(os.path.join(chain_dir, '总分析.md'),
                       'w', encoding='utf-8') as fh:
                 fh.write(total_md)
@@ -1688,6 +1690,7 @@ def api_chain_create():
         'fallback_whisper': bool(data.get('fallback_whisper', False)),
         'verify': bool(data.get('verify', False)),
         'self_verify': bool(data.get('self_verify', False)),
+        'lang': (data.get('lang') or 'auto'),
         'critique_level': (data.get('critique_level') or 'analytical'),
         'analysis_preset': (data.get('analysis_preset') or 'gemini'),
         'author': (data.get('author') or '').strip() or '该博主',
@@ -1801,6 +1804,8 @@ def api_chain_reanalyze(chain_id):
     body = request.get_json(silent=True) or {}
     state['verify'] = bool(body.get('verify', False))
     state['self_verify'] = bool(body.get('self_verify', False))
+    if body.get('lang'):
+        state['lang'] = body['lang']
     if body.get('critique_level'):
         state['critique_level'] = body['critique_level']
     if body.get('analysis_preset'):
@@ -1858,7 +1863,8 @@ def api_chain_lens(chain_id):
         try:
             from analyze import render_lens
             md = render_lens(eps, lens, author=state.get('author', '该博主'),
-                             preset=state.get('analysis_preset'))
+                             preset=state.get('analysis_preset'),
+                             lang=state.get('lang', 'auto'))
             with open(fpath, 'w', encoding='utf-8') as fh:
                 fh.write(md or '')
             _lens_jobs[key] = 'done'
@@ -2454,7 +2460,7 @@ def _xhs_match_dirs(keywords):
     return dirs
 
 
-def _run_xhs_analyze(keywords):
+def _run_xhs_analyze(keywords, lang='auto'):
     _xhs_an.update(running=True, done=0, total=0, error=None, ready=False)
     try:
         dirs = _xhs_match_dirs(keywords)
@@ -2467,7 +2473,7 @@ def _run_xhs_analyze(keywords):
         def prog(done, total):
             _xhs_an['done'], _xhs_an['total'] = done, total
 
-        report, extractions = xhs_report(dirs, title='小红书调研报告', on_progress=prog)
+        report, extractions = xhs_report(dirs, title='小红书调研报告', on_progress=prog, lang=lang)
         with open(_XHS_REPORT, 'w', encoding='utf-8') as f:
             f.write(report or '')
         with open(os.path.join(_XHS_ROOT, 'xhs_dataset', '_extractions.json'),
@@ -2490,7 +2496,8 @@ def api_xhs_analyze():
     if not dirs:
         return jsonify({'ok': False,
                         'error': '这些关键词下还没有笔记 —— 先用同样的关键词采集，或清空关键词分析全部'}), 400
-    threading.Thread(target=_run_xhs_analyze, args=(kws,), daemon=True).start()
+    threading.Thread(target=_run_xhs_analyze,
+                     args=(kws, (body.get('lang') or 'auto')), daemon=True).start()
     return jsonify({'ok': True, 'matched': len(dirs)})
 
 

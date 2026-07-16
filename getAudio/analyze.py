@@ -119,7 +119,7 @@ _TONE = {
 
 PORTRAIT_PROMPT = """你会收到「{author}」{n} 期的**证据卡 + 修辞指标**（不是全文）。基于这些卡片综合成一份人物画像（Markdown）：这个人怎么看、怎么思考他的领域。
 
-**语言：跟随卡片语言；下面的小标题是示例，请翻成对应语言。**
+{lang_line}（下面的小标题是示例，请按输出语言翻译。）
 
 {rules}
 
@@ -221,6 +221,19 @@ BRIEF_PROMPT = """你会收到「{author}」其中 {n} 期的**证据卡 + 修�
 
 def _rules():
     return _CALIBRATION_RULES.format(today=datetime.now().strftime('%Y-%m-%d'))
+
+
+# ---- 输出语言：'auto' 跟随内容 / 'en' / 'zh'。注入到所有「产出文档」的 prompt ----
+_LANG_LINES = {
+    'auto': '**Output language: follow the language of the source content.**',
+    'en': '**Output language: write the ENTIRE output in English '
+          '(headings, labels, and body). Keep verbatim quotes in their original language.**',
+    'zh': '**输出语言：全文用中文（标题、标签、正文）。逐字引文保留原语言。**',
+}
+
+
+def _lang_line(lang):
+    return _LANG_LINES.get(lang or 'auto', _LANG_LINES['auto'])
 
 
 def _call_gemini(prompt, grounded=False, model=None):
@@ -493,7 +506,7 @@ def _build_digest(episodes, author, provider, extract_model):
 
 
 def synthesize(episodes, author='该博主', critique_level='analytical',
-               impression_bias='', preset=None, self_verify=False):
+               impression_bias='', preset=None, self_verify=False, lang='auto'):
     """N 期证据卡 → 一份人物画像。critique_level: descriptive/analytical/sharp。
 
     self_verify=True：合成后再跑一轮证伪——抽出每条论断、逐条 skeptic 拿证据反驳，
@@ -511,7 +524,7 @@ def synthesize(episodes, author='该博主', critique_level='analytical',
     digest = _build_digest(episodes, author, provider, extract_model)
 
     portrait = _llm(PORTRAIT_PROMPT.format(
-        author=author, n=len(episodes), rules=_rules(),
+        author=author, n=len(episodes), rules=_rules(), lang_line=_lang_line(lang),
         level=level, tone=_TONE[level], impression=impression,
         digest=_metrics_block(agg, len(episodes)) + '\n\n' + digest,
     ), provider, synth_model)
@@ -600,7 +613,7 @@ LENS_META = {
 }
 
 
-def render_lens(episodes, lens, author='该博主', preset=None):
+def render_lens(episodes, lens, author='该博主', preset=None, lang='auto'):
     """同一批证据卡 → 指定镜头的报告（Markdown）。复用合成层的证据卡逻辑。"""
     episodes = [e for e in episodes if e and e.get('cards') is not None]
     if not episodes:
@@ -611,7 +624,7 @@ def render_lens(episodes, lens, author='该博主', preset=None):
     provider, extract_model, synth_model = resolve_analysis(preset)
     agg = _agg_metrics(episodes)
     digest = _build_digest(episodes, author, provider, extract_model)
-    return _llm(tpl.format(
+    return _llm(_lang_line(lang) + '\n\n' + tpl.format(
         author=author, n=len(episodes),
         digest=_metrics_block(agg, len(episodes)) + '\n\n' + digest,
     ), provider, synth_model)
@@ -724,7 +737,8 @@ def analyze_xhs_note(note_dir):
     return data
 
 
-XHS_REPORT_PROMPT = """你收到从小红书采集的 {n} 篇笔记的结构化抽取（每篇：话题/要点/立场/代表评论/实体/情绪）。这些笔记来自关键词搜索、围绕某个话题。写一份中文调研报告（Markdown）。
+XHS_REPORT_PROMPT = """你收到从小红书采集的 {n} 篇笔记的结构化抽取（每篇：话题/要点/立场/代表评论/实体/情绪）。这些笔记来自关键词搜索、围绕某个话题。写一份调研报告（Markdown）。
+{lang_line}
 
 要求：
 - 先判断这批在聊什么主话题（可能不止一个，按簇分）。
@@ -745,7 +759,7 @@ XHS_REPORT_PROMPT = """你收到从小红书采集的 {n} 篇笔记的结构化�
 {digest}"""
 
 
-def xhs_report(note_dirs, title='小红书调研报告', on_progress=None):
+def xhs_report(note_dirs, title='小红书调研报告', on_progress=None, lang='auto'):
     """一批笔记目录 → (报告 Markdown, 逐篇抽取列表)。逐篇多模态抽取（并发）→ 聚合。"""
     done = [0]
 
@@ -761,5 +775,6 @@ def xhs_report(note_dirs, title='小红书调研报告', on_progress=None):
         raise RuntimeError('没有可分析的笔记（抽取全失败）')
     digest = json.dumps(extractions, ensure_ascii=False, indent=1)[:_SYNTH_CHAR_LIMIT]
     report = _call_gemini(XHS_REPORT_PROMPT.format(
-        n=len(extractions), title=title, digest=digest))
+        n=len(extractions), title=title, digest=digest,
+        lang_line=_lang_line(lang)))
     return report, extractions
