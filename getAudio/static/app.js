@@ -1268,7 +1268,7 @@ function switchTab(name) {
     if (name === 'library') { renderHistory(); }
     if (name === 'chain') { loadChains(); }
     if (name === 'creators') { renderCreators(); }
-    if (name === 'xhs') { pollXhs(); }
+    if (name === 'xhs') { pollXhs(); pollXhsAnalyze(); }
 }
 
 // ========== 小红书采集 ==========
@@ -1291,6 +1291,62 @@ async function pollXhs() {
     if (startBtn) startBtn.disabled = s.running;
     if (s.running && !document.hidden) xhsTimer = setTimeout(pollXhs, 3000);
 }
+
+// —— 分析：逐篇读图+评论 → 聚合报告 ——
+let xhsAnTimer = null;
+async function pollXhsAnalyze() {
+    const box = document.getElementById('xhs-analyze-progress');
+    const btn = document.getElementById('xhs-analyze-btn');
+    if (!box) return;
+    let s;
+    try { s = await (await fetch('/api/xhs/analyze_status')).json(); }
+    catch { return; }
+    clearTimeout(xhsAnTimer);
+    if (s.running) {
+        box.classList.remove('hidden');
+        box.innerHTML = `<span class="xhs-live">● 分析中</span> 已读 <b>${s.done}</b>/${s.total} 篇…（读图+评论）`;
+        if (btn) btn.disabled = true;
+        if (!document.hidden) xhsAnTimer = setTimeout(pollXhsAnalyze, 2000);
+        return;
+    }
+    if (btn) btn.disabled = false;
+    if (s.error) {
+        box.classList.remove('hidden');
+        box.innerHTML = `<span class="xhs-done">分析失败：${String(s.error).replace(/</g, '&lt;')}</span>`;
+    } else if (s.has_report) {
+        box.classList.remove('hidden');
+        box.innerHTML = `<span class="xhs-done">✓ 报告已生成</span>
+            <button class="lens-btn" onclick="openXhsReport()">📖 看报告</button>`;
+    } else {
+        box.classList.add('hidden');
+    }
+}
+async function openXhsReport() {
+    try {
+        const r = await (await fetch('/api/xhs/report')).json();
+        if (r.markdown) showXhsReport(r.markdown); else alert(r.error || '没有报告');
+    } catch { alert('读取报告失败'); }
+}
+function showXhsReport(md) {
+    currentDoc = { chainId: null, name: '小红书报告.md', raw: md };
+    docTitle.textContent = '小红书调研报告';
+    docContent.innerHTML = renderMarkdown(md);
+    docReturnTo = 'main';
+    mainView.classList.add('hidden');
+    if (chainDetailView) chainDetailView.classList.add('hidden');
+    docView.classList.remove('hidden');
+    window.scrollTo({ top: 0 });
+}
+const xhsAnalyzeBtn = document.getElementById('xhs-analyze-btn');
+if (xhsAnalyzeBtn) xhsAnalyzeBtn.addEventListener('click', async () => {
+    if (!confirm('对已采的全部笔记逐篇读图+评论、聚合成报告？按篇数花 Gemini 额度。继续？')) return;
+    xhsAnalyzeBtn.disabled = true;
+    try {
+        const r = await (await fetch('/api/xhs/analyze', { method: 'POST' })).json();
+        if (!r.ok) { alert(r.error || '启动失败'); xhsAnalyzeBtn.disabled = false; return; }
+        pollXhsAnalyze();
+    } catch { alert('启动失败'); xhsAnalyzeBtn.disabled = false; }
+});
 
 const xhsStartBtn = document.getElementById('xhs-start');
 if (xhsStartBtn) xhsStartBtn.addEventListener('click', async () => {

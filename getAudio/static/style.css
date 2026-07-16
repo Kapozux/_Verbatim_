@@ -406,6 +406,15 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   overflow-wrap: anywhere;
 }
 #xhs-keywords { resize: vertical; min-height: 84px; line-height: 1.6; }
+.xhs-analyze-card {
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--r-lg);
+  padding: 18px 22px; margin-top: 16px; box-shadow: var(--e1);
+}
+.xhs-an-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.xhs-an-head b { font-size: 14.5px; color: var(--ink); }
+.xhs-an-head .ci-hint { display: block; margin-top: 3px; }
+#xhs-analyze-progress { margin-top: 14px; font-size: 13.5px; color: var(--ink-soft); }
+#xhs-analyze-progress b { font-variant-numeric: tabular-nums; color: var(--ink); }
 
 /* 博主库（Creators gallery）*/
 .creators-grid {

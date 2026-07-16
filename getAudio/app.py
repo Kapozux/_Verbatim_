@@ -2410,6 +2410,66 @@ def api_xhs_status():
     })
 
 
+# ---- 小红书分析：逐篇多模态读图+评论 → 聚合调研报告 ----
+_XHS_REPORT = os.path.join(_XHS_ROOT, 'xhs_dataset', '小红书报告.md')
+_xhs_an = {'running': False, 'done': 0, 'total': 0, 'error': None, 'ready': False}
+
+
+def _run_xhs_analyze():
+    import glob as _g
+    _xhs_an.update(running=True, done=0, total=0, error=None, ready=False)
+    try:
+        dirs = sorted(d for d in _g.glob(os.path.join(_XHS_NOTES, '*'))
+                      if os.path.isdir(d))
+        _xhs_an['total'] = len(dirs)
+        if not dirs:
+            _xhs_an['error'] = '数据集为空，先去采集'
+            return
+        from analyze import xhs_report
+
+        def prog(done, total):
+            _xhs_an['done'], _xhs_an['total'] = done, total
+
+        report, extractions = xhs_report(dirs, title='小红书调研报告', on_progress=prog)
+        with open(_XHS_REPORT, 'w', encoding='utf-8') as f:
+            f.write(report or '')
+        with open(os.path.join(_XHS_ROOT, 'xhs_dataset', '_extractions.json'),
+                  'w', encoding='utf-8') as f:
+            json.dump(extractions, f, ensure_ascii=False, indent=1)
+        _xhs_an['ready'] = True
+    except Exception as e:  # noqa: BLE001
+        _xhs_an['error'] = str(e)[:200]
+    finally:
+        _xhs_an['running'] = False
+
+
+@app.route('/api/xhs/analyze', methods=['POST'])
+def api_xhs_analyze():
+    if _xhs_an['running']:
+        return jsonify({'ok': False, 'error': '分析进行中'}), 409
+    if _xhs_notes_count() == 0:
+        return jsonify({'ok': False, 'error': '数据集为空，先采集'}), 400
+    threading.Thread(target=_run_xhs_analyze, daemon=True).start()
+    return jsonify({'ok': True})
+
+
+@app.route('/api/xhs/analyze_status')
+def api_xhs_analyze_status():
+    return jsonify({
+        'running': _xhs_an['running'], 'done': _xhs_an['done'],
+        'total': _xhs_an['total'], 'error': _xhs_an['error'],
+        'ready': _xhs_an['ready'], 'has_report': os.path.isfile(_XHS_REPORT),
+    })
+
+
+@app.route('/api/xhs/report')
+def api_xhs_report():
+    if not os.path.isfile(_XHS_REPORT):
+        return jsonify({'error': '还没有报告'}), 404
+    with open(_XHS_REPORT, 'r', encoding='utf-8') as f:
+        return jsonify({'markdown': f.read()})
+
+
 if __name__ == '__main__':
     # 生产（Docker/公网）用 FLASK_DEBUG=0 关掉调试器（debug=True 的 Werkzeug 调试器
     # 在公网上等于 RCE 漏洞）。本地默认开 debug（热重载方便）。

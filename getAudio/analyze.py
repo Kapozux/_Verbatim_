@@ -615,3 +615,151 @@ def render_lens(episodes, lens, author='该博主', preset=None):
         author=author, n=len(episodes),
         digest=_metrics_block(agg, len(episodes)) + '\n\n' + digest,
     ), provider, synth_model)
+
+
+# ==== 小红书笔记分析（多模态：读图 + 评论 → 逐篇结构化 → 聚合报告）====
+import glob as _glob
+import csv as _csv
+
+_XHS_IMG_MIME = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+                 '.webp': 'image/webp', '.heic': 'image/heic'}
+
+
+def _call_gemini_mm(prompt, image_paths, model=None):
+    """多模态 Gemini：文字 + 图片一起送。带模型降级链、重试。返回文本。"""
+    api_key = GEMINI_API_KEY or os.environ.get('GEMINI_API_KEY', '')
+    if not api_key:
+        raise RuntimeError('GEMINI_API_KEY 未设置')
+    from google.genai import types
+    client = make_gemini_client(api_key)
+    parts = [prompt]
+    for p in (image_paths or [])[:12]:          # 每篇最多喂 12 张，控 token
+        try:
+            ext = os.path.splitext(p)[1].lower()
+            with open(p, 'rb') as f:
+                parts.append(types.Part.from_bytes(
+                    data=f.read(), mime_type=_XHS_IMG_MIME.get(ext, 'image/png')))
+        except Exception:  # noqa: BLE001
+            pass
+    ladder = []
+    for m in [model or GEMINI_EXTRACT_MODEL, *GEMINI_FALLBACK_MODELS]:
+        if m and m not in ladder:
+            ladder.append(m)
+    last_err = None
+    for m in ladder:
+        for attempt in range(1, _MAX_ATTEMPTS + 1):
+            try:
+                resp = client.models.generate_content(model=m, contents=parts)
+                text = (resp.text or '').strip()
+                if text:
+                    return text
+            except Exception as e:  # noqa: BLE001
+                last_err = e
+                if attempt < _MAX_ATTEMPTS:
+                    time.sleep(2 * attempt)
+    raise RuntimeError(f'Gemini 多模态调用失败：{last_err}')
+
+
+XHS_EXTRACT_PROMPT = """这是一篇小红书笔记：图片 + 一级评论 + 元信息。**图片里往往是正文/截图/信息主体，务必仔细读图**。
+
+只输出 JSON：
+{{
+  "summary": "这篇讲了什么，一两句",
+  "topic": "它属于什么话题/子类",
+  "key_points": ["正文（含图片内容）里的关键信息点，逐条"],
+  "author_stance": "发帖人的立场/态度（读不出留空）",
+  "notable_comments": ["评论区最有信息量/代表性的几条原话"],
+  "entities": ["提到的具体实体：学校/公司/人名/产品/地名等"],
+  "sentiment": "评论区整体情绪：正面/负面/混合/中性",
+  "relevant": true
+}}
+铁律：只写图片/评论里**真有**的，读不出来就留空/空数组，别编。跟随内容语言。
+
+元信息：{meta}
+
+评论（前 {ncmt} 条）：
+{comments}"""
+
+
+def analyze_xhs_note(note_dir):
+    """一篇笔记 → 多模态结构化抽取（读图+评论）。失败返回 None。"""
+    meta = {}
+    try:
+        with open(os.path.join(note_dir, 'meta.json'), encoding='utf-8') as f:
+            meta = json.load(f)
+    except Exception:  # noqa: BLE001
+        pass
+    comments = []
+    cpath = os.path.join(note_dir, 'comments.csv')
+    if os.path.isfile(cpath):
+        try:
+            with open(cpath, encoding='utf-8-sig') as f:   # -sig 去掉表头 BOM
+                for row in _csv.DictReader(f):
+                    # 列名是 comment_text（老数据可能是 text）
+                    t = (row.get('comment_text') or row.get('text') or '').strip()
+                    if not t:
+                        continue
+                    lk = (row.get('like_count') or '').strip()
+                    comments.append((int(lk) if lk.isdigit() else 0, t))
+            comments.sort(key=lambda x: -x[0])             # 高赞评论排前，更有代表性
+            comments = [f'(赞{lk}) {t}' if lk else t for lk, t in comments]
+        except Exception:  # noqa: BLE001
+            pass
+    imgs = sorted(sum((_glob.glob(os.path.join(note_dir, f'*{e}'))
+                       for e in _XHS_IMG_MIME), []))
+    prompt = XHS_EXTRACT_PROMPT.format(
+        meta=json.dumps(meta, ensure_ascii=False),
+        ncmt=min(60, len(comments)),
+        comments='\n'.join('- ' + c for c in comments[:60])[:8000])
+    try:
+        data = _parse_json_obj(_call_gemini_mm(prompt, imgs))
+    except Exception:  # noqa: BLE001
+        data = None
+    if not isinstance(data, dict):
+        return None
+    data['_note_id'] = os.path.basename(note_dir.rstrip('/'))
+    data['_title'] = meta.get('title', '')
+    data['_n_images'] = len(imgs)
+    data['_n_comments'] = len(comments)
+    return data
+
+
+XHS_REPORT_PROMPT = """你收到从小红书采集的 {n} 篇笔记的结构化抽取（每篇：话题/要点/立场/代表评论/实体/情绪）。这些笔记来自关键词搜索、围绕某个话题。写一份中文调研报告（Markdown）。
+
+要求：
+- 先判断这批在聊什么主话题（可能不止一个，按簇分）。
+- 按**反复出现的主题/模式**组织，别逐篇复述。
+- 每个结论尽量挂**具体例子**（哪篇的要点 / 哪条评论原话），别空泛。
+- 有可数的就给数字（多少篇提到 X、情绪分布）。
+- 只写抽取里**真有**的，不编、不脑补。
+
+结构（按内容灵活取舍）：
+# {title}
+## 概览（这批在聊什么、样本规模）
+## 主要主题 / 模式
+## 值得注意的案例 / 金句
+## 情绪与分歧
+## 小结
+
+抽取结果（JSON）：
+{digest}"""
+
+
+def xhs_report(note_dirs, title='小红书调研报告', on_progress=None):
+    """一批笔记目录 → (报告 Markdown, 逐篇抽取列表)。逐篇多模态抽取（并发）→ 聚合。"""
+    done = [0]
+
+    def _one(d):
+        r = analyze_xhs_note(d)
+        done[0] += 1
+        if on_progress:
+            on_progress(done[0], len(note_dirs))
+        return r
+
+    extractions = [e for e in fanout(note_dirs, _one, concurrency=_BRIEF_CONCURRENCY) if e]
+    if not extractions:
+        raise RuntimeError('没有可分析的笔记（抽取全失败）')
+    digest = json.dumps(extractions, ensure_ascii=False, indent=1)[:_SYNTH_CHAR_LIMIT]
+    report = _call_gemini(XHS_REPORT_PROMPT.format(
+        n=len(extractions), title=title, digest=digest))
+    return report, extractions
