@@ -2352,7 +2352,10 @@ def _xhs_notes_count():
 
 def _run_xhs(keywords, max_notes, max_comments):
     env = dict(os.environ, XHS_KEYWORDS=keywords,
-               XHS_MAX_NOTES=str(max_notes), XHS_MAX_COMMENTS=str(max_comments))
+               XHS_MAX_NOTES=str(max_notes), XHS_MAX_COMMENTS=str(max_comments),
+               PYTHONUNBUFFERED='1')          # 让脚本的 print 实时流出来（否则管道缓冲，看着像卡死）
+    env.pop('VIRTUAL_ENV', None)               # 别把 Verbatim 的 3.9 venv 传给 uv/3.12（那条 warning 的根源）
+    env.pop('PYTHONHOME', None)
     _xhs_job.update(running=True, log=[], base=_xhs_notes_count())
     try:
         proc = subprocess.Popen(
