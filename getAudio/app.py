@@ -2415,15 +2415,34 @@ _XHS_REPORT = os.path.join(_XHS_ROOT, 'xhs_dataset', '小红书报告.md')
 _xhs_an = {'running': False, 'done': 0, 'total': 0, 'error': None, 'ready': False}
 
 
-def _run_xhs_analyze():
+def _xhs_match_dirs(keywords):
+    """按 source_keyword 圈定笔记目录。keywords 非空 → 只要来源词命中的；空 → 全部。"""
     import glob as _g
+    kwset = {k.strip() for k in (keywords or []) if k.strip()}
+    dirs = []
+    for d in sorted(_g.glob(os.path.join(_XHS_NOTES, '*'))):
+        if not os.path.isdir(d):
+            continue
+        if not kwset:
+            dirs.append(d)
+            continue
+        try:
+            with open(os.path.join(d, 'meta.json'), 'r', encoding='utf-8') as f:
+                sk = (json.load(f).get('source_keyword') or '').strip()
+            if sk in kwset:
+                dirs.append(d)
+        except Exception:  # noqa: BLE001
+            pass
+    return dirs
+
+
+def _run_xhs_analyze(keywords):
     _xhs_an.update(running=True, done=0, total=0, error=None, ready=False)
     try:
-        dirs = sorted(d for d in _g.glob(os.path.join(_XHS_NOTES, '*'))
-                      if os.path.isdir(d))
+        dirs = _xhs_match_dirs(keywords)
         _xhs_an['total'] = len(dirs)
         if not dirs:
-            _xhs_an['error'] = '数据集为空，先去采集'
+            _xhs_an['error'] = '这些关键词下没有笔记'
             return
         from analyze import xhs_report
 
@@ -2447,10 +2466,14 @@ def _run_xhs_analyze():
 def api_xhs_analyze():
     if _xhs_an['running']:
         return jsonify({'ok': False, 'error': '分析进行中'}), 409
-    if _xhs_notes_count() == 0:
-        return jsonify({'ok': False, 'error': '数据集为空，先采集'}), 400
-    threading.Thread(target=_run_xhs_analyze, daemon=True).start()
-    return jsonify({'ok': True})
+    body = request.get_json(silent=True) or {}
+    kws = [k.strip() for k in re.split(r'\n|\|\|', body.get('keywords') or '') if k.strip()]
+    dirs = _xhs_match_dirs(kws)
+    if not dirs:
+        return jsonify({'ok': False,
+                        'error': '这些关键词下还没有笔记 —— 先用同样的关键词采集，或清空关键词分析全部'}), 400
+    threading.Thread(target=_run_xhs_analyze, args=(kws,), daemon=True).start()
+    return jsonify({'ok': True, 'matched': len(dirs)})
 
 
 @app.route('/api/xhs/analyze_status')

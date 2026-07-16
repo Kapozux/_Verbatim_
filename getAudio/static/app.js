@@ -1339,10 +1339,17 @@ function showXhsReport(md) {
 }
 const xhsAnalyzeBtn = document.getElementById('xhs-analyze-btn');
 if (xhsAnalyzeBtn) xhsAnalyzeBtn.addEventListener('click', async () => {
-    if (!confirm('对已采的全部笔记逐篇读图+评论、聚合成报告？按篇数花 Gemini 额度。继续？')) return;
+    const keywords = (document.getElementById('xhs-keywords').value || '').trim();
+    const scopeMsg = keywords
+        ? '只分析上方这些关键词采到的笔记（不会混进别的话题）。'
+        : '⚠ 关键词为空 = 分析【数据集全部笔记】（会把不同话题混一起）。';
+    if (!confirm(scopeMsg + '\n逐篇读图+评论、聚合成报告，按篇数花 Gemini 额度。继续？')) return;
     xhsAnalyzeBtn.disabled = true;
     try {
-        const r = await (await fetch('/api/xhs/analyze', { method: 'POST' })).json();
+        const r = await (await fetch('/api/xhs/analyze', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ keywords }),
+        })).json();
         if (!r.ok) { alert(r.error || '启动失败'); xhsAnalyzeBtn.disabled = false; return; }
         pollXhsAnalyze();
     } catch { alert('启动失败'); xhsAnalyzeBtn.disabled = false; }
