@@ -172,7 +172,10 @@ def _transcribe_single_file(client, filepath, progress_callback=None):
         if progress_callback:
             progress_callback(10)
 
+        _poll_deadline = time.monotonic() + 600      # File API 处理封顶 10 分钟，别永久挂着占信号量
         while uploaded.state.name == "PROCESSING":
+            if time.monotonic() > _poll_deadline:
+                raise RuntimeError("Gemini File API 处理超时（>10 分钟仍在 PROCESSING）")
             time.sleep(2)
             uploaded = client.files.get(name=uploaded.name)
 
@@ -261,6 +264,7 @@ def _get_audio_duration_seconds(filepath):
         check=True,
         capture_output=True,
         text=True,
+        timeout=60,          # 损坏音频不该让 ffprobe 挂死整条转写线程
     )
     return float(result.stdout.strip())
 
@@ -282,6 +286,11 @@ def split_audio_file(filepath, chunk_duration_seconds):
     start = 0
     index = 0
     while start < duration:
+        remaining = duration - start
+        # 尾巴太短(<30s)就并进这一块：几秒的碎块 Gemini 常返空 → 会拖垮整条任务
+        this_len = chunk_duration_seconds
+        if remaining <= chunk_duration_seconds + 30:
+            this_len = remaining + 1        # 最后一块，吃掉全部剩余
         ffmpeg_bin = shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"
         chunk_path = os.path.join(temp_dir, f"chunk_{index:04d}.wav")
         ffmpeg_cmd = [
@@ -292,7 +301,7 @@ def split_audio_file(filepath, chunk_duration_seconds):
             "-ss",
             str(start),
             "-t",
-            str(chunk_duration_seconds),
+            str(this_len),
             "-i",
             filepath,
             "-ac",
@@ -301,9 +310,9 @@ def split_audio_file(filepath, chunk_duration_seconds):
             "16000",
             chunk_path,
         ]
-        subprocess.run(ffmpeg_cmd, check=True, capture_output=True, text=True)
+        subprocess.run(ffmpeg_cmd, check=True, capture_output=True, text=True, timeout=600)
         chunks.append((chunk_path, int(start)))
-        start += chunk_duration_seconds
+        start += this_len
         index += 1
     return chunks, temp_dir
 

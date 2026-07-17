@@ -223,7 +223,9 @@ def _parse_result(data):
 
     first_result = results_list[0]
     if first_result.get('subtask_status') != 'SUCCEEDED':
-        return segments
+        # 子任务失败别静默返空（会显示"成功但转写为空"）——抛出真实原因
+        msg = first_result.get('message') or first_result.get('subtask_status') or '未知原因'
+        raise RuntimeError(f'阿里云子任务失败：{msg}')
 
     transcription_url = first_result.get('transcription_url')
     if not transcription_url:
@@ -237,7 +239,8 @@ def _parse_result(data):
     for transcript in transcripts:
         sentences = transcript.get('sentences', [])
         for sent in sentences:
-            begin_ms = sent.get('begin_time', 0)
+            # begin_time 键可能存在但值为 null → int(... or 0) 兜住，别让 None//1000 崩
+            begin_ms = int(sent.get('begin_time') or 0)
             text = sent.get('text', '').strip()
             if not text:
                 continue

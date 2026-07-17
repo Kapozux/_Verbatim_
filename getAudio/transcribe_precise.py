@@ -12,6 +12,7 @@
 """
 
 import os
+import re
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 
@@ -89,6 +90,26 @@ def _ts_to_seconds(ts):
     return 0
 
 
+_TS_RE = re.compile(r'\[(\d{1,2}:\d{2}(?::\d{2})?)\]')
+
+
+def _window_ts_ok(text, win):
+    """合并输出的时间戳是否落在本窗口时间范围内。
+
+    根因防线：LLM 合并每个窗口时可能把时间轴重置（如第 2 窗输出 [00:00:xx]）或漂移，
+    拼接后整条时间线错乱——这正是历史「精准模式时间戳损坏」的来源。用阿里云稿已知的
+    窗口区间校验；越界过多说明这一窗不可信，退回时间戳准确的说话人稿。
+    """
+    lo = win * MERGE_WINDOW_SECONDS
+    hi = lo + MERGE_WINDOW_SECONDS
+    slack = 90  # 容忍跨窗句子 / 尾句延续
+    tss = [_ts_to_seconds(m) for m in _TS_RE.findall(text)]
+    if not tss:
+        return False
+    good = sum(1 for t in tss if lo - slack <= t <= hi + slack)
+    return good >= len(tss) * 0.6
+
+
 def _speaker_only_text(dashscope_segments):
     """把阿里云说话人稿直接渲染成 [时间] 说话人N：文字（合并失败/无 Gemini 时兜底）。"""
     return "\n".join(
@@ -132,11 +153,12 @@ def merge_speaker_transcript(gemini_segments, dashscope_segments):
                     model=GEMINI_MODEL, contents=[prompt]
                 )
                 text = (resp.text or "").strip()
-                if text:
+                # 时间戳必须落在本窗口范围内，否则视为 LLM 重置/漂移了时间轴
+                if text and _window_ts_ok(text, win):
                     return text
             except Exception:  # noqa: BLE001
                 pass
-            # 合并失败或返空：退回阿里云说话人稿，保住这段内容
+            # 合并失败/返空/时间戳越界：退回阿里云说话人稿（时间戳准确），保住这段内容
             return _speaker_only_text(a)
         if b:  # 这段没有说话人信息
             return _plain_text(b)

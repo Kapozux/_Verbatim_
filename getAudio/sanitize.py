@@ -59,17 +59,25 @@ def _looks_filler(core):
     return all(ch in _FILLER_CHARS for ch in core)
 
 
-# 段内单字死循环：同一字符连打 >= 6 次（Gemini 解码卡死，如「他」×2199）
-_CHAR_LOOP = re.compile(r'(.)\1{5,}')
+# 段内单字死循环：同一字符连打 >= 6 次（Gemini 解码卡死，如「他」×2199）。
+# 排除数字：否则「1000000」(一百万) 会被折成「100」、手机号被折断——那是损毁真实内容。
+_CHAR_LOOP = re.compile(r'([^\d])\1{5,}')
 # 段内短语死循环：同一 2~8 字短语连续重复 >= 4 次（「我再拍一次我再拍一次…」在一段里）
 _PHRASE_LOOP = re.compile(r'(.{2,8}?)\1{3,}')
+
+
+def _fold_phrase(m):
+    g = m.group(1)
+    if g.isdigit():           # 纯数字串（金额/号码/序列）不折叠，保住真实内容
+        return m.group(0)
+    return g * 2
 
 
 def _clean_text(text):
     """剥掉畸形时间戳残片 + 折叠段内死循环（单字连打 / 短语复读）；首尾清一下。"""
     text = _BROKEN_TS_IN_TEXT.sub('', text or '')
-    text = _CHAR_LOOP.sub(lambda m: m.group(1) * 2, text)      # 6+ 连打 → 留 2
-    text = _PHRASE_LOOP.sub(lambda m: m.group(1) * 2, text)    # 短语复读 → 留 2
+    text = _CHAR_LOOP.sub(lambda m: m.group(1) * 2, text)      # 6+ 连打 → 留 2（数字除外）
+    text = _PHRASE_LOOP.sub(_fold_phrase, text)               # 短语复读 → 留 2（纯数字除外）
     return text.strip()
 
 

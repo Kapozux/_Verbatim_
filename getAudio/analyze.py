@@ -100,13 +100,19 @@ def review_transcript(segments, preset=None, window=180):
                         REVIEW_PROMPT.format(body=body), schema=['drop'])
         except Exception:  # noqa: BLE001
             obj = None
+        win_drop = set()
         for r in (obj or {}).get('drop', []) or []:
             try:
                 a, b = int(r[0]), int(r[1])
             except (ValueError, TypeError, IndexError):
                 continue
             for k in range(max(0, a), min(len(chunk), b + 1)):
-                drop.add(base + k)
+                win_drop.add(base + k)
+        # 代码级保险：单窗删除 > 40% 视为模型判乱了，整窗判决作废——
+        # 宁可漏删噪声，绝不误删真内容（模型幻觉可能返回一整窗）
+        if chunk and len(win_drop) > len(chunk) * 0.4:
+            continue
+        drop |= win_drop
     return drop
 
 
@@ -378,9 +384,12 @@ def _external_claims(data):
 def analyze_episode(title, transcript_text, author='该博主', verify=False, preset=None):
     """逐期 → {title, cards, metrics, asr_suspects, markdown}。verify 时附核实脚注。"""
     provider, extract_model, _ = resolve_analysis(preset)
-    data = _extract_cards(title, transcript_text, author, provider, extract_model) or {
-        'cards': [], 'metrics': {}, 'asr_suspects': [],
-    }
+    data = _extract_cards(title, transcript_text, author, provider, extract_model)
+    failed = not isinstance(data, dict)          # 抽取失败要留痕，别洗成"成功但空卡"
+    if failed:
+        data = {'cards': [], 'metrics': {}, 'asr_suspects': []}
+    # 卡片必须是 dict：模型偶发返回字符串数组会让下游 .get 崩
+    data['cards'] = [c for c in (data.get('cards') or []) if isinstance(c, dict)]
     md = _cards_markdown(title, data)
 
     if verify:
@@ -402,6 +411,7 @@ def analyze_episode(title, transcript_text, author='该博主', verify=False, pr
         'metrics': data.get('metrics', {}),
         'asr_suspects': data.get('asr_suspects', []),
         'markdown': md,
+        'extract_failed': failed,
     }
 
 
@@ -479,10 +489,14 @@ def _verify_portrait(portrait, digest, author, provider, extract_model, synth_mo
     if not bad:
         return portrait  # 全成立，不动
 
-    revised = _llm(REVISE_PROMPT.format(
-        portrait=portrait,
-        verdicts=json.dumps(bad, ensure_ascii=False, indent=1),
-    ), provider, synth_model)
+    # REVISE 是裸调用：失败也绝不能把已经算好（已花钱）的画像丢掉——原样返回
+    try:
+        revised = _llm(REVISE_PROMPT.format(
+            portrait=portrait,
+            verdicts=json.dumps(bad, ensure_ascii=False, indent=1),
+        ), provider, synth_model)
+    except Exception:  # noqa: BLE001
+        return portrait
     return revised or portrait
 
 
@@ -517,6 +531,13 @@ def synthesize(episodes, author='该博主', critique_level='analytical',
     episodes = [e for e in episodes if e and e.get('cards') is not None]
     if not episodes:
         raise RuntimeError('没有可综合的证据卡')
+    # 抽取失败的期不能当"成功但沉默"喂进合成，否则模型会拿全零指标凭空编画像
+    failed_n = sum(1 for e in episodes if e.get('extract_failed'))
+    if failed_n >= max(1, len(episodes) * 0.5):
+        raise RuntimeError(
+            f'证据卡抽取失败过半（{failed_n}/{len(episodes)} 期），画像不可信，先查 API key / 限流')
+    if sum(len(e.get('cards') or []) for e in episodes) == 0:
+        raise RuntimeError('所有期都没抽到证据卡，无法合成画像')
     level = critique_level if critique_level in _TONE else 'analytical'
     impression = f'（综合印象的语气基线：{impression_bias}）' if impression_bias else ''
     provider, extract_model, synth_model = resolve_analysis(preset)
