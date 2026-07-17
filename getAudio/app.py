@@ -1056,18 +1056,41 @@ _MAX_CHAIN_VIDEOS = 300  # 防手滑整个频道几千个视频全下下来
 
 # 协作式取消：/stop 往里加 chain_id，运行中的链条在安全点自查并收尾（已完成产物保留）。
 _cancel_chains = set()
-# 单视频重转会从别的线程改 chain.json；读-改-写用它串行化，防并发丢更新。
-_chain_write_lock = threading.Lock()
+# chain.json 的唯一写锁：run_chain、单视频重转、backfill、详情自愈都从这里过，
+# 串行化 + 原子写，防并发交错/丢更新/写一半崩溃损坏文件。可重入（RLock）以便
+# 读-改-写（先持锁读、改、再调 _save_chain 写）不自锁。
+_chain_write_lock = threading.RLock()
 
 
 def _chain_dir(chain_id):
     return os.path.join(CHAINS_DIR, chain_id)
 
 
+def _update_meta(meta_path, updates):
+    """读最新 meta → 合并 → 原子写。避免和 enrich/compress 并发写丢字段（如 stats 覆盖 ai_title）。"""
+    try:
+        with open(meta_path, 'r', encoding='utf-8') as f:
+            m = json.load(f)
+    except Exception:  # noqa: BLE001
+        m = {}
+    m.update(updates)
+    tmp = meta_path + '.tmp'
+    try:
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(m, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, meta_path)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _save_chain(state):
-    with open(os.path.join(_chain_dir(state['id']), 'chain.json'),
-              'w', encoding='utf-8') as f:
-        json.dump(state, f, ensure_ascii=False, indent=2)
+    """原子写 chain.json：临时文件 + os.replace，持全局锁。所有 chain.json 写都走这。"""
+    path = os.path.join(_chain_dir(state['id']), 'chain.json')
+    tmp = path + '.tmp'
+    with _chain_write_lock:
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(state, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
 
 
 _VID_IN_NAME = re.compile(r'\[([A-Za-z0-9_-]{6,20})\]')
@@ -1386,6 +1409,11 @@ def run_chain(state):
             old_tid = v.get('task_id')
             if old_tid:
                 row = taskdb.get(old_tid)
+                # 已在跑/排队的别重投：重启 recover 可能已把它入队，重投会同 task_id 双 worker
+                if (row or {}).get('status') in ('pending', 'running'):
+                    v['status'] = 'transcribing'
+                    save()
+                    return
                 up = (row or {}).get('upload_path') or ''
                 if up and os.path.isfile(up):
                     taskdb.set_status(old_tid, 'pending')
@@ -1569,6 +1597,9 @@ def run_chain(state):
         state['stage'] = 'failed'
         state['error'] = str(e)
     finally:
+        # 早退（开跑即停）不会走到设终态那行 → 兜底，否则永久卡在 transcribing/downloading
+        if state.get('stage') not in ('done', 'failed', 'cancelled'):
+            state['stage'] = 'cancelled' if chain_id in _cancel_chains else 'failed'
         _cancel_chains.discard(chain_id)
         state['finished_at'] = __import__('datetime').datetime.now().strftime(
             '%Y-%m-%d %H:%M:%S')
@@ -1739,11 +1770,13 @@ def _backfill_channel(chain_id, url):
         try:
             with open(cpath, 'r', encoding='utf-8') as f:
                 st = json.load(f)
-            st['followers'] = followers or (channel or {}).get('followers', 0)
-            if not st.get('avatar') and (channel or {}).get('avatar'):
-                st['avatar'] = channel['avatar']
-            with open(cpath, 'w', encoding='utf-8') as f:
-                json.dump(st, f, ensure_ascii=False, indent=2)
+            # 只在链条已终态时回写，避免覆盖 run_chain 内存里正在跑的 state
+            if st.get('stage') in ('done', 'failed', 'cancelled'):
+                st['followers'] = followers or (channel or {}).get('followers', 0)
+                if not st.get('avatar') and (channel or {}).get('avatar'):
+                    st['avatar'] = channel['avatar']
+                st['followers_checked'] = True   # 探过就记住，别每次轮询都重探
+                _save_chain(st)
         except Exception:  # noqa: BLE001
             pass
     _channel_backfilling.discard(chain_id)
@@ -1766,16 +1799,16 @@ def api_chain_detail(chain_id):
                 and _sync_video_with_taskdb(v):
             healed = True
     if healed:
-        with _chain_write_lock:
-            try:
-                with open(cpath, 'w', encoding='utf-8') as f:
-                    json.dump(data, f, ensure_ascii=False, indent=2)
-            except Exception:
-                pass
+        try:
+            _save_chain(data)
+        except Exception:  # noqa: BLE001
+            pass
 
-    # 老链条补频道信息（订阅数/头像）：followers 缺失或为 0（早期 bug 存的）都重探
-    if not data.get('followers') and data.get('url') \
-            and chain_id not in _channel_backfilling:
+    # 老链条补频道信息（订阅数/头像）：只对已终态的链、且没探过的重探一次
+    # （followers_checked 标记防每次轮询重复打网络；running 中的链不碰，交给 run_chain）
+    if not data.get('followers') and not data.get('followers_checked') \
+            and data.get('stage') in ('done', 'failed', 'cancelled') \
+            and data.get('url') and chain_id not in _channel_backfilling:
         _channel_backfilling.add(chain_id)
         threading.Thread(target=_backfill_channel,
                          args=(chain_id, data['url']), daemon=True).start()
@@ -2115,12 +2148,8 @@ def api_stats():
                                 cc += len(s.get('text', '') or '')
                     except Exception:
                         cc = 0
-                meta['char_count'] = cc
-                try:
-                    with open(meta_path, 'w', encoding='utf-8') as f:
-                        json.dump(meta, f, ensure_ascii=False, indent=2)
-                except Exception:
-                    pass
+                # 合并写回：不覆盖 enrich 可能刚写的 ai_title/ai_tags
+                _update_meta(meta_path, {'char_count': cc})
             total_chars += cc
 
             date = (meta.get('date') or '')[:10]

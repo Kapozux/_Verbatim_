@@ -852,7 +852,9 @@ const CHAIN_STAGE_LABELS = {
 
 let chainPollTimer = null;
 
+let chainSubmitting = false;
 chainStartBtn.addEventListener('click', async () => {
+    if (chainSubmitting) return;               // 防连点重复建链（每条都烧钱）
     const url = (chainUrl.value || '').trim();
     if (!url) { chainUrl.focus(); return; }
     // 花钱确认：分析/合成会按视频数调用付费模型
@@ -863,6 +865,7 @@ chainStartBtn.addEventListener('click', async () => {
             return;
         }
     }
+    chainSubmitting = true;
     chainStartBtn.disabled = true;
     try {
         const resp = await fetch('/api/chain', {
@@ -890,6 +893,7 @@ chainStartBtn.addEventListener('click', async () => {
     } catch (err) {
         alert('Failed to start pipeline: ' + err.message);
     } finally {
+        chainSubmitting = false;
         chainStartBtn.disabled = false;
     }
 });
@@ -1751,9 +1755,8 @@ async function loadStats() {
 
 statsToggle.addEventListener('click', (e) => {
     e.stopPropagation();
-    const open = statsPanel.classList.toggle('hidden');
-    if (!open && !statsLoaded) loadStats();      // 首次打开才拉数据
-    if (!open) loadStats();                        // 每次打开刷新
+    const nowHidden = statsPanel.classList.toggle('hidden');
+    if (!nowHidden) loadStats();                   // 变为可见才刷新（一次）
 });
 // 标签语言切换：按钮上显示的是"点了会切到的语言"
 const statsLang = document.getElementById('stats-lang');

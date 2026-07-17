@@ -204,6 +204,7 @@ REVISE_PROMPT = """下面是一份人物画像，和对其中若干论断的**�
 {verdicts}"""
 
 _SYNTH_CHAR_LIMIT = 600_000
+_VERIFY_DIGEST_CHARS = 60_000    # 证伪时每条论断重发的证据上限（控成本，见 _verify_portrait）
 _MAX_ATTEMPTS = 3
 
 # 期数超过这个就走 map-reduce：分批做中间简报再合成，
@@ -477,9 +478,13 @@ def _verify_portrait(portrait, digest, author, provider, extract_model, synth_mo
     if not claims:
         return portrait
 
+    # 成本闸：每条论断都重发整个 digest，25 条 × 60 万字符是 15 倍放大。
+    # 给 skeptic 一份截断的证据（够判断即可，不需全量），砍掉绝大部分重复开销。
+    verify_cards = digest[:_VERIFY_DIGEST_CHARS]
+
     def _skeptic(claim):
         return agent(lambda p: _llm(p, provider, extract_model),
-                     SKEPTIC_PROMPT.format(author=author, claim=claim, cards=digest),
+                     SKEPTIC_PROMPT.format(author=author, claim=claim, cards=verify_cards),
                      schema=['verdict'])
 
     verdicts = fanout(claims, _skeptic, concurrency=_BRIEF_CONCURRENCY)
@@ -500,11 +505,18 @@ def _verify_portrait(portrait, digest, author, provider, extract_model, synth_mo
     return revised or portrait
 
 
+# 各家上下文窗口不同：Gemini ~1M 能吃大 digest；阿里云 DeepSeek/Qwen 多为 128k，
+# 硬塞 600k 字符必然超窗返 400。按 provider 给预算。
+def _digest_budget(provider):
+    return _SYNTH_CHAR_LIMIT if provider == 'gemini' else 180_000
+
+
 def _build_digest(episodes, author, provider, extract_model):
     """把 N 期证据卡压成合成层的输入：少量期直接进卡片；多期走 map-reduce
     分批简报，避免几百期硬塞一个 prompt 被砍。合成和各镜头共用。"""
+    budget = _digest_budget(provider)
     if len(episodes) <= _BATCH_SIZE:
-        return _digest(episodes, _SYNTH_CHAR_LIMIT)
+        return _digest(episodes, budget)
     batches = [episodes[i:i + _BATCH_SIZE]
                for i in range(0, len(episodes), _BATCH_SIZE)]
     briefs = fanout(
@@ -515,8 +527,8 @@ def _build_digest(episodes, author, provider, extract_model):
     briefs = [b for b in briefs if b]
     if briefs:
         return '\n\n---\n\n'.join(
-            f'## 简报 {i + 1}/{len(briefs)}\n{b}' for i, b in enumerate(briefs))
-    return _digest(episodes, _SYNTH_CHAR_LIMIT)  # 全批失败兜底
+            f'## 简报 {i + 1}/{len(briefs)}\n{b}' for i, b in enumerate(briefs))[:budget]
+    return _digest(episodes, budget)  # 全批失败兜底
 
 
 def synthesize(episodes, author='该博主', critique_level='analytical',
