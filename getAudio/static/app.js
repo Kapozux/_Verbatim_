@@ -960,13 +960,13 @@ function renderChains(chains) {
         const err = c.stage === 'failed'
             ? `<div class="chain-error">${(c.error || '').slice(0, 200)}</div>` : '';
         const cur = active && c.current
-            ? `<div class="chain-current">${c.current.slice(0, 60)}</div>` : '';
+            ? `<div class="chain-current">${escapeHtml(c.current.slice(0, 60))}</div>` : '';
         const author = (c.author && c.author !== '该博主') ? c.author : '';
         const initial = (author || c.url.replace(/^https?:\/\/(www\.)?/, '') || '?')
             .slice(0, 1).toUpperCase();
         const avatar = `<span class="chain-avatar">
             <span class="chain-avatar-fallback">${initial}</span>
-            ${c.avatar ? `<img src="${c.avatar}" alt="" onerror="this.style.display='none'">` : ''}
+            ${c.avatar ? `<img src="${escapeHtml(c.avatar)}" alt="" onerror="this.style.display='none'">` : ''}
         </span>`;
         return `<div class="chain-item ${active ? 'chain-active' : ''}"
                 onclick="openChainDetail('${c.id}')" title="点击查看每个视频的进度">
@@ -974,10 +974,10 @@ function renderChains(chains) {
                 ${avatar}
                 <span class="chain-meta">
                     <span class="chain-author-line">
-                        ${author ? `<b class="chain-author">${author}</b>` : ''}
+                        ${author ? `<b class="chain-author">${escapeHtml(author)}</b>` : ''}
                         <span class="chain-stage">${stage}</span>
                     </span>
-                    <span class="chain-url" title="${c.url}">${c.url.slice(0, 64)}</span>
+                    <span class="chain-url" title="${escapeHtml(c.url)}">${escapeHtml(c.url.slice(0, 64))}</span>
                 </span>
                 <span class="chain-links" onclick="event.stopPropagation()">${links}</span>
             </div>
@@ -1081,7 +1081,7 @@ async function refreshChainDetail() {
     // 真头像（取不到/加载失败 → 名字首字的珊瑚章）+ 真数据条
     const ch = (author || c.url || '?').trim().slice(0, 1) || '?';
     const avatarHtml = `<div class="cd-avatar">${ch}${c.avatar
-        ? `<img class="cd-avatar-img" src="${(c.avatar || '').replace(/"/g, '&quot;')}" alt="" onerror="this.remove()">`
+        ? `<img class="cd-avatar-img" src="${escapeHtml(c.avatar || '')}" alt="" onerror="this.remove()">`
         : ''}</div>`;
     const totalViews = vids.reduce((s, v) => s + (v.view_count || 0), 0);
     const stats = [`<div class="cd-stat"><div class="n">${doneN}</div><div class="l">episodes read</div></div>`];
@@ -1094,7 +1094,7 @@ async function refreshChainDetail() {
                 ${avatarHtml}
                 <div class="cd-id">
                     <div class="cd-eyebrow">CREATOR READ · ${doneN} EPISODES</div>
-                    <div class="cd-name">${(author || c.url || 'Creator').replace(/</g, '&lt;').slice(0, 60)}</div>
+                    <div class="cd-name">${escapeHtml((author || c.url || 'Creator').slice(0, 60))}</div>
                     <div class="cd-sub">${CHAIN_STAGE_LABELS[c.stage] || c.stage}${c.finished_at ? ' · ' + c.finished_at : ''}</div>
                 </div>
             </div>
@@ -1110,7 +1110,7 @@ async function refreshChainDetail() {
             <div class="chain-info">
                 ${err}
                 <div class="ci-row"><span class="ci-k">Source</span>
-                    <span class="ci-v"><a href="${(c.url || '').replace(/"/g, '&quot;')}" target="_blank" rel="noopener">${(c.url || '').replace(/</g, '&lt;').slice(0, 80)}</a></span></div>
+                    <span class="ci-v"><a href="${safeUrl(c.url)}" target="_blank" rel="noopener">${escapeHtml((c.url || '').slice(0, 80))}</a></span></div>
                 <div class="ci-row"><span class="ci-k">Settings</span>
                     <span class="ci-v">engine <b>${c.engine || '-'}</b> · analyze <b>${onoff(c.analyze)}</b>
                     · brain <b>${c.analysis_preset || 'gemini'}</b> · level <b>${c.critique_level || 'analytical'}</b>
@@ -1145,7 +1145,7 @@ async function refreshChainDetail() {
         return `<div class="vg-card ${clickable ? 'vg-clickable' : ''}"${onclick}>
             <div class="vg-thumb-wrap">${thumb}${overlay}</div>
             <div class="vg-badge ${st.cls}">${st.label}${engBadge}</div>
-            <div class="vg-title" title="${(v.title || '').replace(/"/g, '&quot;')}">${v.title || ''}</div>
+            <div class="vg-title" title="${escapeHtml(v.title || '')}">${escapeHtml(v.title || '')}</div>
         </div>`;
     }).join('') || '<p class="history-empty">Resolving episode list…</p>';
 
@@ -1404,19 +1404,19 @@ async function renderCreators() {
         if (empty) empty.classList.add('hidden');
         grid.innerHTML = done.map(c => {
             const author = (c.author && c.author !== '该博主') ? c.author : (c.url || 'Creator');
-            const safe = author.replace(/"/g, '&quot;');
+            const safe = escapeHtml(author);
             const vids = c.videos || [];
             // 优先真头像，退回视频封面
             const img = c.avatar || (vids.find(v => v.thumbnail) || {}).thumbnail || '';
             const nEp = vids.filter(v => v.status === 'done').length || vids.length;
             const brain = c.analysis_preset || 'gemini';
             const ts = img
-                ? `<div class="creator-thumb" style="background-image:url('${img.replace(/'/g, '')}')"></div>`
+                ? `<div class="creator-thumb" style="background-image:url('${escapeHtml(img).replace(/[()'"\\]/g, '')}')"></div>`
                 : `<div class="creator-thumb creator-noimg">▷</div>`;
             return `<div class="creator-card" onclick="openChainDetail('${c.id}')" title="${safe}">
                 ${ts}
                 <div class="creator-body">
-                    <div class="creator-name">${author.slice(0, 60)}</div>
+                    <div class="creator-name">${escapeHtml(author.slice(0, 60))}</div>
                     <div class="creator-meta">${nEp} eps · brain ${brain}</div>
                 </div></div>`;
         }).join('');
@@ -1574,8 +1574,15 @@ if (docDownloadBtn) docDownloadBtn.addEventListener('click', () => {
 
 // ========== 轻量 Markdown 渲染（无外部依赖） ==========
 function escapeHtml(s) {
-    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;');
+    // & < > 以及引号都转义，这样对「文本」和「属性值」两种上下文都安全
+    return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+// 只放行安全协议的 URL，挡住 javascript:/data: 等注入
+function safeUrl(u) {
+    const s = String(u || '').trim();
+    return /^(https?:|mailto:|\/|#)/i.test(s) ? s : '#';
 }
 
 function renderInline(s) {
@@ -1584,8 +1591,8 @@ function renderInline(s) {
     s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
     s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
     s = s.replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
-    s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g,
-        '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (m, txt, url) =>
+        `<a href="${safeUrl(url)}" target="_blank" rel="noopener">${txt}</a>`);
     return s;
 }
 
@@ -1684,7 +1691,7 @@ function renderStatsTags() {
     el.innerHTML = statsTags.map(t => {
         const label = statsTagLang === 'en' ? (t.tag_en || t.tag) : t.tag;
         return `<div class="stat-tag">
-            <span class="stat-tag-name" title="${label}">${label}</span>
+            <span class="stat-tag-name" title="${escapeHtml(label)}">${escapeHtml(label)}</span>
             <span class="stat-tag-bar"><i style="width:${Math.max(6, t.count / max * 100)}%"></i></span>
             <span class="stat-tag-num">${t.count}</span>
         </div>`;

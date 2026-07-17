@@ -16,6 +16,12 @@ settings.local.json
 .claude/
 .DS_Store
 
+# 小红书采集：登录态 Chrome profile（含 cookie）+ 抓取数据，绝不入仓
+xhs_user_data/
+xhs_dataset/
+xhs_*.csv
+bilibili_*.csv
+
 # 内容产物（体积大 / 涉及具体人物，不入公开仓库）
 getAudio/立党_观点分析/
 getAudio/立党_转写文本/

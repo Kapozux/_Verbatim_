@@ -103,14 +103,16 @@ DASHSCOPE_ASR_MODEL = 'paraformer-v2'
 DASHSCOPE_LLM_MODEL = 'qwen-plus'
 
 
-def make_gemini_client(api_key, timeout_ms=600_000):
+def make_gemini_client(api_key, timeout_ms=600_000, base_url=None):
     """统一构造 Gemini 客户端：带超时 + 可选自定义 base_url。
 
-    base_url 取自环境变量 GEMINI_BASE_URL（Settings 里可填），给国内用户挂代理用；
-    留空则直连官方。老 SDK 不支持 HttpOptions 时回退到最简构造。
+    base_url 显式传入优先；否则取环境变量 GEMINI_BASE_URL（Settings 里可填），
+    给国内用户挂代理用；留空则直连官方。显式传入避免测试时改动全局 env 污染并发调用。
+    老 SDK 不支持 HttpOptions 时回退到最简构造。
     """
     from google import genai
-    base = (os.environ.get('GEMINI_BASE_URL') or '').strip() or None
+    base = ((base_url if base_url is not None else os.environ.get('GEMINI_BASE_URL'))
+            or '').strip() or None
     try:
         from google.genai import types
         return genai.Client(

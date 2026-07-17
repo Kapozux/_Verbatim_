@@ -4,6 +4,7 @@ Supports Whisper (local) and Gemini (cloud) engines with SSE progress streaming.
 Persists results (audio + transcript + summary) to disk for history playback.
 """
 
+import hmac
 import json
 import os
 import queue
@@ -101,9 +102,10 @@ def _check_auth():
         or request.args.get('token')
         or request.headers.get('Authorization', '').replace('Bearer ', '', 1).strip()
     )
-    if supplied == config.AUTH_TOKEN:
+    # 常量时间比较，避免定时侧信道
+    if supplied and hmac.compare_digest(str(supplied), str(config.AUTH_TOKEN)):
         return None
-    return jsonify({'error': 'unauthorized：请在 URL 加 ?token=你的令牌'}), 401
+    return jsonify({'error': 'Unauthorized — append ?token=YOUR_TOKEN to the URL, or send an Authorization: Bearer header.'}), 401
 
 
 @app.after_request
@@ -2231,27 +2233,22 @@ def api_settings_test():
     engine = body.get('engine')
 
     if engine == 'gemini':
-        key = (body.get('gemini_key') or '').strip() or os.environ.get('GEMINI_API_KEY', '')
+        key_in = (body.get('gemini_key') or '').strip()
         base = (body.get('gemini_base_url') or '').strip()
+        # 防外泄：自定义 base_url 必须自带 key。绝不拿已保存的真实 key 去打请求体指定的任意 URL。
+        if base and not key_in:
+            return jsonify({'ok': False,
+                            'reason': 'A custom base URL must come with its own key — the saved key is never sent to a custom endpoint.'})
+        key = key_in or os.environ.get('GEMINI_API_KEY', '')
         if not key:
             return jsonify({'ok': False, 'reason': 'No key entered or saved yet.'})
-        # 临时用传入的 base URL 测（不改动已保存设置）
-        prev = os.environ.get('GEMINI_BASE_URL')
-        if base:
-            os.environ['GEMINI_BASE_URL'] = base
-        elif 'gemini_base_url' in body:
-            os.environ.pop('GEMINI_BASE_URL', None)
         try:
-            client = config.make_gemini_client(key, timeout_ms=30_000)
+            # base_url 显式传参，不改全局 env（否则会污染并发中的转写客户端）
+            client = config.make_gemini_client(key, timeout_ms=30_000, base_url=base or None)
             next(iter(client.models.list()), None)
             return jsonify({'ok': True, 'reason': 'Works — key accepted.'})
         except Exception as e:
             return jsonify({'ok': False, 'reason': _diagnose_gemini_error(e)})
-        finally:
-            if prev is None:
-                os.environ.pop('GEMINI_BASE_URL', None)
-            else:
-                os.environ['GEMINI_BASE_URL'] = prev
 
     if engine == 'dashscope':
         key = (body.get('dashscope_key') or '').strip() or os.environ.get('DASHSCOPE_API_KEY', '')
@@ -2519,9 +2516,11 @@ def api_xhs_report():
 
 
 if __name__ == '__main__':
-    # 生产（Docker/公网）用 FLASK_DEBUG=0 关掉调试器（debug=True 的 Werkzeug 调试器
-    # 在公网上等于 RCE 漏洞）。本地默认开 debug（热重载方便）。
-    debug = os.environ.get('FLASK_DEBUG', '1') == '1'
+    # 调试器默认关（debug=True 的 Werkzeug 调试器在公网上等于 RCE）。
+    # 本地想要热重载显式 FLASK_DEBUG=1。另：HOST 非 127.0.0.1（对外暴露）时强制关 debug，
+    # 防"改了 HOST 忘了关 debug"这类致命配置疏漏。
+    _host = os.environ.get('HOST', '127.0.0.1')
+    debug = os.environ.get('FLASK_DEBUG', '0') == '1' and _host in ('127.0.0.1', 'localhost')
     # 恢复未完成任务只在"真正服务的进程"里跑一次：
     # debug 模式有 reloader 父/子两进程，只在子进程（WERKZEUG_RUN_MAIN）跑；
     # 非 debug 只有一个进程，直接跑。
@@ -2529,6 +2528,5 @@ if __name__ == '__main__':
         recover_unfinished_tasks()
         recover_unfinished_chains()
     # HOST 默认 127.0.0.1（本地只对自己开）；Docker 里设 HOST=0.0.0.0 对外暴露。
-    app.run(debug=debug, threaded=True,
-            host=os.environ.get('HOST', '127.0.0.1'),
+    app.run(debug=debug, threaded=True, host=_host,
             port=int(os.environ.get('PORT', 5001)))
