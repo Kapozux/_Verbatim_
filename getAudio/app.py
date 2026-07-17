@@ -1834,7 +1834,7 @@ def api_chain_reanalyze(chain_id):
     with open(cpath, 'r', encoding='utf-8') as f:
         state = json.load(f)
     if state.get('stage') in ('downloading', 'transcribing', 'analyzing', 'synthesizing'):
-        return jsonify({'ok': False, 'error': '这条链还在跑，等它结束再重分析'}), 409
+        return jsonify({'ok': False, 'error': 'This pipeline is still running — wait for it to finish before re-analyzing'}), 409
 
     body = request.get_json(silent=True) or {}
     state['verify'] = bool(body.get('verify', False))
@@ -1892,7 +1892,7 @@ def api_chain_lens(chain_id):
         state = json.load(f)
     eps = _load_chain_cards(chain_id)
     if not eps:
-        return jsonify({'error': '这条链还没有证据卡，先跑一次分析'}), 400
+        return jsonify({'error': 'No evidence cards yet — run analysis once first'}), 400
 
     def _run():
         try:
@@ -1946,7 +1946,7 @@ def api_chain_retry(chain_id):
     with open(cpath, 'r', encoding='utf-8') as f:
         state = json.load(f)
     if state.get('stage') not in ('done', 'failed', 'cancelled'):
-        return jsonify({'ok': False, 'error': '这条链还在跑'}), 409
+        return jsonify({'ok': False, 'error': 'This pipeline is still running'}), 409
     body = request.get_json(silent=True) or {}
     if body.get('engine'):
         state['engine'] = body['engine']
@@ -2037,7 +2037,7 @@ def api_chain_retranscribe(chain_id, index):
     with open(cpath, 'r', encoding='utf-8') as f:
         state = json.load(f)
     if state.get('stage') not in ('done', 'failed', 'cancelled'):
-        return jsonify({'ok': False, 'error': '等这条链整体跑完再单独重转'}), 409
+        return jsonify({'ok': False, 'error': 'Wait for the whole pipeline to finish before re-transcribing a single video'}), 409
     vids = state.get('videos') or []
     if not (0 <= index < len(vids)):
         return jsonify({'error': 'bad index'}), 400
@@ -2429,7 +2429,7 @@ def _run_xhs(keywords, max_notes, max_comments):
 def api_xhs_scrape():
     """填关键词 + 数量 → 后台起 uv 子进程采集。会弹出有头浏览器（首次要扫码）。"""
     if _xhs_job['running']:
-        return jsonify({'ok': False, 'error': '已有采集在跑，等它结束'}), 409
+        return jsonify({'ok': False, 'error': 'A scrape is already running — wait for it to finish'}), 409
     if not os.path.isfile(_XHS_SCRIPT):
         return jsonify({'ok': False, 'error': f'找不到爬虫脚本：{_XHS_SCRIPT}'}), 500
     body = request.get_json(silent=True) or {}
@@ -2515,7 +2515,7 @@ def _run_xhs_analyze(keywords, lang='auto'):
 @app.route('/api/xhs/analyze', methods=['POST'])
 def api_xhs_analyze():
     if _xhs_an['running']:
-        return jsonify({'ok': False, 'error': '分析进行中'}), 409
+        return jsonify({'ok': False, 'error': 'Analysis in progress'}), 409
     body = request.get_json(silent=True) or {}
     kws = [k.strip() for k in re.split(r'\n|\|\|', body.get('keywords') or '') if k.strip()]
     dirs = _xhs_match_dirs(kws)

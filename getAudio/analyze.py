@@ -699,10 +699,11 @@ def _call_gemini_mm(prompt, image_paths, model=None):
                 text = (resp.text or '').strip()
                 if text:
                     return text
+                last_err = last_err or RuntimeError('空响应（可能被内容过滤或读图失败）')
             except Exception as e:  # noqa: BLE001
                 last_err = e
-                if attempt < _MAX_ATTEMPTS:
-                    time.sleep(2 * attempt)
+            if attempt < _MAX_ATTEMPTS:      # 空响应也退避重试，别零间隔连打
+                time.sleep(2 * attempt)
     raise RuntimeError(f'Gemini 多模态调用失败：{last_err}')
 
 
