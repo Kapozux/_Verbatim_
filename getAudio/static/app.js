@@ -1289,13 +1289,24 @@ async function pollXhs() {
     if (!s.running && !s.log?.length) { box.classList.add('hidden'); return; }
     box.classList.remove('hidden');
     const dot = s.running ? '<span class="xhs-live">● Scraping</span>' : '<span class="xhs-done">✓ Stopped</span>';
+    const stopBtn = s.running ? '<button class="lens-btn" onclick="stopXhs()">■ Stop</button>' : '';
     box.innerHTML = `
         <div class="xhs-head">${dot}
-            <span>scraped <b>${s.scraped}</b> this run · ${s.total} in dataset${s.kw ? ' · ' + s.kw.replace(/</g, '&lt;') : ''}</span></div>
-        <pre class="xhs-log">${(s.log || []).map(l => l.replace(/</g, '&lt;')).join('\n')}</pre>`;
+            <span>scraped <b>${s.scraped}</b> this run · ${s.total} in dataset${s.kw ? ' · ' + escapeHtml(s.kw) : ''}</span>
+            ${stopBtn}</div>
+        <pre class="xhs-log">${(s.log || []).map(l => escapeHtml(l)).join('\n')}</pre>`;
     const startBtn = document.getElementById('xhs-start');
     if (startBtn) startBtn.disabled = s.running;
     if (s.running && !document.hidden) xhsTimer = setTimeout(pollXhs, 3000);
+}
+
+async function stopXhs() {
+    if (!confirm('Stop the scrape? Notes already saved are kept — only the rest is skipped.')) return;
+    try {
+        const r = await (await fetch('/api/xhs/stop', { method: 'POST' })).json();
+        if (!r.ok) alert(r.error || 'Could not stop');
+    } catch { alert('Could not stop'); }
+    setTimeout(pollXhs, 500);
 }
 
 // —— 分析：逐篇读图+评论 → 聚合报告 ——

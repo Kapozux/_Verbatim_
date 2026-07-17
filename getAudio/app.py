@@ -8,6 +8,7 @@ import hmac
 import json
 import os
 import queue
+import signal
 import re
 import shutil
 import subprocess
@@ -2389,7 +2390,8 @@ _XHS_PROJECT = os.environ.get('XHS_PROJECT') or '/Users/kapozux/Documents/XHS-Do
 _XHS_ROOT = os.environ.get('XHS_ROOT') or '/Users/kapozux/Documents/CODEelse'
 _XHS_SCRIPT = os.path.join(_XHS_ROOT, 'xhs_pipeline.py')
 _XHS_NOTES = os.path.join(_XHS_ROOT, 'xhs_dataset', 'notes')
-_xhs_job = {'running': False, 'log': [], 'started': None, 'base': 0, 'kw': ''}
+_xhs_job = {'running': False, 'log': [], 'started': None, 'base': 0, 'kw': '',
+            'proc': None, 'stopping': False}
 
 
 def _xhs_notes_count():
@@ -2406,23 +2408,44 @@ def _run_xhs(keywords, max_notes, max_comments):
                PYTHONUNBUFFERED='1')          # 让脚本的 print 实时流出来（否则管道缓冲，看着像卡死）
     env.pop('VIRTUAL_ENV', None)               # 别把 Verbatim 的 3.9 venv 传给 uv/3.12（那条 warning 的根源）
     env.pop('PYTHONHOME', None)
-    _xhs_job.update(running=True, log=[], base=_xhs_notes_count())
+    _xhs_job.update(running=True, log=[], base=_xhs_notes_count(),
+                    proc=None, stopping=False)
     try:
         proc = subprocess.Popen(
             [_XHS_UV, 'run', '--project', _XHS_PROJECT, 'python', _XHS_SCRIPT],
             cwd=_XHS_ROOT, env=env,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, bufsize=1,
+            start_new_session=True,   # 独立进程组：停止时可整组杀，且绝不误伤 Flask
         )
+        _xhs_job['proc'] = proc
         for line in proc.stdout:
             _xhs_job['log'].append(line.rstrip()[:200])
             del _xhs_job['log'][:-60]          # 只留最后 60 行
         proc.wait()
-        _xhs_job['log'].append(f'[完成] 退出码 {proc.returncode}')
+        tail = '[已停止]' if _xhs_job.get('stopping') else f'[完成] 退出码 {proc.returncode}'
+        _xhs_job['log'].append(tail)
     except Exception as e:  # noqa: BLE001
         _xhs_job['log'].append(f'[错误] {e}')
     finally:
         _xhs_job['running'] = False
+        _xhs_job['proc'] = None
+
+
+def _stop_xhs():
+    """停止采集：给子进程整组发信号（含 chromium）。已采的每篇都已落盘，不会丢。"""
+    proc = _xhs_job.get('proc')
+    if not proc or proc.poll() is not None:
+        return False
+    _xhs_job['stopping'] = True
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)   # 整组:python + playwright chromium
+    except Exception:  # noqa: BLE001
+        try:
+            proc.terminate()
+        except Exception:  # noqa: BLE001
+            return False
+    return True
 
 
 @app.route('/api/xhs/scrape', methods=['POST'])
@@ -2445,6 +2468,15 @@ def api_xhs_scrape():
     _xhs_job['kw'] = kws.replace('\n', ' / ')[:120]
     threading.Thread(target=_run_xhs, args=(kws, mn, mc), daemon=True).start()
     return jsonify({'ok': True})
+
+
+@app.route('/api/xhs/stop', methods=['POST'])
+def api_xhs_stop():
+    """停止正在跑的采集。已采的每篇都已落盘，不会丢。"""
+    if not _xhs_job['running']:
+        return jsonify({'ok': False, 'error': 'No scrape is running'}), 400
+    ok = _stop_xhs()
+    return jsonify({'ok': ok, 'error': None if ok else 'Could not signal the process'})
 
 
 @app.route('/api/xhs/status')
