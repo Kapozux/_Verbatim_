@@ -667,6 +667,36 @@ def _enqueue_task(file, engine, speaker_count=None):
     return task_id, None
 
 
+def _resolve_local_path(raw):
+    """把用户粘进来的路径规整成真实路径。
+
+    从访达「拷贝为路径名称」或拖进终端拿到的路径，空格/括号等会被转义成 `\\ `，
+    整条也可能被引号包起来。逐个候选去试，返回第一个真实存在的。
+    """
+    raw = (raw or '').strip()
+    cands, seen = [], set()
+
+    def add(p):
+        p = os.path.expanduser(p)
+        if p and p not in seen:
+            seen.add(p)
+            cands.append(p)
+
+    add(raw)
+    # 去掉成对引号
+    if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "'\"":
+        add(raw[1:-1])
+    # 拆 shell 转义反斜杠：`\ ` → ` `、`\(` → `(` 等
+    add(re.sub(r'\\(.)', r'\1', raw))
+    if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "'\"":
+        add(re.sub(r'\\(.)', r'\1', raw[1:-1]))
+
+    for c in cands:
+        if os.path.isfile(c):
+            return c
+    return cands[0] if cands else raw
+
+
 def _enqueue_local_task(path, engine, speaker_count=None):
     """用本机已有文件建任务：软链进 uploads/（零拷贝、零上传），把软链喂给流水线。
 
@@ -674,9 +704,9 @@ def _enqueue_local_task(path, engine, speaker_count=None):
     （提取音频写的是新文件、保存结果用 copy2 读取，都不改原件）。
     返回 (task_id, None) 或 (None, error)。
     """
-    path = os.path.expanduser((path or '').strip())
-    if not path:
+    if not (path or '').strip():
         return None, 'Enter a file path'
+    path = _resolve_local_path(path)
     if not os.path.isfile(path):
         return None, f'File not found: {path}'
     if not allowed_file(path):
