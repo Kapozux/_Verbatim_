@@ -103,6 +103,17 @@
                     </button>
                 </form>
 
+                <details class="local-path">
+                    <summary>Or: transcribe a file already on this Mac — no upload ▾</summary>
+                    <p class="local-hint">Best for long videos. Verbatim reads the file in place (extracts audio locally),
+                        so nothing large is uploaded. Uses the engine selected above. Your original file is never moved or deleted.</p>
+                    <div class="local-row">
+                        <input type="text" id="local-path" class="search-input"
+                               placeholder="/Users/you/Movies/lecture.mp4  ·  paste a full path">
+                        <button type="button" id="local-go" class="btn-primary">Transcribe local file</button>
+                    </div>
+                </details>
+
                 <div id="batch-section" class="hidden">
                     <div class="batch-header">
                         <h2>Queue</h2>

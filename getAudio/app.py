@@ -667,6 +667,40 @@ def _enqueue_task(file, engine, speaker_count=None):
     return task_id, None
 
 
+def _enqueue_local_task(path, engine, speaker_count=None):
+    """用本机已有文件建任务：软链进 uploads/（零拷贝、零上传），把软链喂给流水线。
+
+    关键安全点：流水线结束会 os.remove(输入) —— 删的是软链，**绝不动你的原文件**
+    （提取音频写的是新文件、保存结果用 copy2 读取，都不改原件）。
+    返回 (task_id, None) 或 (None, error)。
+    """
+    path = os.path.expanduser((path or '').strip())
+    if not path:
+        return None, 'Enter a file path'
+    if not os.path.isfile(path):
+        return None, f'File not found: {path}'
+    if not allowed_file(path):
+        return None, f'Unsupported format. Allowed: {", ".join(sorted(config.ALLOWED_EXTENSIONS))}'
+
+    task_id = str(uuid.uuid4())
+    ext = path.rsplit('.', 1)[1].lower() if '.' in path else 'mp3'
+    link = os.path.join(config.UPLOAD_FOLDER, f"{task_id}.{ext}")
+    try:
+        os.symlink(os.path.abspath(path), link)
+    except OSError as e:
+        return None, f'Could not link the file: {e}'
+
+    display = os.path.basename(path)
+    taskdb.create(task_id, display, engine, speaker_count, link)
+    q = queue.Queue()
+    tasks[task_id] = q
+    executor.submit(
+        run_transcription, task_id, link, engine, display, q,
+        speaker_count, False, engine != 'whisper',
+    )
+    return task_id, None
+
+
 def recover_unfinished_tasks():
     """启动时找回上次没跑完的任务：源文件还在就重新入队，不在就标记失败。
 
@@ -723,6 +757,18 @@ def upload():
     if error:
         return jsonify({'error': error}), 400
 
+    return jsonify({'task_id': task_id})
+
+
+@app.route('/api/transcribe_local', methods=['POST'])
+def api_transcribe_local():
+    """本地文件直采：给个本机路径，零上传（软链，不拷贝、不删原件）。适合大视频。"""
+    body = request.get_json(silent=True) or {}
+    task_id, error = _enqueue_local_task(
+        body.get('path'), body.get('engine', 'whisper'),
+        _parse_speaker_count(body.get('speaker_count')))
+    if error:
+        return jsonify({'error': error}), 400
     return jsonify({'task_id': task_id})
 
 

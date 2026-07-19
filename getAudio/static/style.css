@@ -405,6 +405,14 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   font-size: 12px; line-height: 1.6; color: var(--ink-soft); white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+.local-path { margin-top: 14px; border: 1px solid var(--line); border-radius: var(--r-lg); padding: 4px 16px; background: var(--card); }
+.local-path summary { cursor: pointer; font-size: 13.5px; color: var(--ink-soft); padding: 10px 0; list-style: none; }
+.local-path summary::-webkit-details-marker { display: none; }
+.local-path[open] summary { color: var(--ink); font-weight: 550; }
+.local-hint { font-size: 12.5px; color: var(--ink-faint); margin: 2px 0 12px; line-height: 1.5; }
+.local-row { display: flex; gap: 10px; padding-bottom: 14px; flex-wrap: wrap; }
+.local-row #local-path { flex: 1; min-width: 240px; font-family: var(--mono); font-size: 12.5px; }
+.local-row #local-go { white-space: nowrap; }
 #xhs-keywords { resize: vertical; min-height: 84px; line-height: 1.6; }
 .xhs-analyze-card {
   background: var(--card); border: 1px solid var(--line); border-radius: var(--r-lg);

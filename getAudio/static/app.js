@@ -214,6 +214,47 @@ async function runUploadPool(jobs, engine, concurrency) {
     await Promise.all(workers);
 }
 
+// —— 本地文件直采：给个本机路径，服务器软链读盘，零上传 ——
+const localGoBtn = document.getElementById('local-go');
+if (localGoBtn) localGoBtn.addEventListener('click', async () => {
+    const pathEl = document.getElementById('local-path');
+    const path = (pathEl.value || '').trim();
+    if (!path) { pathEl.focus(); return; }
+    const engine = document.querySelector('input[name="engine"]:checked').value;
+    const body = { path, engine };
+    const speakerEl = document.getElementById('speaker-count');
+    if (engine === 'precise' && speakerEl && speakerEl.value.trim()) {
+        body.speaker_count = speakerEl.value.trim();
+    }
+    errorSection.classList.add('hidden');
+    batchSection.classList.remove('hidden');
+    batchList.innerHTML = '';
+    batchTotal = 1; batchFinished = 0; updateBatchProgress();
+
+    const row = createBatchRow(path.split('/').pop() || path);
+    setRowStatus(row, 'Reading local file…', 'running');
+    batchList.appendChild(row);
+    localGoBtn.disabled = true;
+    try {
+        const resp = await fetch('/api/transcribe_local', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok || data.error) {
+            setRowStatus(row, data.error || `Failed (${resp.status})`, 'error');
+            onTaskFinished();
+        } else {
+            connectBatchSSE(data.task_id, row);
+        }
+    } catch (err) {
+        setRowStatus(row, `Failed: ${err.message}`, 'error');
+        onTaskFinished();
+    } finally {
+        localGoBtn.disabled = false;
+    }
+});
+
 async function uploadOne(file, row, engine) {
     setRowStatus(row, 'Uploading…', 'running');
 
