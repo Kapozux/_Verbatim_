@@ -220,7 +220,7 @@ if (localGoBtn) localGoBtn.addEventListener('click', async () => {
     const pathEl = document.getElementById('local-path');
     const path = (pathEl.value || '').trim();
     if (!path) { pathEl.focus(); return; }
-    const engine = document.querySelector('input[name="engine"]:checked').value;
+    const engine = (document.getElementById('local-engine') || {}).value || 'gemini';
     const body = { path, engine };
     const speakerEl = document.getElementById('speaker-count');
     if (engine === 'precise' && speakerEl && speakerEl.value.trim()) {
