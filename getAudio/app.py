@@ -201,13 +201,32 @@ def extract_audio_from_video(video_path, output_path):
     if not os.path.exists(ffmpeg_bin):
         raise RuntimeError('未检测到 ffmpeg，无法从视频中提取音频')
 
+    # 先看有没有音轨——屏幕录制经常没录声音，直接给清楚的原因，别让 ffmpeg 报一句晦涩的
+    ffprobe_bin = os.path.join(os.path.dirname(ffmpeg_bin), 'ffprobe')
+    if os.path.exists(ffprobe_bin):
+        try:
+            pr = subprocess.run(
+                [ffprobe_bin, '-v', 'error', '-select_streams', 'a',
+                 '-show_entries', 'stream=codec_type', '-of', 'csv=p=0', video_path],
+                capture_output=True, text=True, timeout=60)
+            if pr.returncode == 0 and 'audio' not in (pr.stdout or ''):
+                raise RuntimeError('这个视频没有音轨（没有声音），没有可转写的内容——'
+                                   '屏幕录制很常见这种情况。')
+        except subprocess.TimeoutExpired:
+            pass
+
     cmd = [
         ffmpeg_bin, '-y', '-v', 'error',
         '-i', video_path,
         '-vn', '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le',
         output_path,
     ]
-    subprocess.run(cmd, check=True, capture_output=True, text=True)
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+    if r.returncode != 0:
+        # 把 ffmpeg 真正的报错（stderr 末几行）带出来，别只显示一句命令
+        lines = [ln for ln in (r.stderr or '').strip().splitlines() if ln.strip()]
+        reason = ' / '.join(lines[-3:])[:300] if lines else f'exit code {r.returncode}'
+        raise RuntimeError(f'ffmpeg 提取音频失败：{reason}')
     return output_path
 
 
