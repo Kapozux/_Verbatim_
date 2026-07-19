@@ -6,7 +6,10 @@ load_dotenv()
 # Flask
 UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), 'uploads')
 RESULTS_FOLDER = os.path.join(os.path.dirname(__file__), 'results')
-MAX_CONTENT_LENGTH = 500 * 1024 * 1024  # 500 MB max upload
+# 上传上限：视频（尤其 1080p 一小时）常轻松超过 500MB，之前会被 413 顶掉。
+# 默认 4GB，可用 MAX_UPLOAD_MB 环境变量调。本地单用户，放宽无碍。
+MAX_UPLOAD_MB = int(os.environ.get('MAX_UPLOAD_MB', '4096'))
+MAX_CONTENT_LENGTH = MAX_UPLOAD_MB * 1024 * 1024
 AUDIO_EXTENSIONS = {'mp3', 'wav', 'flac', 'm4a', 'ogg', 'webm'}
 VIDEO_EXTENSIONS = {'mp4', 'mov', 'mkv', 'avi', 'm4v'}
 ALLOWED_EXTENSIONS = AUDIO_EXTENSIONS | VIDEO_EXTENSIONS

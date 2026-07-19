@@ -34,6 +34,17 @@ app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = config.UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = config.MAX_CONTENT_LENGTH
 
+
+@app.errorhandler(413)
+def _too_large(_e):
+    # 超过上限时给清楚的 JSON 原因，别让前端只看到通用 "Upload failed (413)"
+    return jsonify({
+        'error': f'File exceeds the {config.MAX_UPLOAD_MB} MB upload limit. '
+                 f'For a long video, extract the audio first (much smaller) and upload that, '
+                 f'or raise MAX_UPLOAD_MB.'
+    }), 413
+
+
 os.makedirs(config.UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(config.RESULTS_FOLDER, exist_ok=True)
 
