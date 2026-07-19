@@ -730,6 +730,18 @@ def _enqueue_local_task(path, engine, speaker_count=None):
         return None, f'File not found: {path}'
     if not allowed_file(path):
         return None, f'Unsupported format. Allowed: {", ".join(sorted(config.ALLOWED_EXTENSIONS))}'
+    # macOS 会挡住进程读 Downloads/Desktop 这类隐私目录（TCC）——趁早给清楚的原因，
+    # 别等 ffmpeg 报一句 "Operation not permitted"
+    try:
+        with open(path, 'rb') as _fh:
+            _fh.read(1)
+    except PermissionError:
+        return None, ('macOS is blocking access to this folder (Downloads and Desktop are '
+                      'privacy-protected). Move the file into Documents or a plain folder '
+                      'under your home, or grant Full Disk Access to whatever launches '
+                      'Verbatim in System Settings → Privacy & Security.')
+    except OSError as e:
+        return None, f'Cannot read the file: {e}'
 
     task_id = str(uuid.uuid4())
     ext = path.rsplit('.', 1)[1].lower() if '.' in path else 'mp3'
