@@ -833,6 +833,48 @@ def api_transcribe_local():
     return jsonify({'task_id': task_id})
 
 
+def _download_then_transcribe(task_id, url, engine, q):
+    """单个视频链接：先下音频，再走正常转写任务（进 Library，和上传的稿一样）。"""
+    from downloader import download_one
+    dl_dir = os.path.join(config.UPLOAD_FOLDER, f'url_{task_id}')
+    try:
+        q.put(json.dumps({'type': 'progress', 'percent': 1, 'message': 'Downloading audio…'}))
+        item = download_one({'video_url': url}, dl_dir)
+        if not item or not item.get('path') or not os.path.isfile(item['path']):
+            taskdb.set_status(task_id, 'failed',
+                              error='Download failed — bad link, private/removed video, or geo-blocked.')
+            q.put(json.dumps({'type': 'error', 'message': 'Download failed — check the link.'}))
+            return
+        title = item.get('title') or url
+        # 复用正常转写链路：落 results/、taskdb done、SSE 推进度，全和上传一致
+        run_transcription(task_id, item['path'], engine, title, q,
+                          None, False, engine != 'whisper')
+    except Exception as e:  # noqa: BLE001
+        taskdb.set_status(task_id, 'failed', error=str(e)[:300])
+        q.put(json.dumps({'type': 'error', 'message': str(e)[:200]}))
+    finally:
+        shutil.rmtree(dl_dir, ignore_errors=True)
+
+
+@app.route('/api/transcribe_urls', methods=['POST'])
+def api_transcribe_urls():
+    """获取视频内容：贴一个或多个视频链接 → 各自下载+转写，成独立的 Library 任务。"""
+    body = request.get_json(silent=True) or {}
+    engine = body.get('engine', 'whisper')
+    urls = [u.strip() for u in re.split(r'[\n,]+', body.get('urls') or '') if u.strip()]
+    if not urls:
+        return jsonify({'error': 'Paste at least one video link'}), 400
+    out = []
+    for url in urls[:20]:                       # 一次最多 20 条，防手滑
+        task_id = str(uuid.uuid4())
+        taskdb.create(task_id, url, engine, None, '')
+        q = queue.Queue()
+        tasks[task_id] = q
+        executor.submit(_download_then_transcribe, task_id, url, engine, q)
+        out.append({'url': url, 'task_id': task_id})
+    return jsonify({'tasks': out})
+
+
 @app.route('/upload_batch', methods=['POST'])
 def upload_batch():
     """一次接收多个文件，各自建独立任务。

@@ -103,6 +103,16 @@
                     </button>
                 </form>
 
+                <div class="url-ingest">
+                    <label class="group-label">Or: get video content from link(s)</label>
+                    <textarea id="url-input" class="url-box" rows="2"
+                        placeholder="Paste video link(s), one per line — YouTube, Bilibili, and other yt-dlp sites&#10;https://www.youtube.com/watch?v=..."></textarea>
+                    <div class="url-row">
+                        <span class="local-hint">Downloads the audio and transcribes each link with the engine selected above. Results go to your Queue + Library. To analyze a whole creator/channel, use Pipeline.</span>
+                        <button type="button" id="url-go" class="btn-primary">Download &amp; transcribe</button>
+                    </div>
+                </div>
+
                 <details class="local-path">
                     <summary>Or: transcribe a file already on this Mac — no upload ▾</summary>
                     <p class="local-hint">Best for long videos. Verbatim reads the file in place (extracts audio locally),
@@ -148,7 +158,7 @@
                 <form class="chain-form-shell">
                     <div class="chain-form">
                         <input type="url" id="chain-url" class="search-input"
-                               placeholder="https://www.youtube.com/@creator/videos  ·  or a single video">
+                               placeholder="https://www.youtube.com/@creator  ·  a channel / homepage (for one video, use Transcribe)">
                         <!-- 主行：每次都要决定的（URL 在上；这里是 谁/用什么脑/要不要分析）-->
                         <div class="chain-form-row">
                             <input type="text" id="chain-author" class="search-input chain-small"
@@ -167,11 +177,7 @@
                                 <option value="glm">Analyze: GLM  (Alibaba)</option>
                                 <option value="qwen">Analyze: Qwen  (Alibaba)</option>
                             </select>
-                            <label class="chain-check">
-                                <input type="checkbox" id="chain-analyze" checked>
-                                Analyze &amp; synthesize
-                            </label>
-                            <button id="chain-start" type="button" class="btn-primary chain-btn">Start</button>
+                            <button id="chain-start" type="button" class="btn-primary chain-btn">Analyze</button>
                         </div>
                         <!-- 折叠：默认设置 + 专家旋钮，多数人不动 -->
                         <details class="chain-advanced">

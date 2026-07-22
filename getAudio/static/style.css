@@ -405,6 +405,13 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   font-size: 12px; line-height: 1.6; color: var(--ink-soft); white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+.url-ingest { margin-top: 16px; border: 1px solid var(--line); border-radius: var(--r-lg); padding: 16px 18px; background: var(--card); box-shadow: var(--e1); }
+.url-ingest .group-label { display: block; margin-bottom: 8px; }
+.url-box { width: 100%; resize: vertical; min-height: 52px; font-family: var(--mono); font-size: 12.5px; line-height: 1.6;
+  padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--paper); color: var(--ink); }
+.url-row { display: flex; gap: 14px; align-items: center; justify-content: space-between; margin-top: 10px; flex-wrap: wrap; }
+.url-row .local-hint { flex: 1; min-width: 220px; margin: 0; }
+.url-row #url-go { white-space: nowrap; }
 .local-path { margin-top: 14px; border: 1px solid var(--line); border-radius: var(--r-lg); padding: 4px 16px; background: var(--card); }
 .local-path summary { cursor: pointer; font-size: 13.5px; color: var(--ink-soft); padding: 10px 0; list-style: none; }
 .local-path summary::-webkit-details-marker { display: none; }

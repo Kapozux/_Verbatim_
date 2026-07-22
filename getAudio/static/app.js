@@ -255,6 +255,37 @@ if (localGoBtn) localGoBtn.addEventListener('click', async () => {
     }
 });
 
+// —— 获取视频内容：贴一个或多个链接 → 下载 + 转写（各自成 Library 任务）——
+const urlGoBtn = document.getElementById('url-go');
+if (urlGoBtn) urlGoBtn.addEventListener('click', async () => {
+    const urls = (document.getElementById('url-input').value || '').trim();
+    if (!urls) { document.getElementById('url-input').focus(); return; }
+    const engine = document.querySelector('input[name="engine"]:checked').value;
+    errorSection.classList.add('hidden');
+    batchSection.classList.remove('hidden');
+    batchList.innerHTML = '';
+    urlGoBtn.disabled = true;
+    try {
+        const resp = await fetch('/api/transcribe_urls', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ urls, engine }),
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok || data.error) { alert(data.error || `Failed (${resp.status})`); return; }
+        batchTotal = data.tasks.length; batchFinished = 0; updateBatchProgress();
+        for (const t of data.tasks) {
+            const row = createBatchRow(t.url);
+            setRowStatus(row, 'Downloading…', 'running');
+            batchList.appendChild(row);
+            connectBatchSSE(t.task_id, row);
+        }
+    } catch (err) {
+        alert('Failed: ' + err.message);
+    } finally {
+        urlGoBtn.disabled = false;
+    }
+});
+
 async function uploadOne(file, row, engine) {
     setRowStatus(row, 'Uploading…', 'running');
 
@@ -870,7 +901,6 @@ const chainUrl = document.getElementById('chain-url');
 const chainAuthor = document.getElementById('chain-author');
 const chainMax = document.getElementById('chain-max');
 const chainEngine = document.getElementById('chain-engine');
-const chainAnalyze = document.getElementById('chain-analyze');
 const chainPreferSubs = document.getElementById('chain-prefer-subs');
 const chainVerify = document.getElementById('chain-verify');
 const chainSelfVerify = document.getElementById('chain-self-verify');
@@ -899,10 +929,10 @@ chainStartBtn.addEventListener('click', async () => {
     const url = (chainUrl.value || '').trim();
     if (!url) { chainUrl.focus(); return; }
     // 花钱确认：分析/合成会按视频数调用付费模型
-    if (chainAnalyze.checked) {
+    {
         const extra = chainVerify.checked ? '\n+ Web fact-check uses extra Google Search quota.' : '';
-        if (!confirm('This pipeline runs AI analysis + synthesis on every video, spending paid Gemini quota that scales with video count (can add up).'
-            + extra + '\n\nJust want transcripts to analyze in Claude yourself? Cancel, then untick "Analyze & synthesize".\n\nContinue?')) {
+        if (!confirm('This analyzes every video of the creator + synthesizes one portrait, spending paid model quota that scales with video count (can add up).'
+            + extra + '\n\nJust want the transcript of one or a few videos? Cancel and use the Transcribe tab instead.\n\nContinue?')) {
             return;
         }
     }
@@ -917,7 +947,7 @@ chainStartBtn.addEventListener('click', async () => {
                 author: chainAuthor.value.trim(),
                 max_videos: parseInt(chainMax.value, 10) || 0,
                 engine: chainEngine.value,
-                analyze: chainAnalyze.checked,
+                analyze: true,
                 prefer_subs: chainPreferSubs.checked,
                 fallback_whisper: chainFallbackWhisper.checked,
                 verify: chainVerify.checked,
