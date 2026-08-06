@@ -61,6 +61,7 @@ _SETTING_ENV = {
     'gemini_key': 'GEMINI_API_KEY',
     'gemini_base_url': 'GEMINI_BASE_URL',
     'dashscope_key': 'DASHSCOPE_API_KEY',
+    'openrouter_key': 'OPENROUTER_API_KEY',
     # Models（非秘密，运行时读 env，保存即生效）
     'whisper_model': 'WHISPER_MODEL_SIZE',
     'gemini_transcribe_model': 'GEMINI_TRANSCRIBE_MODEL',
@@ -158,6 +159,27 @@ def format_seconds(s):
     minutes = total // 60
     seconds = total % 60
     return f"{minutes:02d}:{seconds:02d}"
+
+
+def _shift_ts(ts, offset_sec):
+    """把 'MM:SS'/'HH:MM:SS' 时间戳字符串整体加偏移秒，再格式化回去。取不到就原样返回。"""
+    from sanitize import _ts_to_seconds
+    sec = _ts_to_seconds(ts)
+    if sec is None:
+        return ts
+    return format_seconds(sec + offset_sec)
+
+
+def _offset_segments(segments, offset_sec):
+    """片段转写（只截了 10:00–25:00）出来的时间戳从 0 起 → 加偏移显示成原视频真实位置。"""
+    if not offset_sec:
+        return segments
+    for seg in segments:
+        if seg.get('timestamp'):
+            seg['timestamp'] = _shift_ts(seg['timestamp'], offset_sec)
+        if seg.get('end'):
+            seg['end'] = _shift_ts(seg['end'], offset_sec)
+    return segments
 
 
 def is_video_file(filepath):
@@ -355,7 +377,7 @@ def _is_content_block(err):
 
 def run_transcription(task_id, filepath, engine, original_filename, q,
                       speaker_count=None, fallback_whisper=False,
-                      model_review=False):
+                      model_review=False, offset_sec=0):
     """Background worker: runs transcription, saves results, pushes events.
 
     每个引擎有独立信号量限流。任务提交后可能先排队（quota 已满），
@@ -404,6 +426,9 @@ def run_transcription(task_id, filepath, engine, original_filename, q,
 
         def _finish_ok(segs, summary, engine_used):
             """成功收尾：落盘 + enrich + 标记 done + 压缩音频（主路径/兜底路径共用）。"""
+            # 片段截取（如只转 10:00–25:00）：把 0 起的时间戳整体加偏移，
+            # 落盘 + done 事件都带真实位置。放这里是所有引擎/兜底路径的唯一收口。
+            segs = _offset_segments(segs, offset_sec)
             _save_results(task_id, original_filename, engine_used, input_path,
                           segs, summary, model_review=model_review)
             try:
@@ -468,7 +493,9 @@ def run_transcription(task_id, filepath, engine, original_filename, q,
 
             summary_data = _run_summary(full_text, q)
 
-        elif engine == 'dashscope':
+        elif engine in ('qwenasr', 'dashscope'):
+            # 阿里云 ASR。两个 key 都走这条链路：qwenasr 是现用引擎，dashscope 是
+            # 老转写留下的引擎名（保留可用，重转时同样落到当前模型）。
             from transcribe_dashscope import transcribe_audio
 
             q.put(json.dumps({
@@ -833,13 +860,18 @@ def api_transcribe_local():
     return jsonify({'task_id': task_id})
 
 
-def _download_then_transcribe(task_id, url, engine, q):
-    """单个视频链接：先下音频，再走正常转写任务（进 Library，和上传的稿一样）。"""
+def _download_then_transcribe(task_id, url, engine, q, section=None, offset_sec=0):
+    """单个视频链接：先下音频，再走正常转写任务（进 Library，和上传的稿一样）。
+
+    section/offset_sec：只转某时间段（如 10:00–25:00）时，section 传给 yt-dlp
+    只切那一段，offset_sec 把字幕时间戳还原成原视频真实位置。
+    """
     from downloader import download_one
     dl_dir = os.path.join(config.UPLOAD_FOLDER, f'url_{task_id}')
     try:
-        q.put(json.dumps({'type': 'progress', 'percent': 1, 'message': 'Downloading audio…'}))
-        item = download_one({'video_url': url}, dl_dir)
+        msg = 'Downloading clip…' if section else 'Downloading audio…'
+        q.put(json.dumps({'type': 'progress', 'percent': 1, 'message': msg}))
+        item = download_one({'video_url': url}, dl_dir, section=section)
         if not item or not item.get('path') or not os.path.isfile(item['path']):
             taskdb.set_status(task_id, 'failed',
                               error='Download failed — bad link, private/removed video, or geo-blocked.')
@@ -848,7 +880,7 @@ def _download_then_transcribe(task_id, url, engine, q):
         title = item.get('title') or url
         # 复用正常转写链路：落 results/、taskdb done、SSE 推进度，全和上传一致
         run_transcription(task_id, item['path'], engine, title, q,
-                          None, False, engine != 'whisper')
+                          None, False, engine != 'whisper', offset_sec=offset_sec)
     except Exception as e:  # noqa: BLE001
         taskdb.set_status(task_id, 'failed', error=str(e)[:300])
         q.put(json.dumps({'type': 'error', 'message': str(e)[:200]}))
@@ -856,23 +888,87 @@ def _download_then_transcribe(task_id, url, engine, q):
         shutil.rmtree(dl_dir, ignore_errors=True)
 
 
+def _parse_url_section(line):
+    """拆出行尾可选的时间段后缀 ' @start-end' → (url, section, offset_sec)。
+
+    start/end 支持 MM:SS / HH:MM:SS / 纯秒；end 可省略（到片尾）。
+    section 是 yt-dlp --download-sections 的值 '*START-END'（秒）；无后缀返回 (line, None, 0)。
+    """
+    from sanitize import _ts_to_seconds
+    m = re.search(r'\s+@\s*([0-9:]+)\s*-\s*([0-9:]*)\s*$', line)
+    if not m:
+        return line.strip(), None, 0
+    url = line[:m.start()].strip()
+    start = _ts_to_seconds(m.group(1))
+    end = _ts_to_seconds(m.group(2)) if m.group(2) else None
+    if start is None or (end is not None and end <= start):
+        return url, None, 0          # 无效范围：忽略后缀，转整段
+    section = f"*{start}-{end if end is not None else 'inf'}"
+    return url, section, start
+
+
+_COLLECTION_HINTS = ('list=', '/playlist', 'space.bilibili.com', 'collectiondetail',
+                     'seriesdetail', '/lists', 'youtube.com/@', '/channel/', '/c/', '/user/')
+
+
+def _looks_like_collection(url):
+    """像不像合集/播放列表/频道（要展开成多条视频），而不是单个视频。"""
+    u = (url or '').lower()
+    if '/video/bv' in u or 'watch?v=' in u or 'youtu.be/' in u:
+        return 'list=' in u          # 单视频；除非同时带播放列表参数
+    return any(h in u for h in _COLLECTION_HINTS)
+
+
 @app.route('/api/transcribe_urls', methods=['POST'])
 def api_transcribe_urls():
-    """获取视频内容：贴一个或多个视频链接 → 各自下载+转写，成独立的 Library 任务。"""
+    """获取视频内容：贴视频链接**或合集/播放列表链接** → 各自下载+转写，成独立 Library 任务。
+
+    合集/播放列表/频道会先枚举出里面的视频（最多 max_videos 条）再逐条转写，
+    全程只转写、不做分析（要分析整个博主走 Pipeline）。
+    每条链接行尾可加 ' @10:00-25:00' 只转那一段（时间戳会还原成原视频位置）。
+    """
     body = request.get_json(silent=True) or {}
     engine = body.get('engine', 'whisper')
-    urls = [u.strip() for u in re.split(r'[\n,]+', body.get('urls') or '') if u.strip()]
-    if not urls:
+    try:
+        max_videos = max(1, min(300, int(body.get('max_videos') or 20)))
+    except (TypeError, ValueError):
+        max_videos = 20
+    lines = [u.strip() for u in re.split(r'[\n,]+', body.get('urls') or '') if u.strip()]
+    if not lines:
         return jsonify({'error': 'Paste at least one video link'}), 400
+
+    targets, errors = [], []
+    for line in lines[:20]:                      # 一次最多 20 行，防手滑
+        url, section, offset_sec = _parse_url_section(line)
+        # 合集/播放列表 → 先枚举（带时间段后缀的按单视频处理，段落语义只对单视频成立）
+        if section is None and _looks_like_collection(url):
+            try:
+                from downloader import probe
+                items, _ch = probe(url, max_videos)
+            except Exception as e:  # noqa: BLE001
+                errors.append(f'{url} → {str(e)[:120]}')
+                continue
+            if not items:
+                errors.append(f'{url} → nothing found (private, or an unsupported link)')
+                continue
+            for it in items[:max_videos]:
+                targets.append((it.get('video_url') or url, it.get('title'), None, 0))
+        else:
+            targets.append((url, None, section, offset_sec))
+
+    if not targets:
+        return jsonify({'error': '; '.join(errors) or 'Nothing to transcribe'}), 400
+
     out = []
-    for url in urls[:20]:                       # 一次最多 20 条，防手滑
+    for url, title, section, offset_sec in targets:
         task_id = str(uuid.uuid4())
-        taskdb.create(task_id, url, engine, None, '')
+        taskdb.create(task_id, title or url, engine, None, '')
         q = queue.Queue()
         tasks[task_id] = q
-        executor.submit(_download_then_transcribe, task_id, url, engine, q)
-        out.append({'url': url, 'task_id': task_id})
-    return jsonify({'tasks': out})
+        executor.submit(_download_then_transcribe, task_id, url, engine, q,
+                        section, offset_sec)
+        out.append({'url': url, 'title': title, 'task_id': task_id})
+    return jsonify({'tasks': out, 'errors': errors})
 
 
 @app.route('/upload_batch', methods=['POST'])
@@ -1919,7 +2015,7 @@ _channel_backfilling = set()   # 正在补频道信息的链条，防重复重�
 
 
 def _backfill_channel(chain_id, url):
-    """老链条重探一次频道元信息（订阅数/头像），只取频道级、不列全部视频。"""
+    """老链条重探一次频道元信息（名字/订阅数/头像），只取频道级、不列全部视频。"""
     try:
         from downloader import probe, channel_followers
         _, channel = probe(url, max_videos=1)
@@ -1936,7 +2032,11 @@ def _backfill_channel(chain_id, url):
                 st['followers'] = followers or (channel or {}).get('followers', 0)
                 if not st.get('avatar') and (channel or {}).get('avatar'):
                     st['avatar'] = channel['avatar']
+                # 名字也补：旧链创建时没存频道名，卡片只能显示裸 URL
+                if (channel or {}).get('name') and st.get('author') in (None, '', '该博主'):
+                    st['author'] = channel['name']
                 st['followers_checked'] = True   # 探过就记住，别每次轮询都重探
+                st['author_checked'] = True      # 名字也探过（取不到就是取不到，别反复探）
                 _save_chain(st)
         except Exception:  # noqa: BLE001
             pass
@@ -1965,9 +2065,12 @@ def api_chain_detail(chain_id):
         except Exception:  # noqa: BLE001
             pass
 
-    # 老链条补频道信息（订阅数/头像）：只对已终态的链、且没探过的重探一次
-    # （followers_checked 标记防每次轮询重复打网络；running 中的链不碰，交给 run_chain）
-    if not data.get('followers') and not data.get('followers_checked') \
+    # 老链条补频道信息（名字/订阅数/头像）：只对已终态的链、且没探过的重探一次
+    # （*_checked 标记防每次轮询重复打网络；running 中的链不碰，交给 run_chain）
+    needs_followers = not data.get('followers') and not data.get('followers_checked')
+    needs_author = data.get('author') in (None, '', '该博主') \
+        and not data.get('author_checked')
+    if (needs_followers or needs_author) \
             and data.get('stage') in ('done', 'failed', 'cancelled') \
             and data.get('url') and chain_id not in _channel_backfilling:
         _channel_backfilling.add(chain_id)
@@ -2256,6 +2359,71 @@ def api_chain_files(chain_id):
     return jsonify(files)
 
 
+def _transcript_title(task_id):
+    """单期转写的标题：AI 标题优先，退回文件名，再退回 task_id。"""
+    try:
+        with open(os.path.join(config.RESULTS_FOLDER, task_id, 'meta.json'),
+                  'r', encoding='utf-8') as f:
+            meta = json.load(f)
+        return (meta.get('ai_title') or meta.get('filename') or task_id).strip()
+    except Exception:
+        return task_id
+
+
+def _transcript_plain_text(task_id):
+    """单期转写正文拼成纯文本（无时间戳）。取不到返回 ''。"""
+    tpath = os.path.join(config.RESULTS_FOLDER, task_id, 'transcript.json')
+    if not os.path.isfile(tpath):
+        return ''
+    try:
+        with open(tpath, 'r', encoding='utf-8') as f:
+            segs = json.load(f)
+    except Exception:
+        return ''
+    return ' '.join((s.get('text') or '').strip()
+                    for s in segs if (s.get('text') or '').strip()).strip()
+
+
+@app.route('/api/transcripts/merge', methods=['POST'])
+def api_transcripts_merge():
+    """把任意一组转写（按 task_id）拼成一份纯文本 Markdown。跨博主、可挑期。
+
+    只读：不落盘、不进 Library，前端拿去展示 + 下载。
+    """
+    body = request.get_json(silent=True) or {}
+    ids = body.get('task_ids') or []
+    if not isinstance(ids, list) or not ids:
+        return jsonify({'error': 'Pick at least one transcript'}), 400
+    # 去重保序 + 校验格式，挡路径穿越
+    seen, clean = set(), []
+    for tid in ids:
+        if _is_valid_task_id(tid) and tid not in seen:
+            seen.add(tid)
+            clean.append(tid)
+    if not clean:
+        return jsonify({'error': 'No valid transcripts selected'}), 400
+
+    parts, missing = [], 0
+    for tid in clean:
+        text = _transcript_plain_text(tid)
+        if not text:
+            missing += 1
+            continue
+        parts.append(f"## {_transcript_title(tid)}\n\n{text}\n")
+    if not parts:
+        return jsonify({'error': 'None of the selected transcripts had text'}), 400
+
+    header = (f"# 合并转写（{len(parts)} 期 · 纯文本，无 AI 分析）\n"
+              + (f"\n> {missing} 期没有可用转写，已跳过。\n" if missing else ''))
+    markdown = header + '\n' + '\n'.join(parts)
+    return jsonify({
+        'markdown': markdown,
+        'count': len(parts),
+        'missing': missing,
+        'filename': f'合并转写_{len(parts)}期.md',
+    })
+
+
 # ========== 个人数据展板 ==========
 
 @app.route('/api/stats')
@@ -2362,9 +2530,11 @@ def _mask_key(env_name):
 def api_settings_get():
     gset, ghint = _mask_key('GEMINI_API_KEY')
     dset, dhint = _mask_key('DASHSCOPE_API_KEY')
+    oset, ohint = _mask_key('OPENROUTER_API_KEY')
     out = {
         'gemini': {'set': gset, 'hint': ghint},
         'dashscope': {'set': dset, 'hint': dhint},
+        'openrouter': {'set': oset, 'hint': ohint},
     }
     # 非秘密字段直接回显供编辑（模型名空 = 用默认）
     for field in _PLAIN_FIELDS:
@@ -2378,7 +2548,7 @@ def api_settings_save():
     data = _load_settings()
 
     # key：只有传了非空值才更新（留空 = 保持不变，避免用户没重填就被清空）
-    for field in ('gemini_key', 'dashscope_key'):
+    for field in ('gemini_key', 'dashscope_key', 'openrouter_key'):
         if field in body:
             v = (body.get(field) or '').strip()
             if v:
@@ -2458,6 +2628,27 @@ def api_settings_test():
             if code in (401, 403):
                 return jsonify({'ok': False, 'reason': 'API key looks invalid.'})
             return jsonify({'ok': False, 'reason': f'DashScope error {code}: {msg}'[:180]})
+        except Exception as e:
+            return jsonify({'ok': False, 'reason': str(e)[:180]})
+
+    if engine == 'openrouter':
+        key = (body.get('openrouter_key') or '').strip() or os.environ.get('OPENROUTER_API_KEY', '')
+        if not key:
+            return jsonify({'ok': False, 'reason': 'No key entered or saved yet.'})
+        try:
+            import requests as _rq
+            r = _rq.get('https://openrouter.ai/api/v1/key',
+                        headers={'Authorization': f'Bearer {key}'}, timeout=15)
+            if r.status_code == 200:
+                d = (r.json() or {}).get('data') or {}
+                usage = d.get('usage')
+                limit = d.get('limit')
+                extra = f' Usage ${usage:.2f}' + (f' / limit ${limit:.2f}' if limit else '') \
+                    if isinstance(usage, (int, float)) else ''
+                return jsonify({'ok': True, 'reason': f'Works — key accepted.{extra}'})
+            if r.status_code in (401, 403):
+                return jsonify({'ok': False, 'reason': 'API key looks invalid.'})
+            return jsonify({'ok': False, 'reason': f'OpenRouter error {r.status_code}'[:180]})
         except Exception as e:
             return jsonify({'ok': False, 'reason': str(e)[:180]})
 

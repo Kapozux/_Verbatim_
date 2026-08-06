@@ -59,11 +59,53 @@ _YT_CHANNEL_ROOT = re.compile(
 _BILI_SPACE = re.compile(r'^(https?://space\.bilibili\.com/\d+)(?:/.*)?$')
 
 
+def _normalize_bili_list(url):
+    """B站合集/系列链接 → yt-dlp 认识的形式；不是合集则返回 None。
+
+    浏览器地址栏给的是新版 `space.bilibili.com/<uid>/lists?sid=<sid>`，yt-dlp 报
+    Unsupported URL；而 _BILI_SPACE 又会把 ?sid= 连同路径一起砍掉、退化成整个空间页
+    （变成下这个 UP 的全部视频，不是这个合集）。所以要在它之前转成
+    channel/collectiondetail?sid=（合集）或 channel/seriesdetail?sid=（系列）。
+    """
+    from urllib.parse import urlparse, parse_qs
+    try:
+        u = urlparse(url or '')
+    except ValueError:
+        return None
+    if 'space.bilibili.com' not in (u.netloc or ''):
+        return None
+    parts = [p for p in (u.path or '').split('/') if p]
+    if not parts or not parts[0].isdigit():
+        return None
+    uid = parts[0]
+    rest = parts[1:]
+    if not rest or rest[0] not in ('lists', 'channel'):
+        return None
+    q = parse_qs(u.query or '')
+    sid = (q.get('sid') or [''])[0]
+    if not sid:                       # /lists/<sid> 这种把 sid 放在路径里的
+        for seg in rest[1:]:
+            if seg.isdigit():
+                sid = seg
+                break
+    if not sid:
+        return None
+    kind = (q.get('type') or [''])[0].lower()
+    if 'seriesdetail' in rest or kind == 'series':
+        page = 'seriesdetail'
+    else:
+        page = 'collectiondetail'     # 合集（season）是常见情形，默认它
+    return f'https://space.bilibili.com/{uid}/channel/{page}?sid={sid}'
+
+
 def _normalize_url(url):
     url = url or ''
     m = _YT_CHANNEL_ROOT.match(url)
     if m:
         return m.group(1) + '/videos'
+    bl = _normalize_bili_list(url)     # 合集/系列要先认，否则会被下面这条砍成整个空间页
+    if bl:
+        return bl
     b = _BILI_SPACE.match(url)
     if b:
         return b.group(1)
@@ -183,6 +225,17 @@ def probe(url, max_videos=None):
                 'thumbnail': _thumbnail_for(e),
                 'view_count': int(e.get('view_count') or 0),  # flat 常为 0，B站等有时给
             })
+        # B站空间页等 flat 探测拿不到频道名（entries 连 title 都是空的）——
+        # 兜底：对第一个视频做一次全量探测，用它的 uploader 当频道名/头像。
+        if not channel.get('name') and targets:
+            try:
+                _, ch2 = probe(targets[0]['video_url'])   # 单视频 → 走下面的全量分支
+                if ch2.get('name'):
+                    channel['name'] = ch2['name']
+                    if not channel.get('avatar') and ch2.get('avatar'):
+                        channel['avatar'] = ch2['avatar']
+            except Exception:  # noqa: BLE001  探测失败不影响主流程
+                pass
         return targets, channel
 
     return [{
@@ -196,19 +249,23 @@ def probe(url, max_videos=None):
 _DOWNLOAD_ATTEMPTS = 3        # B站 412 等间歇性风控：退避重试，绝大多数第二次就过
 
 
-def download_one(target, dest_dir):
+def download_one(target, dest_dir, section=None):
     """下载单个目标的音频，返回 {'path','title','video_id','thumbnail'} 或 None。
 
     带退避重试：B站 412 / 网络抖动这类间歇失败，隔几秒重试常能过。
+    section: 可选时间段（yt-dlp --download-sections 的值，如 '*600-1500'），
+             只下载/切出那一段音频，转写成本随之下降。
     """
     os.makedirs(dest_dir, exist_ok=True)
     binary = _resolve_ytdlp()
     outtmpl = os.path.join(dest_dir, '%(title)s [%(id)s].%(ext)s')
+    section_args = ['--download-sections', section] if section else []
     cmd = [
         binary,
         '-x', '--audio-format', 'mp3', '--audio-quality', '128K',
         '-o', outtmpl,
         '--no-playlist', '--no-warnings', '--quiet',
+        *section_args,
         *_lang_args(), *_cookie_args(),
         # 下载+后处理完成后打印最终文件路径和元信息，逐行读取
         '--print', 'after_move:filepath',

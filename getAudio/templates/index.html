@@ -14,11 +14,17 @@
             <header>
                 <div class="topbar">
                     <div class="brand"><span class="dot"></span>Verbatim</div>
-                    <div class="tagline">Audio → transcript → insight · local</div>
+                    <div class="topbar-right">
+                        <button id="global-tasks" class="global-tasks hidden" type="button"
+                                title="Active tasks">
+                            <span class="gt-spin">⟳</span><span id="global-tasks-count"></span>
+                        </button>
+                        <div class="tagline">Audio → transcript → insight · local</div>
+                        <div id="global-tasks-pop" class="global-tasks-pop hidden"></div>
+                    </div>
                 </div>
                 <nav class="main-nav">
                     <button class="nav-tab active" data-tab="transcribe">Transcribe</button>
-                    <button class="nav-tab" data-tab="chain">Pipeline</button>
                     <button class="nav-tab" data-tab="xhs">Xiaohongshu</button>
                     <button class="nav-tab" data-tab="creators">Creators</button>
                     <button class="nav-tab" data-tab="library">Library</button>
@@ -42,7 +48,25 @@
                             </label>
                         </div>
                         <input type="file" id="audio-file" name="audio" multiple
-                               accept=".mp3,.wav,.flac,.m4a,.ogg,.webm,.mp4,.mov,.mkv,.avi,.m4v" required>
+                               accept=".mp3,.wav,.flac,.m4a,.ogg,.webm,.mp4,.mov,.mkv,.avi,.m4v">
+                        <textarea id="mixed-input" class="url-box" rows="2"
+                            placeholder="Or paste video links / local file paths — one per line, mix freely&#10;https://www.bilibili.com/video/BV...      /Users/you/Documents/lecture.mp4"></textarea>
+                        <p class="local-hint">Links download &amp; transcribe (YouTube, Bilibili &amp; other yt-dlp
+                            sites — for a whole channel use Creators). Local paths are read in place, nothing
+                            uploaded — note: macOS blocks reading from Downloads/Desktop, keep files in
+                            Documents or another folder.<br>
+                            Only want part of a video? Add a time range after the link:
+                            <code>…/watch?v=xxx @10:00-25:00</code> (or <code>@5:30-</code> to the end) —
+                            only that clip is downloaded &amp; transcribed, cheaper, and timestamps stay at the
+                            real video position.<br>
+                            A collection / playlist link (e.g. a Bilibili 合集, a YouTube playlist) is expanded
+                            into its videos and each one is transcribed — transcripts only, no analysis.</p>
+                        <label class="collection-cap">Videos per collection
+                            <input type="number" id="url-max-videos" class="search-input chain-small"
+                                   min="1" max="300" value="20"
+                                   title="When a link is a collection/playlist, transcribe at most this many of its videos.">
+                        </label>
+                        <div id="intake-list" class="intake-list"></div>
                     </div>
 
                     <div class="form-group">
@@ -71,11 +95,11 @@
                         </button>
                         <div class="radio-group hidden" id="mainland-engines">
                             <label class="radio-option">
-                                <input type="radio" name="engine" value="dashscope">
+                                <input type="radio" name="engine" value="qwenasr">
                                 <span class="radio-custom"></span>
                                 <span class="radio-label">
-                                    <strong>DashScope</strong>
-                                    <small>Alibaba Cloud · cheap · ⚠ moderates content</small>
+                                    <strong>Qwen-ASR</strong>
+                                    <small>Alibaba Cloud · strong zh · ⚠ moderates content</small>
                                 </span>
                             </label>
                             <label class="radio-option">
@@ -103,34 +127,6 @@
                     </button>
                 </form>
 
-                <div class="url-ingest">
-                    <label class="group-label">Or: get video content from link(s)</label>
-                    <textarea id="url-input" class="url-box" rows="2"
-                        placeholder="Paste video link(s), one per line — YouTube, Bilibili, and other yt-dlp sites&#10;https://www.youtube.com/watch?v=..."></textarea>
-                    <div class="url-row">
-                        <span class="local-hint">Downloads the audio and transcribes each link with the engine selected above. Results go to your Queue + Library. To analyze a whole creator/channel, use Pipeline.</span>
-                        <button type="button" id="url-go" class="btn-primary">Download &amp; transcribe</button>
-                    </div>
-                </div>
-
-                <details class="local-path">
-                    <summary>Or: transcribe a file already on this Mac — no upload ▾</summary>
-                    <p class="local-hint">Best for long videos. Verbatim reads the file in place (extracts audio locally),
-                        so nothing large is uploaded. Your original file is never moved or deleted.
-                        Note: macOS blocks reading from Downloads/Desktop — keep the file in Documents or another folder.</p>
-                    <div class="local-row">
-                        <input type="text" id="local-path" class="search-input"
-                               placeholder="/Users/you/Documents/lecture.mp4  ·  paste a full path">
-                        <select id="local-engine" class="search-input chain-small" title="Engine for this local file">
-                            <option value="gemini">Gemini</option>
-                            <option value="whisper">Whisper (local)</option>
-                            <option value="dashscope">DashScope (Alibaba)</option>
-                            <option value="precise">Precise (Gemini + diarization)</option>
-                        </select>
-                        <button type="button" id="local-go" class="btn-primary">Transcribe local file</button>
-                    </div>
-                </details>
-
                 <div id="batch-section" class="hidden">
                     <div class="batch-header">
                         <h2>Queue</h2>
@@ -147,12 +143,54 @@
                 </div>
             </section>
 
-            <!-- ===== Tab: Pipeline ===== -->
-            <section id="tab-chain" class="tab-panel">
+
+
+            <!-- ===== Tab: 小红书采集 ===== -->
+            <section id="tab-xhs" class="tab-panel">
                 <div class="hero">
-                    <h1>Analyze a <span class="accent">creator.</span></h1>
-                    <p>Paste a channel, playlist, or video. Verbatim downloads the audio, transcribes every
-                       episode, writes a per-episode analysis, and synthesizes one document.</p>
+                    <h1>Xiaohongshu<span class="accent">.</span></h1>
+                    <p>Enter keywords and how many notes — Verbatim drives a real browser to search, download full-res images, and pull top-level comments into a dataset. <b>First run pops a browser asking for a QR login</b> (remembered afterwards).</p>
+                </div>
+                <form class="chain-form-shell" onsubmit="return false">
+                    <div class="chain-form">
+                        <textarea id="xhs-keywords" class="search-input" rows="4"
+                            placeholder="One keyword per line — searched separately, de-duplicated, merged:&#10;uiuc cs admissions&#10;college essay tips&#10;对象出轨"></textarea>
+                        <div class="chain-form-row">
+                            <label class="xhs-num"><span>Notes to scrape</span>
+                            <input type="number" id="xhs-max-notes" class="search-input chain-small"
+                                   min="1" max="300" value="20"></label>
+                            <label class="xhs-num"><span>Comments cap / note</span>
+                            <input type="number" id="xhs-max-comments" class="search-input chain-small"
+                                   min="50" max="2000" value="400"></label>
+                            <button id="xhs-start" type="button" class="btn-primary chain-btn">Start scraping</button>
+                        </div>
+                        <p class="chain-hint">Scraping and analysis are decoupled; every note is saved as it lands (safe to interrupt). Anti-bot warning: 70+ notes in one run risks rate-limiting — go in small batches. Data lands in <code>xhs_dataset/</code>.</p>
+                    </div>
+                </form>
+                <div id="xhs-progress" class="xhs-progress hidden"></div>
+
+                <div class="xhs-analyze-card">
+                    <div class="xhs-an-head">
+                        <div>
+                            <b>Analyze the notes from the keywords above → research report</b>
+                            <span class="ci-hint">Scoped to notes scraped by those exact keywords (topics never mix). Reads images + comments per note, then aggregates. Empty keywords = whole dataset. Uses Gemini multimodal; costs scale with note count.</span>
+                            <select id="xhs-lang" class="search-input chain-small" style="margin-top:8px">
+                                <option value="auto" selected>Report: Auto (follow content)</option>
+                                <option value="en">Report: English</option>
+                                <option value="zh">Report: 中文</option>
+                            </select>
+                        </div>
+                        <button id="xhs-analyze-btn" type="button" class="btn-primary chain-btn">Analyze this batch</button>
+                    </div>
+                    <div id="xhs-analyze-progress" class="hidden"></div>
+                </div>
+            </section>
+
+            <!-- ===== Tab: 博主库 (Creators) ===== -->
+            <section id="tab-creators" class="tab-panel">
+                <div class="hero">
+                    <h1>Creators<span class="accent">.</span></h1>
+                    <p>Paste a channel, playlist, or video — Verbatim downloads and transcribes every episode, then writes a portrait. Open a card for the portrait, then re-read it through a lens — 🔥 Roast / ✍️ Craft / 😂 Watchability / 💬 Quotes / 🖼 Worldview.</p>
                 </div>
 
                 <form class="chain-form-shell">
@@ -167,11 +205,13 @@
                                     title="Transcription engine.">
                                 <option value="gemini">Gemini (recommended)</option>
                                 <option value="whisper">Whisper (local)</option>
-                                <option value="dashscope">Alibaba Paraformer (zh ASR · no Gemini filter)</option>
+                                <option value="qwenasr">Alibaba Qwen-ASR (zh ASR · no Gemini filter)</option>
                             </select>
                             <select id="chain-provider" class="search-input chain-small"
                                     title="Which model does the analysis. Aliyun (DeepSeek/Kimi/GLM/Qwen) reuses your DashScope key and dodges the Gemini quota — but it moderates content, so use it only for non-sensitive creators.">
                                 <option value="gemini" selected>Analyze: Gemini</option>
+                                <option value="opus5">Analyze: Claude Opus 5  (OpenRouter · thinking)</option>
+                                <option value="opus46">Analyze: Claude Opus 4.6  (OpenRouter · thinking)</option>
                                 <option value="deepseek">Analyze: DeepSeek  (Alibaba)</option>
                                 <option value="kimi">Analyze: Kimi  (Alibaba)</option>
                                 <option value="glm">Analyze: GLM  (Alibaba)</option>
@@ -221,58 +261,8 @@
                        video already has captions.</p>
                 </form>
 
-                <div id="chain-list" class="chain-list"></div>
-            </section>
-
-            <!-- ===== Tab: 小红书采集 ===== -->
-            <section id="tab-xhs" class="tab-panel">
-                <div class="hero">
-                    <h1>Xiaohongshu<span class="accent">.</span></h1>
-                    <p>Enter keywords and how many notes — Verbatim drives a real browser to search, download full-res images, and pull top-level comments into a dataset. <b>First run pops a browser asking for a QR login</b> (remembered afterwards).</p>
-                </div>
-                <form class="chain-form-shell" onsubmit="return false">
-                    <div class="chain-form">
-                        <textarea id="xhs-keywords" class="search-input" rows="4"
-                            placeholder="One keyword per line — searched separately, de-duplicated, merged:&#10;uiuc cs admissions&#10;college essay tips&#10;对象出轨"></textarea>
-                        <div class="chain-form-row">
-                            <label class="xhs-num"><span>Notes to scrape</span>
-                            <input type="number" id="xhs-max-notes" class="search-input chain-small"
-                                   min="1" max="300" value="20"></label>
-                            <label class="xhs-num"><span>Comments cap / note</span>
-                            <input type="number" id="xhs-max-comments" class="search-input chain-small"
-                                   min="50" max="2000" value="400"></label>
-                            <button id="xhs-start" type="button" class="btn-primary chain-btn">Start scraping</button>
-                        </div>
-                        <p class="chain-hint">Scraping and analysis are decoupled; every note is saved as it lands (safe to interrupt). Anti-bot warning: 70+ notes in one run risks rate-limiting — go in small batches. Data lands in <code>xhs_dataset/</code>.</p>
-                    </div>
-                </form>
-                <div id="xhs-progress" class="xhs-progress hidden"></div>
-
-                <div class="xhs-analyze-card">
-                    <div class="xhs-an-head">
-                        <div>
-                            <b>Analyze the notes from the keywords above → research report</b>
-                            <span class="ci-hint">Scoped to notes scraped by those exact keywords (topics never mix). Reads images + comments per note, then aggregates. Empty keywords = whole dataset. Uses Gemini multimodal; costs scale with note count.</span>
-                            <select id="xhs-lang" class="search-input chain-small" style="margin-top:8px">
-                                <option value="auto" selected>Report: Auto (follow content)</option>
-                                <option value="en">Report: English</option>
-                                <option value="zh">Report: 中文</option>
-                            </select>
-                        </div>
-                        <button id="xhs-analyze-btn" type="button" class="btn-primary chain-btn">Analyze this batch</button>
-                    </div>
-                    <div id="xhs-analyze-progress" class="hidden"></div>
-                </div>
-            </section>
-
-            <!-- ===== Tab: 博主库 (Creators) ===== -->
-            <section id="tab-creators" class="tab-panel">
-                <div class="hero">
-                    <h1>Creators<span class="accent">.</span></h1>
-                    <p>Every creator you've analyzed. Open one for the portrait, then re-read them through a lens — 🔥 Roast / ✍️ Craft / 😂 Watchability / 💬 Quotes / 🗺 Worldview.</p>
-                </div>
                 <div id="creators-grid" class="creators-grid"></div>
-                <p id="creators-empty" class="history-empty hidden">No analyzed creators yet — run one in Pipeline.</p>
+                <p id="creators-empty" class="history-empty hidden">No creators yet — paste a link above to analyze one.</p>
             </section>
 
             <!-- ===== Tab: Library ===== -->
@@ -308,6 +298,7 @@
                                 <div id="engine-filters" class="filter-chips">
                                     <button class="chip active" data-engine="">All</button>
                                     <button class="chip" data-engine="gemini">Gemini</button>
+                                    <button class="chip" data-engine="qwenasr">Qwen-ASR</button>
                                     <button class="chip" data-engine="dashscope">DashScope</button>
                                     <button class="chip" data-engine="precise">Precise</button>
                                     <button class="chip" data-engine="whisper">Whisper</button>
@@ -327,9 +318,9 @@
                             <h2>Analyses</h2>
                             <button id="docs-refresh" class="btn-secondary" title="Refresh">Refresh</button>
                         </div>
-                        <p class="chain-hint">Documents produced by the Pipeline. Click to read — no download needed.</p>
+                        <p class="chain-hint">Documents produced by creator analyses. Click to read — no download needed.</p>
                         <div id="docs-list" class="docs-list">
-                            <p class="history-empty">No analysis documents yet — run a Pipeline</p>
+                            <p class="history-empty">No analysis documents yet — analyze a creator first</p>
                         </div>
                     </div>
                 </div>
@@ -407,6 +398,7 @@
                 <div class="settings-nav-title">Settings</div>
                 <button class="settings-nav-item active" data-pane="gemini">Gemini</button>
                 <button class="settings-nav-item" data-pane="dashscope">DashScope</button>
+                <button class="settings-nav-item" data-pane="openrouter">OpenRouter</button>
                 <button class="settings-nav-item" data-pane="models">Models</button>
                 <button class="settings-nav-item" data-pane="storage">Storage</button>
                 <button class="settings-nav-item" data-pane="about">About</button>
@@ -446,8 +438,10 @@
                     <section class="settings-pane" data-pane="dashscope">
                         <h3>DashScope</h3>
                         <p class="settings-desc">
-                            Alibaba Cloud transcription. <strong>⚠ It moderates content</strong> — don't
-                            use it for politically sensitive audio; prefer local Whisper or Gemini for that.
+                            Alibaba Cloud key — powers the <strong>Qwen-ASR</strong> engine, the speaker
+                            diarization half of <strong>Precise</strong>, and the Alibaba analysis models.
+                            <strong>⚠ It moderates content</strong> — don't use it for politically
+                            sensitive audio; prefer local Whisper or Gemini for that.
                         </p>
                         <label class="settings-field">
                             <span class="settings-label">API key
@@ -459,6 +453,28 @@
                         <div class="settings-test-row">
                             <button type="button" id="test-dashscope" class="btn-secondary">Test connection</button>
                             <span id="test-dashscope-res" class="test-res"></span>
+                        </div>
+                    </section>
+
+                    <!-- OpenRouter -->
+                    <section class="settings-pane" data-pane="openrouter">
+                        <h3>OpenRouter</h3>
+                        <p class="settings-desc">
+                            One key for Claude and other frontier models — powers the
+                            <strong>Claude Opus</strong> analysis options in Creators (with thinking enabled).
+                            No content moderation. Note: Opus is premium-priced and the pipeline
+                            analyzes every episode, so cost scales with episode count.
+                        </p>
+                        <label class="settings-field">
+                            <span class="settings-label">API key
+                                <a href="https://openrouter.ai/settings/keys" target="_blank" rel="noopener">get one ↗</a>
+                            </span>
+                            <input type="password" id="set-openrouter-key" class="search-input"
+                                   placeholder="paste key…" autocomplete="off">
+                        </label>
+                        <div class="settings-test-row">
+                            <button type="button" id="test-openrouter" class="btn-secondary">Test connection</button>
+                            <span id="test-openrouter-res" class="test-res"></span>
                         </div>
                     </section>
 
@@ -503,7 +519,7 @@
                             <input type="text" id="set-gemini-extract" class="search-input"
                                    placeholder="gemini-2.5-flash (default)" autocomplete="off">
                         </label>
-                        <p class="settings-opt">DeepSeek / Kimi / GLM / Qwen model names are per-pipeline presets (pick the brain in the Pipeline form).</p>
+                        <p class="settings-opt">DeepSeek / Kimi / GLM / Qwen model names are per-analysis presets (pick the model in the Creators form).</p>
                     </section>
 
                     <!-- Storage -->

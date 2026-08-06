@@ -53,7 +53,9 @@ let batchFinished = 0;
 const ENGINE_LABELS = {
     whisper: 'Whisper',
     gemini: 'Gemini',
-    dashscope: 'DashScope',
+    // dashscope = 2026-08 之前用 paraformer-v2 转的老稿，保留标签让历史记录如实显示
+    dashscope: 'DashScope (Paraformer)',
+    qwenasr: 'Qwen-ASR',
     precise: 'Precise (diarization)',
 };
 
@@ -77,30 +79,145 @@ function formatFileSize(bytes) {
     return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
 }
 
-// ========== File input (multi-file) ==========
+// ========== 统一入口：文件 + 链接 + 本地路径 ==========
+// 文件的事实来源是 intakeFiles（可多次追加、单条删除）；
+// 文本行的事实来源是 #mixed-input 的内容（一行一条，实时解析出预览）。
+let intakeFiles = [];
+let intakeSubmitting = false;
+const mixedInput = document.getElementById('mixed-input');
+const intakeList = document.getElementById('intake-list');
+
 fileInput.addEventListener('change', () => {
-    updateFileLabel(fileInput.files);
+    addFiles(fileInput.files);
+    fileInput.value = '';   // 清掉原生选择，允许再次添加同名文件；预览列表才是事实来源
 });
 
-function updateFileLabel(files) {
-    if (!files || files.length === 0) {
+function addFiles(files) {
+    for (const f of files || []) {
+        // 同名同大小视为重复，跳过
+        if (!intakeFiles.some(x => x.name === f.name && x.size === f.size)) {
+            intakeFiles.push(f);
+        }
+    }
+    renderIntake();
+}
+
+function updateFileLabel() {
+    if (intakeFiles.length === 0) {
         fileLabelText.textContent = 'Choose or drop audio / video files (multiple ok)';
         fileInfo.textContent = '';
         fileLabel.classList.remove('has-file');
         return;
     }
-
     let totalSize = 0;
-    for (const f of files) totalSize += f.size;
-
-    if (files.length === 1) {
-        fileLabelText.textContent = files[0].name;
-    } else {
-        fileLabelText.textContent = `${files.length} files selected`;
-    }
+    for (const f of intakeFiles) totalSize += f.size;
+    fileLabelText.textContent = intakeFiles.length === 1
+        ? intakeFiles[0].name : `${intakeFiles.length} files added`;
     fileInfo.textContent = formatFileSize(totalSize);
     fileLabel.classList.add('has-file');
 }
+
+// 逐行分类：http(s):// → 链接；/ 或 ~ 开头（允许引号包裹）→ 本地路径；其余非空行 → invalid
+function parseTextLines() {
+    const out = [];
+    (mixedInput.value || '').split('\n').forEach((raw, line) => {
+        const s = raw.trim();
+        if (!s) return;
+        let kind = 'invalid';
+        if (/^https?:\/\//i.test(s)) kind = 'link';
+        else if (/^[\/~]/.test(s.replace(/^['"]/, ''))) kind = 'path';
+        // 链接可带行尾时间段后缀 " @10:00-25:00"（只转那一段）；预览里拆出来显示
+        let label = s, clip = '';
+        if (kind === 'link') {
+            const m = s.match(/\s+@\s*([0-9:]+)\s*-\s*([0-9:]*)\s*$/);
+            if (m) {
+                label = s.slice(0, m.index).trim();
+                clip = `${m[1]}–${m[2] || 'end'}`;
+            }
+        }
+        out.push({ kind, text: s, label, clip, line });
+    });
+    return out;
+}
+
+const INTAKE_BADGES = { file: 'File', link: 'Link', path: 'Local path', invalid: '?' };
+
+function buildIntakeRow(r) {
+    const row = document.createElement('div');
+    row.className = 'intake-row' + (r.kind === 'invalid' ? ' intake-invalid' : '');
+
+    const badge = document.createElement('span');
+    badge.className = `intake-badge intake-badge-${r.kind}`;
+    badge.textContent = INTAKE_BADGES[r.kind];
+    row.appendChild(badge);
+
+    const name = document.createElement('span');
+    name.className = 'intake-name';
+    name.textContent = r.label;
+    name.title = r.label;
+    row.appendChild(name);
+
+    if (r.sub || r.kind === 'invalid') {
+        const sub = document.createElement('span');
+        sub.className = 'intake-sub';
+        sub.textContent = r.kind === 'invalid'
+            ? 'Not a link or a path — will be skipped' : r.sub;
+        row.appendChild(sub);
+    }
+
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'intake-del';
+    del.textContent = '×';
+    del.title = 'Remove';
+    del.addEventListener('click', () => removeIntakeRow(r));
+    row.appendChild(del);
+    return row;
+}
+
+function removeIntakeRow(r) {
+    if (r.kind === 'file') {
+        intakeFiles.splice(r.fileIndex, 1);
+    } else {
+        const lines = mixedInput.value.split('\n');
+        lines.splice(r.line, 1);
+        mixedInput.value = lines.join('\n');
+    }
+    renderIntake();
+}
+
+function renderIntake() {
+    const rows = [];
+    intakeFiles.forEach((f, i) => rows.push(
+        { kind: 'file', label: f.name, sub: formatFileSize(f.size), fileIndex: i }));
+    parseTextLines().forEach(t => rows.push({
+        kind: t.kind, label: t.label || t.text, line: t.line,
+        sub: t.clip ? `⏱ ${t.clip}` : '',
+    }));
+    intakeList.innerHTML = '';
+    rows.forEach(r => intakeList.appendChild(buildIntakeRow(r)));
+    updateFileLabel();
+    updateSubmitBtn();
+}
+
+function intakeValidCount() {
+    return intakeFiles.length
+        + parseTextLines().filter(t => t.kind !== 'invalid').length;
+}
+
+function updateSubmitBtn() {
+    if (intakeSubmitting) { submitBtn.disabled = true; return; }
+    const n = intakeValidCount();
+    submitBtn.textContent = n > 0
+        ? `Transcribe ${n} item${n === 1 ? '' : 's'}` : 'Transcribe';
+    submitBtn.disabled = n === 0;
+}
+
+let mixedInputTimer = null;
+if (mixedInput) mixedInput.addEventListener('input', () => {
+    clearTimeout(mixedInputTimer);
+    mixedInputTimer = setTimeout(renderIntake, 250);
+});
 
 // ========== Drag & Drop (multi-file) ==========
 ['dragenter', 'dragover'].forEach(evt => {
@@ -121,10 +238,7 @@ function updateFileLabel(files) {
 
 dropZone.addEventListener('drop', (e) => {
     const files = e.dataTransfer.files;
-    if (files && files.length > 0) {
-        fileInput.files = files;
-        updateFileLabel(files);
-    }
+    if (files && files.length > 0) addFiles(files);
 });
 
 // ========== Engine selection: toggle 预计人数 (precise only) ==========
@@ -147,11 +261,11 @@ if (showMainlandBtn && mainlandEngines) {
     });
 }
 const MAINLAND_WARNING =
-    'DashScope / Precise send your audio to Alibaba Cloud (mainland China), which runs ' +
+    'Qwen-ASR / Precise send your audio to Alibaba Cloud (mainland China), which runs ' +
     'mandatory content moderation.\n\n' +
     'Do NOT use them for politically sensitive material — it may be refused, garbled, or altered. ' +
     'For sensitive content use Whisper (local, private) or Gemini.\n\nUse this engine anyway?';
-document.querySelectorAll('input[name="engine"][value="dashscope"], input[name="engine"][value="precise"]')
+document.querySelectorAll('input[name="engine"][value="qwenasr"], input[name="engine"][value="precise"]')
     .forEach(radio => {
         radio.addEventListener('change', () => {
             if (radio.checked && !confirm(MAINLAND_WARNING)) {
@@ -169,32 +283,64 @@ document.querySelectorAll('input[name="engine"][value="dashscope"], input[name="
 // 真正的转写并发由服务器端每引擎的信号量控制（见 config.ENGINE_CONCURRENCY）。
 const UPLOAD_CONCURRENCY = 3;
 
+// 混合批次提交：文件 → /upload（上传池），链接 → /api/transcribe_urls（整批），
+// 本地路径 → /api/transcribe_local（逐条）。三路并发，共用一个 Queue。
 form.addEventListener('submit', async (e) => {
     e.preventDefault();
-    if (!fileInput.files.length) return;
+    if (intakeSubmitting) return;
+    const files = intakeFiles.slice();
+    const texts = parseTextLines();
+    const linkItems = texts.filter(t => t.kind === 'link');
+    const links = linkItems.map(t => t.text);   // 带 @后缀，服务器端解析
+    const paths = texts.filter(t => t.kind === 'path').map(t => t.text);
+    const total = files.length + links.length + paths.length;
+    if (!total) return;
 
     const engine = document.querySelector('input[name="engine"]:checked').value;
-    const files = Array.from(fileInput.files);
-
     errorSection.classList.add('hidden');
     batchSection.classList.remove('hidden');
     batchList.innerHTML = '';
-    batchTotal = files.length;
+    batchTotal = total;
     batchFinished = 0;
     updateBatchProgress();
 
+    intakeSubmitting = true;
     submitBtn.disabled = true;
     submitBtn.textContent = 'Transcribing…';
 
-    // 按选择顺序为每个文件先建一行，再用上传池逐个提交到 /upload
-    const jobs = files.map(file => {
+    // 按预览顺序先建行（文件 → 链接 → 路径），invalid 行不进队列
+    const fileJobs = files.map(file => {
         const row = createBatchRow(file.name);
         setRowStatus(row, 'Queued', 'queued');
         batchList.appendChild(row);
         return { file, row };
     });
+    const linkRows = linkItems.map(t => {
+        // Queue 里显示干净 URL + 时间段徽标，别露出 @后缀
+        const row = createBatchRow(t.clip ? `${t.label}  (⏱ ${t.clip})` : t.label);
+        setRowStatus(row, 'Queued', 'queued');
+        batchList.appendChild(row);
+        return row;
+    });
+    const pathRows = paths.map(p => {
+        const row = createBatchRow(p.split('/').pop() || p);
+        setRowStatus(row, 'Queued', 'queued');
+        batchList.appendChild(row);
+        return row;
+    });
 
-    await runUploadPool(jobs, engine, UPLOAD_CONCURRENCY);
+    // 提交即清空输入区（invalid 行留在文本框里，用户可改）
+    intakeFiles = [];
+    const keptLines = mixedInput.value.split('\n')
+        .filter(l => { const s = l.trim(); return s && !(/^https?:\/\//i.test(s)) && !(/^[\/~]/.test(s.replace(/^['"]/, ''))); });
+    mixedInput.value = keptLines.join('\n');
+    renderIntake();
+
+    await Promise.all([
+        runUploadPool(fileJobs, engine, UPLOAD_CONCURRENCY),
+        submitLinks(links, linkRows, engine),
+        submitPaths(paths, pathRows, engine),
+    ]);
 });
 
 async function runUploadPool(jobs, engine, concurrency) {
@@ -214,77 +360,86 @@ async function runUploadPool(jobs, engine, concurrency) {
     await Promise.all(workers);
 }
 
-// —— 本地文件直采：给个本机路径，服务器软链读盘，零上传 ——
-const localGoBtn = document.getElementById('local-go');
-if (localGoBtn) localGoBtn.addEventListener('click', async () => {
-    const pathEl = document.getElementById('local-path');
-    const path = (pathEl.value || '').trim();
-    if (!path) { pathEl.focus(); return; }
-    const engine = (document.getElementById('local-engine') || {}).value || 'gemini';
-    const body = { path, engine };
-    const speakerEl = document.getElementById('speaker-count');
-    if (engine === 'precise' && speakerEl && speakerEl.value.trim()) {
-        body.speaker_count = speakerEl.value.trim();
-    }
-    errorSection.classList.add('hidden');
-    batchSection.classList.remove('hidden');
-    batchList.innerHTML = '';
-    batchTotal = 1; batchFinished = 0; updateBatchProgress();
-
-    const row = createBatchRow(path.split('/').pop() || path);
-    setRowStatus(row, 'Reading local file…', 'running');
-    batchList.appendChild(row);
-    localGoBtn.disabled = true;
-    try {
-        const resp = await fetch('/api/transcribe_local', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-        });
-        const data = await resp.json().catch(() => ({}));
-        if (!resp.ok || data.error) {
-            setRowStatus(row, data.error || `Failed (${resp.status})`, 'error');
-            onTaskFinished();
-        } else {
-            connectBatchSSE(data.task_id, row);
-        }
-    } catch (err) {
-        setRowStatus(row, `Failed: ${err.message}`, 'error');
-        onTaskFinished();
-    } finally {
-        localGoBtn.disabled = false;
-    }
-});
-
-// —— 获取视频内容：贴一个或多个链接 → 下载 + 转写（各自成 Library 任务）——
-const urlGoBtn = document.getElementById('url-go');
-if (urlGoBtn) urlGoBtn.addEventListener('click', async () => {
-    const urls = (document.getElementById('url-input').value || '').trim();
-    if (!urls) { document.getElementById('url-input').focus(); return; }
-    const engine = document.querySelector('input[name="engine"]:checked').value;
-    errorSection.classList.add('hidden');
-    batchSection.classList.remove('hidden');
-    batchList.innerHTML = '';
-    urlGoBtn.disabled = true;
+// —— 链接批：一次 POST，服务器按行返回 tasks（与 rows 顺序一一对应，上限 20）——
+async function submitLinks(links, rows, engine) {
+    if (!links.length) return;
     try {
         const resp = await fetch('/api/transcribe_urls', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ urls, engine }),
+            body: JSON.stringify({
+                urls: links.join('\n'), engine,
+                max_videos: parseInt((document.getElementById('url-max-videos') || {}).value, 10) || 20,
+            }),
         });
         const data = await resp.json().catch(() => ({}));
-        if (!resp.ok || data.error) { alert(data.error || `Failed (${resp.status})`); return; }
-        batchTotal = data.tasks.length; batchFinished = 0; updateBatchProgress();
-        for (const t of data.tasks) {
-            const row = createBatchRow(t.url);
+        if (!resp.ok || data.error) {
+            rows.forEach(row => {
+                setRowStatus(row, data.error || `Failed (${resp.status})`, 'error');
+                onTaskFinished();
+            });
+            return;
+        }
+        // 注意：一行**合集/播放列表**链接会展开成多个任务，所以 tasks 可能比 rows 多。
+        // 多出来的当场补行（用服务器返回的标题），别让它们没有进度显示。
+        data.tasks.forEach((t, i) => {
+            let row = rows[i];
+            if (!row) {
+                row = createBatchRow(t.title || t.url);
+                batchList.appendChild(row);
+                batchTotal += 1;
+                updateBatchProgress();
+            } else if (t.title) {
+                const nameEl = row.querySelector('.batch-item-name');
+                if (nameEl) nameEl.textContent = t.title;   // 展开后用真实标题替掉合集URL
+            }
             setRowStatus(row, 'Downloading…', 'running');
-            batchList.appendChild(row);
             connectBatchSSE(t.task_id, row);
+        });
+        // 超出服务器单批上限被截掉的行，明确标出而不是悄悄消失
+        for (let i = data.tasks.length; i < rows.length; i++) {
+            setRowStatus(rows[i], 'Skipped — max 20 links per batch', 'error');
+            onTaskFinished();
+        }
+        // 合集枚举失败之类的问题，提示出来而不是静默
+        if (data.errors && data.errors.length) {
+            showToast(`Some links could not be expanded: ${data.errors[0]}`);
         }
     } catch (err) {
-        alert('Failed: ' + err.message);
-    } finally {
-        urlGoBtn.disabled = false;
+        rows.forEach(row => {
+            setRowStatus(row, `Failed: ${err.message}`, 'error');
+            onTaskFinished();
+        });
     }
-});
+}
+
+// —— 本地路径批：逐条 POST（服务器软链读盘，零上传）——
+async function submitPaths(paths, rows, engine) {
+    for (let i = 0; i < paths.length; i++) {
+        const row = rows[i];
+        setRowStatus(row, 'Reading local file…', 'running');
+        const body = { path: paths[i], engine };
+        const speakerEl = document.getElementById('speaker-count');
+        if (engine === 'precise' && speakerEl && speakerEl.value.trim()) {
+            body.speaker_count = speakerEl.value.trim();
+        }
+        try {
+            const resp = await fetch('/api/transcribe_local', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            });
+            const data = await resp.json().catch(() => ({}));
+            if (!resp.ok || data.error) {
+                setRowStatus(row, data.error || `Failed (${resp.status})`, 'error');
+                onTaskFinished();
+            } else {
+                connectBatchSSE(data.task_id, row);
+            }
+        } catch (err) {
+            setRowStatus(row, `Failed: ${err.message}`, 'error');
+            onTaskFinished();
+        }
+    }
+}
 
 async function uploadOne(file, row, engine) {
     setRowStatus(row, 'Uploading…', 'running');
@@ -328,8 +483,8 @@ async function uploadOne(file, row, engine) {
 }
 
 function resetSubmitBtn() {
-    submitBtn.disabled = false;
-    submitBtn.textContent = 'Transcribe';
+    intakeSubmitting = false;
+    updateSubmitBtn();   // 恢复 "Transcribe N items"（批次跑完后输入区通常已空 → 禁用）
 }
 
 // ========== Batch rows ==========
@@ -371,6 +526,19 @@ function setRowStatus(row, text, state) {
     status.textContent = text;
     status.className = 'batch-item-status';
     if (state) status.classList.add(`status-${state}`);
+    // 所有队列行的状态变化都经过这里 → 顺手刷新全局任务指示器
+    updateGlobalIndicator('transcribe', collectQueueTasks());
+}
+
+// Queue 的事实来源就是 #batch-list 的行：未完成 = queued / running
+function collectQueueTasks() {
+    return [...batchList.querySelectorAll('.batch-item')]
+        .filter(r => r.querySelector('.status-queued, .status-running'))
+        .map(r => ({
+            label: r.querySelector('.batch-item-name').textContent,
+            progress: r.querySelector('.batch-item-status').textContent,
+            tab: 'transcribe',
+        }));
 }
 
 function setRowProgress(row, percent) {
@@ -895,6 +1063,7 @@ function showToast(message) {
 
 // ========== Init ==========
 renderHistory();
+renderIntake();   // 初始化提交按钮状态（0 条 → 禁用）
 
 // ========== 链条：URL → 下载 → 转写 → 分析 → 总合成 ==========
 const chainUrl = document.getElementById('chain-url');
@@ -908,7 +1077,14 @@ const chainFallbackWhisper = document.getElementById('chain-fallback-whisper');
 const chainCritique = document.getElementById('chain-critique');
 const chainProvider = document.getElementById('chain-provider');
 const chainStartBtn = document.getElementById('chain-start');
-const chainList = document.getElementById('chain-list');
+
+// 分析模型的用户可读名（analysis_preset 是内部字段，展示层别裸露）
+const BRAIN_LABELS = { gemini: 'Gemini', deepseek: 'DeepSeek', kimi: 'Kimi',
+    glm: 'GLM', qwen: 'Qwen',
+    opus5: 'Claude Opus 5', opus46: 'Claude Opus 4.6' };
+function brainLabel(preset) {
+    return BRAIN_LABELS[preset || 'gemini'] || preset;
+}
 
 const CHAIN_STAGE_LABELS = {
     starting: 'Starting',
@@ -962,7 +1138,7 @@ chainStartBtn.addEventListener('click', async () => {
         chainUrl.value = '';
         loadChains();
     } catch (err) {
-        alert('Failed to start pipeline: ' + err.message);
+        alert('Failed to start the analysis: ' + err.message);
     } finally {
         chainSubmitting = false;
         chainStartBtn.disabled = false;
@@ -997,69 +1173,101 @@ function chainProgressText(c) {
     return parts.join(' · ');
 }
 
-function renderChains(chains) {
-    if (!chains.length) {
-        chainList.innerHTML = '';
-        return;
+// ===== URL 归一化：仅用于卡片归组比较，不改提交逻辑和存储 =====
+// 去名单方式：只删已知跟踪参数，其余参数一律保留 ——
+// YouTube 的 watch?v= / playlist?list= 是内容标识，误删会把不同内容合成一张卡。
+const TRACKING_PARAMS = new Set([
+    // Bilibili 分享链接
+    'share_source', 'share_medium', 'share_plat', 'share_session_id',
+    'share_tag', 'share_from', 'share_times', 'unique_k',
+    'vd_source', 'from_spmid', 'spm_id_from', 'spm', 'from_source',
+    'buvid', 'trackid', 'plat_id', 'is_story_h5', '-arouter',
+    // YouTube 分享链接
+    'si', 'feature',
+    // 通用
+    'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content',
+]);
+
+function normalizeChainUrl(raw) {
+    try {
+        const u = new URL(String(raw || '').trim());
+        const kept = [...u.searchParams.entries()]
+            .filter(([k]) => !TRACKING_PARAMS.has(k.toLowerCase()));
+        kept.sort((a, b) => a[0].localeCompare(b[0]) || a[1].localeCompare(b[1]));
+        const q = kept.map(([k, v]) => `${k}=${v}`).join('&');
+        return u.hostname.toLowerCase().replace(/^www\./, '')
+            + u.pathname.replace(/\/+$/, '')
+            + (q ? '?' + q : '');
+    } catch {
+        return String(raw || '').trim();
     }
-    chainList.innerHTML = chains.map(c => {
-        const stage = CHAIN_STAGE_LABELS[c.stage] || c.stage;
-        const active = !['done', 'failed', 'cancelled'].includes(c.stage);
+}
+
+// 进行中卡片的细进度条：按 下载/转写/分析 三步的完成数粗估百分比（纯展示）
+function chainPercent(c) {
+    const vids = c.videos || [];
+    const total = c.download_total || vids.length;
+    if (!total) return 2;
+    const steps = c.analyze === false ? 2 : 3;
+    const done = vids.filter(v => v.status === 'done').length;
+    const num = (c.download_done || 0) + done
+        + (c.analyze === false ? 0 : (c.analyzed_done || 0));
+    return Math.max(2, Math.min(99, Math.round(num / (total * steps) * 100)));
+}
+
+// 一条 chain → 一张卡。四态：进行中（进度） / 完成（现状不变） / 失败（错误+Retry）
+// / 停止或中断（Stopped+Continue，别让旧数据从界面消失）。
+function buildChainCard(c) {
+    const active = !['done', 'failed', 'cancelled'].includes(c.stage);
+    const author = (c.author && c.author !== '该博主') ? c.author : (c.url || 'Creator');
+    const vids = c.videos || [];
+    const img = c.avatar || (vids.find(v => v.thumbnail) || {}).thumbnail || '';
+    const thumb = img
+        ? `<div class="creator-thumb" style="background-image:url('${escapeHtml(img).replace(/[()'"\\]/g, '')}')"></div>`
+        : `<div class="creator-thumb creator-noimg">▷</div>`;
+    const name = `<div class="creator-name">${escapeHtml(String(author).slice(0, 60))}</div>`;
+
+    let body;
+    if (active) {
+        const prog = chainProgressText(c) || (CHAIN_STAGE_LABELS[c.stage] || c.stage);
+        body = `<div class="creator-meta">${escapeHtml(prog)}</div>
+            <div class="creator-progressbar"><i style="width:${chainPercent(c)}%"></i></div>`
+            + (c.current ? `<div class="creator-current">${escapeHtml(c.current.slice(0, 60))}</div>` : '');
+    } else if (c.stage === 'done' && c.final_doc) {
+        const nEp = vids.filter(v => v.status === 'done').length || vids.length;
+        body = `<div class="creator-meta">${nEp} episode${nEp === 1 ? '' : 's'} · ${brainLabel(c.analysis_preset)}</div>`;
+    } else if (c.stage === 'failed') {
+        body = `<div class="creator-meta creator-error">⚠ ${escapeHtml(String(c.error || 'Failed').slice(0, 90))}</div>
+            <button class="btn-secondary btn-small creator-retry"
+                onclick="continueChain('${c.id}', event)">Retry</button>`;
+    } else {
+        // cancelled，或 done 但没产出画像（中断/未合成）
         const prog = chainProgressText(c);
-        let links = '';
-        if (c.raw_doc) {
-            links += `<a class="chain-doc-link" href="#"
-                onclick="openDocView('${c.id}','${encodeURIComponent(c.raw_doc)}');return false;">Merged script</a>`;
-        }
-        if (c.final_doc) {
-            links += `<a class="chain-doc-link" href="#"
-                onclick="openDocView('${c.id}','${encodeURIComponent(c.final_doc)}');return false;">Read synthesis</a>`;
-        }
-        if (active) {
-            links += `<a class="chain-doc-link chain-del" href="#"
-                onclick="stopChain('${c.id}',event);return false;">Stop</a>`;
-        }
-        if (['done', 'failed', 'cancelled'].includes(c.stage)) {
-            // Continue：只在还有没跑完的视频时出现，补全缺失（转写失败/未下/未分析都续上）
-            if ((c.videos || []).some(v => v.status !== 'done')) {
-                links += `<a class="chain-doc-link" href="#"
-                    onclick="continueChain('${c.id}',event);return false;">Continue</a>`;
-            }
-            links += `<a class="chain-doc-link" href="#"
-                onclick="reanalyzeChain('${c.id}',event);return false;">Re-analyze</a>
-                <a class="chain-doc-link" href="#"
-                onclick="gotoDocs();return false;">All documents</a>
-                <a class="chain-doc-link chain-del" href="#"
-                onclick="deleteChain('${c.id}');return false;">Delete</a>`;
-        }
-        const err = c.stage === 'failed'
-            ? `<div class="chain-error">${(c.error || '').slice(0, 200)}</div>` : '';
-        const cur = active && c.current
-            ? `<div class="chain-current">${escapeHtml(c.current.slice(0, 60))}</div>` : '';
-        const author = (c.author && c.author !== '该博主') ? c.author : '';
-        const initial = (author || c.url.replace(/^https?:\/\/(www\.)?/, '') || '?')
-            .slice(0, 1).toUpperCase();
-        const avatar = `<span class="chain-avatar">
-            <span class="chain-avatar-fallback">${initial}</span>
-            ${c.avatar ? `<img src="${escapeHtml(c.avatar)}" alt="" onerror="this.style.display='none'">` : ''}
-        </span>`;
-        return `<div class="chain-item ${active ? 'chain-active' : ''}"
-                onclick="openChainDetail('${c.id}')" title="Open to see per-video progress">
-            <div class="chain-item-top">
-                ${avatar}
-                <span class="chain-meta">
-                    <span class="chain-author-line">
-                        ${author ? `<b class="chain-author">${escapeHtml(author)}</b>` : ''}
-                        <span class="chain-stage">${stage}</span>
-                    </span>
-                    <span class="chain-url" title="${escapeHtml(c.url)}">${escapeHtml(c.url.slice(0, 64))}</span>
-                </span>
-                <span class="chain-links" onclick="event.stopPropagation()">${links}</span>
-            </div>
-            <div class="chain-progress">${prog}</div>
-            ${cur}${err}
-        </div>`;
-    }).join('');
+        body = `<div class="creator-meta">Stopped${prog ? ' · ' + escapeHtml(prog) : ''}</div>
+            <button class="btn-secondary btn-small creator-retry"
+                onclick="continueChain('${c.id}', event)">Continue</button>`;
+    }
+    return `<div class="creator-card ${active ? 'creator-running' : ''}"
+        onclick="openChainDetail('${c.id}')" title="${escapeHtml(author)}">
+        ${thumb}<div class="creator-body">${name}${body}</div></div>`;
+}
+
+function renderChains(chains) {
+    const grid = document.getElementById('creators-grid');
+    const empty = document.getElementById('creators-empty');
+    if (!grid) return;
+    // 同一 URL（去跟踪参数后）只留最新一条：卡片代表"这个博主"，显示最新一次分析；
+    // 旧 run 的文档仍在 Library → Analyses。/api/chains 已按 created_at 倒序。
+    const seen = new Set();
+    const latest = [];
+    for (const c of chains) {
+        const key = normalizeChainUrl(c.url);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        latest.push(c);
+    }
+    if (empty) empty.classList.toggle('hidden', latest.length > 0);
+    grid.innerHTML = latest.map(buildChainCard).join('');
 }
 
 // ========== 链条详情：视频封面网格 + 每个视频状态 ==========
@@ -1090,6 +1298,7 @@ async function openChainDetail(id) {
     const tg = document.getElementById('chain-episodes-toggle');
     if (tg) tg.classList.remove('open');
     window.scrollTo({ top: 0 });
+    renderMergeBar();   // 购物车里有跨博主选的期 → 进来就显操作条
     await refreshChainDetail();
 }
 
@@ -1129,8 +1338,10 @@ async function refreshChainDetail() {
     const actions = chainTerminal
         ? `<button class="btn-primary ci-btn" onclick="continueChain('${c.id}')">Continue</button>
            <button class="btn-secondary ci-btn" onclick="reanalyzeChain('${c.id}')">Re-analyze</button>
+           <button class="btn-secondary ci-btn" onclick="closeChainDetail();gotoDocs()">Episode docs</button>
+           <button class="btn-secondary ci-btn btn-danger" onclick="deleteChain('${c.id}', true)">Delete</button>
            <span class="ci-hint">Continue = fill whatever is missing (reuses everything done).
-           Re-analyze = redo analysis only, with the Pipeline form's brain/level settings.</span>`
+           Re-analyze = redo analysis only, with the Creators form's brain/level settings.</span>`
         : `<button class="btn-secondary ci-btn" onclick="stopChain('${c.id}')">Stop</button>`;
     // ===== 布局原则：主角是「这个博主 + 读他的解读」；运维细节全部折叠 =====
     const author = (c.author && c.author !== '该博主') ? c.author : '';
@@ -1138,9 +1349,9 @@ async function refreshChainDetail() {
     // 主 CTA：读画像 / 合并原文（核心内容，做大）
     let ctas = '';
     if (c.final_doc) ctas += `<button class="btn-primary cd-cta"
-        onclick="openDocView('${c.id}','${encodeURIComponent(c.final_doc)}')">📖 Read portrait</button>`;
+        onclick="openDocView('${c.id}','${encodeURIComponent(c.final_doc)}')">📖 Report</button>`;
     if (c.raw_doc) ctas += `<button class="btn-secondary cd-cta"
-        onclick="openDocView('${c.id}','${encodeURIComponent(c.raw_doc)}')">📜 Merged transcript</button>`;
+        onclick="openDocView('${c.id}','${encodeURIComponent(c.raw_doc)}')">📜 Full transcript</button>`;
     // 镜头：核心动作，大 chip
     const LENSES = [['roast', '🔥 Roast'], ['craft', '✍️ Craft'],
         ['fun', '😂 Watchability'], ['quotes', '💬 Quotes'], ['worldview', '🗺 Worldview']];
@@ -1162,7 +1373,7 @@ async function refreshChainDetail() {
     const stats = [`<div class="cd-stat"><div class="n">${doneN}</div><div class="l">episodes read</div></div>`];
     if (c.followers) stats.push(`<div class="cd-stat"><div class="n">${fmtCount(c.followers)}</div><div class="l">followers</div></div>`);
     if (totalViews) stats.push(`<div class="cd-stat"><div class="n">${fmtCount(totalViews)}</div><div class="l">total plays</div></div>`);
-    stats.push(`<div class="cd-stat"><div class="n">${c.analysis_preset || 'gemini'}</div><div class="l">analysis brain</div></div>`);
+    stats.push(`<div class="cd-stat"><div class="n">${brainLabel(c.analysis_preset)}</div><div class="l">analysis model</div></div>`);
     document.getElementById('chain-detail-info').innerHTML = `
         <div class="cd-cover">
             <div class="cd-cover-top">
@@ -1188,7 +1399,7 @@ async function refreshChainDetail() {
                     <span class="ci-v"><a href="${safeUrl(c.url)}" target="_blank" rel="noopener">${escapeHtml((c.url || '').slice(0, 80))}</a></span></div>
                 <div class="ci-row"><span class="ci-k">Settings</span>
                     <span class="ci-v">engine <b>${c.engine || '-'}</b> · analyze <b>${onoff(c.analyze)}</b>
-                    · brain <b>${c.analysis_preset || 'gemini'}</b> · level <b>${c.critique_level || 'analytical'}</b>
+                    · model <b>${brainLabel(c.analysis_preset)}</b> · level <b>${c.critique_level || 'analytical'}</b>
                     · subs-first <b>${onoff(c.prefer_subs)}</b> · web-verify <b>${onoff(c.verify)}</b>
                     · self-verify <b>${onoff(c.self_verify)}</b>
                     · whisper-fallback <b>${onoff(c.fallback_whisper)}</b></span></div>
@@ -1217,8 +1428,14 @@ async function refreshChainDetail() {
         // 降级留痕：这期实际用的引擎和链条引擎不同（如 gemini 链落了 whisper）
         const engBadge = (v.engine_used && v.engine_used !== c.engine)
             ? `<span class="vg-eng" title="cloud engine failed; actually transcribed with ${v.engine_used}">${v.engine_used}</span>` : '';
-        return `<div class="vg-card ${clickable ? 'vg-clickable' : ''}"${onclick}>
-            <div class="vg-thumb-wrap">${thumb}${overlay}</div>
+        // 只有完成的分集能加入合并购物车；勾选框吞掉点击，不触发打开转写
+        const pick = clickable
+            ? `<label class="vg-pick" onclick="event.stopPropagation()" title="Add to merge">
+                 <input type="checkbox" ${mergeCart.has(v.task_id) ? 'checked' : ''}
+                   onchange="toggleMergePick('${v.task_id}', this.checked)">
+               </label>` : '';
+        return `<div class="vg-card ${clickable ? 'vg-clickable' : ''} ${mergeCart.has(v.task_id) ? 'vg-picked' : ''}"${onclick}>
+            <div class="vg-thumb-wrap">${thumb}${overlay}${pick}</div>
             <div class="vg-badge ${st.cls}">${st.label}${engBadge}</div>
             <div class="vg-title" title="${escapeHtml(v.title || '')}">${escapeHtml(v.title || '')}</div>
         </div>`;
@@ -1240,6 +1457,72 @@ function closeChainDetail() {
     window.scrollTo({ top: 0 });
 }
 
+// ========== 合并转写「购物车」：跨博主挑期，按 task_id 攒着 ==========
+// 选择单位是单期转写，与博主解耦；切博主不清空，最后一起合并成一份纯文本。
+const mergeCart = new Set();
+
+function toggleMergePick(taskId, checked) {
+    if (checked) mergeCart.add(taskId); else mergeCart.delete(taskId);
+    // 同步卡片高亮（重绘时也会带上 vg-picked）
+    const box = document.querySelector(`.vg-pick input[onchange*="${taskId}"]`);
+    if (box) box.closest('.vg-card')?.classList.toggle('vg-picked', checked);
+    renderMergeBar();
+}
+
+function renderMergeBar() {
+    let bar = document.getElementById('merge-bar');
+    if (!mergeCart.size) { if (bar) bar.remove(); return; }
+    if (!bar) {
+        bar = document.createElement('div');
+        bar.id = 'merge-bar';
+        bar.className = 'merge-bar';
+        document.body.appendChild(bar);
+    }
+    const n = mergeCart.size;
+    bar.innerHTML = `
+        <span class="merge-bar-count">${n} transcript${n === 1 ? '' : 's'} selected</span>
+        <button class="btn-secondary btn-small" onclick="clearMergeCart()">Clear</button>
+        <button class="btn-primary btn-small" onclick="runMergeTranscripts()">📄 Merge</button>`;
+}
+
+function clearMergeCart() {
+    mergeCart.clear();
+    document.querySelectorAll('.vg-card.vg-picked').forEach(c => {
+        c.classList.remove('vg-picked');
+        const box = c.querySelector('.vg-pick input');
+        if (box) box.checked = false;
+    });
+    renderMergeBar();
+}
+
+async function runMergeTranscripts() {
+    if (!mergeCart.size) return;
+    const btn = document.querySelector('#merge-bar .btn-primary');
+    if (btn) { btn.disabled = true; btn.textContent = 'Merging…'; }
+    try {
+        const r = await (await fetch('/api/transcripts/merge', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ task_ids: [...mergeCart] }),
+        })).json();
+        if (r.error) { alert(r.error); return; }
+        // 复用现成的内存文档视图（和小红书报告同一条路）
+        currentDoc = { chainId: null, name: r.filename || '合并转写.md', raw: r.markdown };
+        docTitle.textContent = `Merged transcript · ${r.count} episode${r.count === 1 ? '' : 's'}`;
+        docContent.innerHTML = renderMarkdown(r.markdown);
+        docReturnTo = (chainDetailView && !chainDetailView.classList.contains('hidden'))
+            ? 'chainDetail' : 'main';
+        mainView.classList.add('hidden');
+        if (chainDetailView) chainDetailView.classList.add('hidden');
+        docView.classList.remove('hidden');
+        window.scrollTo({ top: 0 });
+        if (r.missing) showToast(`${r.missing} skipped (no transcript text)`);
+    } catch {
+        alert('Merge failed');
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = '📄 Merge'; }
+    }
+}
+
 if (chainDetailBack) chainDetailBack.addEventListener('click', closeChainDetail);
 
 async function loadChains() {
@@ -1247,6 +1530,14 @@ async function loadChains() {
         const resp = await fetch('/api/chains');
         const chains = await resp.json();
         renderChains(chains);
+        updateGlobalIndicator('chains', chains
+            .filter(c => !['done', 'failed', 'cancelled'].includes(c.stage))
+            .map(c => ({
+                label: (c.author && c.author !== '该博主') ? c.author : c.url,
+                progress: chainProgressText(c) || (CHAIN_STAGE_LABELS[c.stage] || c.stage),
+                tab: 'creators',
+                chainId: c.id,
+            })));
         const anyActive = chains.some(c => !['done', 'failed', 'cancelled'].includes(c.stage));
         clearTimeout(chainPollTimer);
         // 只在有活跃链条、且标签页在前台时才继续轮询：
@@ -1262,10 +1553,15 @@ document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
         clearTimeout(chainPollTimer);
         clearTimeout(chainDetailTimer);
+        clearTimeout(xhsTimer);
+        clearTimeout(xhsAnTimer);
     } else {
         loadChains();
         if (chainDetailId) refreshChainDetail();
         if (enrichWasPolling) { enrichWasPolling = false; pollEnrichStatus(); }
+        // XHS：仅在上次已知有活跃任务时恢复（各自查一次，idle 就地停，不空转）
+        if (activeTasks['xhs-scrape'].length) pollXhs();
+        if (activeTasks['xhs-analyze'].length) pollXhsAnalyze();
     }
 });
 
@@ -1279,7 +1575,7 @@ function gotoDocs() {
 // 云引擎失败自动落 Whisper），最后补分析 + 合成。用上面表单的引擎/分析大脑设置。
 async function continueChain(chainId, ev) {
     if (ev) ev.stopPropagation();
-    if (!confirm('Continue this pipeline?\nReuses everything finished; only fills gaps: downloads what is missing, re-transcribes failures, then completes analysis + synthesis, using the form settings above.\n\nNote: videos content-blocked by Gemini (RECITATION/safety) auto-fall-back to local Whisper; other failures only fall back if Whisper fallback is checked.')) return;
+    if (!confirm('Continue this analysis?\nReuses everything finished; only fills gaps: downloads what is missing, re-transcribes failures, then completes analysis + synthesis, using the settings in the Creators form.\n\nNote: videos content-blocked by Gemini (RECITATION/safety) auto-fall-back to local Whisper; other failures only fall back if Whisper fallback is checked.')) return;
     try {
         const r = await (await fetch(`/api/chain/${chainId}/retry`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1292,14 +1588,15 @@ async function continueChain(chainId, ev) {
 
 async function stopChain(chainId, ev) {
     if (ev) ev.stopPropagation();
-    if (!confirm('Stop this pipeline? Finished transcripts & analyses are kept; it just stops going further.')) return;
+    if (!confirm('Stop this analysis? Finished transcripts & analyses are kept; it just stops going further.')) return;
     try { await fetch(`/api/chain/${chainId}/stop`, { method: 'POST' }); } catch { /* ignore */ }
     loadChains();
 }
 
-async function deleteChain(chainId) {
-    if (!confirm('Delete this pipeline’s documents? (transcripts stay in the library)')) return;
+async function deleteChain(chainId, fromDetail) {
+    if (!confirm('Delete this creator analysis’s documents? (transcripts stay in the library)')) return;
     await fetch(`/api/chain/${chainId}`, { method: 'DELETE' });
+    if (fromDetail) closeChainDetail();
     loadChains();
 }
 
@@ -1311,7 +1608,7 @@ async function reanalyzeChain(chainId, ev) {
     if (!confirm('Re-analyze: rerun AI analysis on every transcribed video'
         + (verify ? ' + web fact-check (extra search quota)' : '')
         + (selfVerify ? ' + self-verify (extra calls)' : '')
-        + ', using the analysis brain selected above. Transcripts untouched. Continue?')) return;
+        + ', using the analysis model selected in the Creators form. Transcripts untouched. Continue?')) return;
     try {
         const r = await (await fetch(`/api/chain/${chainId}/reanalyze`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1331,7 +1628,6 @@ loadChains();
 const navTabs = document.querySelectorAll('.nav-tab');
 const tabPanels = {
     transcribe: document.getElementById('tab-transcribe'),
-    chain: document.getElementById('tab-chain'),
     xhs: document.getElementById('tab-xhs'),
     creators: document.getElementById('tab-creators'),
     library: document.getElementById('tab-library'),
@@ -1343,8 +1639,7 @@ function switchTab(name) {
         if (el) el.classList.toggle('active', k === name);
     });
     if (name === 'library') { renderHistory(); }
-    if (name === 'chain') { loadChains(); }
-    if (name === 'creators') { renderCreators(); }
+    if (name === 'creators') { loadChains(); }
     if (name === 'xhs') { pollXhs(); pollXhsAnalyze(); }
 }
 
@@ -1357,6 +1652,9 @@ async function pollXhs() {
     try { s = await (await fetch('/api/xhs/status')).json(); }
     catch { return; }
     clearTimeout(xhsTimer);
+    updateGlobalIndicator('xhs-scrape', s.running
+        ? [{ label: s.kw || 'Scraping notes', progress: `${s.scraped} scraped`, tab: 'xhs' }]
+        : []);
     if (!s.running && !s.log?.length) { box.classList.add('hidden'); return; }
     box.classList.remove('hidden');
     const dot = s.running ? '<span class="xhs-live">● Scraping</span>' : '<span class="xhs-done">✓ Stopped</span>';
@@ -1390,6 +1688,9 @@ async function pollXhsAnalyze() {
     try { s = await (await fetch('/api/xhs/analyze_status')).json(); }
     catch { return; }
     clearTimeout(xhsAnTimer);
+    updateGlobalIndicator('xhs-analyze', s.running
+        ? [{ label: 'Notes analysis', progress: `${s.done}/${s.total} notes`, tab: 'xhs' }]
+        : []);
     if (s.running) {
         box.classList.remove('hidden');
         box.innerHTML = `<span class="xhs-live">● Analyzing</span> read <b>${s.done}</b>/${s.total} notes… (images + comments)`;
@@ -1465,50 +1766,91 @@ if (xhsStartBtn) xhsStartBtn.addEventListener('click', async () => {
     } catch { alert('Failed to start'); xhsStartBtn.disabled = false; }
 });
 
+// 页面加载各查一次：刷新页面时若有爬取/分析仍在跑（服务端进行中），
+// 不用点进 XHS tab 也能接上轮询、点亮全局指示器；idle 则就地停，不是常驻轮询。
+pollXhs();
+pollXhsAnalyze();
+
+// ========== 全局任务指示器（顶栏 ⟳N + popover）==========
+// 极简聚合，不新建任何轮询：三处现有刷新（setRowStatus / loadChains / pollXhs*）
+// 每次拿到新数据后调 updateGlobalIndicator(source, tasks) 更新这里并重绘。
+const activeTasks = { transcribe: [], chains: [], 'xhs-scrape': [], 'xhs-analyze': [] };
+const GT_SOURCE_LABEL = { transcribe: 'Transcribe', chains: 'Creator',
+    'xhs-scrape': 'Xiaohongshu', 'xhs-analyze': 'Xiaohongshu' };
+const gtBtn = document.getElementById('global-tasks');
+const gtCount = document.getElementById('global-tasks-count');
+const gtPop = document.getElementById('global-tasks-pop');
+
+function updateGlobalIndicator(source, tasks) {
+    activeTasks[source] = tasks || [];
+    const total = Object.values(activeTasks).reduce((s, a) => s + a.length, 0);
+    if (!total) {
+        gtBtn.classList.add('hidden');
+        gtPop.classList.add('hidden');
+        return;
+    }
+    gtBtn.classList.remove('hidden');
+    gtCount.textContent = total;
+    if (!gtPop.classList.contains('hidden')) renderGtPop();   // 打开时跟着刷新
+}
+
+function renderGtPop() {
+    gtPop.innerHTML = '';
+    Object.entries(activeTasks).forEach(([source, tasks]) => {
+        tasks.forEach(t => {
+            const row = document.createElement('button');
+            row.type = 'button';
+            row.className = 'gt-row';
+            const kind = document.createElement('span');
+            kind.className = 'gt-kind';
+            kind.textContent = GT_SOURCE_LABEL[source];
+            const name = document.createElement('span');
+            name.className = 'gt-name';
+            name.textContent = t.label;
+            name.title = t.label;
+            const prog = document.createElement('span');
+            prog.className = 'gt-prog';
+            prog.textContent = t.progress || '';
+            row.appendChild(kind);
+            row.appendChild(name);
+            row.appendChild(prog);
+            row.addEventListener('click', () => {
+                gtPop.classList.add('hidden');
+                switchTab(t.tab);
+                if (t.chainId) flashCreatorCard(t.chainId);
+            });
+            gtPop.appendChild(row);
+        });
+    });
+}
+
+// 从 popover 点进 Creators：滚动到对应卡片并短暂高亮
+function flashCreatorCard(chainId) {
+    const card = document.querySelector(`.creator-card[onclick*="${chainId}"]`);
+    if (!card) return;
+    card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    card.classList.add('card-flash');
+    setTimeout(() => card.classList.remove('card-flash'), 1600);
+}
+
+if (gtBtn) gtBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const nowHidden = gtPop.classList.toggle('hidden');
+    if (!nowHidden) renderGtPop();
+});
+document.addEventListener('click', (e) => {
+    if (!gtPop.classList.contains('hidden')
+        && !gtPop.contains(e.target) && !gtBtn.contains(e.target)) {
+        gtPop.classList.add('hidden');
+    }
+});
+
 // 大数字人性化：万 / 亿
 function fmtCount(n) {
     n = Number(n) || 0;
     if (n >= 1e8) return (n / 1e8).toFixed(1).replace(/\.0$/, '') + '亿';
     if (n >= 1e4) return (n / 1e4).toFixed(1).replace(/\.0$/, '') + '万';
     return String(n);
-}
-
-// ========== 博主库：已解读完的博主陈列 ==========
-async function renderCreators() {
-    const grid = document.getElementById('creators-grid');
-    const empty = document.getElementById('creators-empty');
-    if (!grid) return;
-    try {
-        const chains = await (await fetch('/api/chains')).json();
-        // 有合成文档 = 真解读完了；按最近在前
-        const done = chains.filter(c => c.final_doc);
-        if (!done.length) {
-            grid.innerHTML = '';
-            if (empty) empty.classList.remove('hidden');
-            return;
-        }
-        if (empty) empty.classList.add('hidden');
-        grid.innerHTML = done.map(c => {
-            const author = (c.author && c.author !== '该博主') ? c.author : (c.url || 'Creator');
-            const safe = escapeHtml(author);
-            const vids = c.videos || [];
-            // 优先真头像，退回视频封面
-            const img = c.avatar || (vids.find(v => v.thumbnail) || {}).thumbnail || '';
-            const nEp = vids.filter(v => v.status === 'done').length || vids.length;
-            const brain = c.analysis_preset || 'gemini';
-            const ts = img
-                ? `<div class="creator-thumb" style="background-image:url('${escapeHtml(img).replace(/[()'"\\]/g, '')}')"></div>`
-                : `<div class="creator-thumb creator-noimg">▷</div>`;
-            return `<div class="creator-card" onclick="openChainDetail('${c.id}')" title="${safe}">
-                ${ts}
-                <div class="creator-body">
-                    <div class="creator-name">${escapeHtml(author.slice(0, 60))}</div>
-                    <div class="creator-meta">${nEp} eps · brain ${brain}</div>
-                </div></div>`;
-        }).join('');
-    } catch {
-        grid.innerHTML = '<p class="history-empty">Could not load</p>';
-    }
 }
 
 navTabs.forEach(btn => {
@@ -1553,7 +1895,7 @@ async function loadDocs() {
         // 只列出有产物的链条（分析过的）
         const withDocs = chains.filter(c => c.analyze);
         if (!withDocs.length) {
-            docsList.innerHTML = '<p class="history-empty">No analysis documents yet — run a Pipeline</p>';
+            docsList.innerHTML = '<p class="history-empty">No analysis documents yet — analyze a creator first</p>';
             return;
         }
         const blocks = await Promise.all(withDocs.map(async c => {
@@ -1562,7 +1904,7 @@ async function loadDocs() {
             catch { files = []; }
             files = (Array.isArray(files) ? files : []).filter(f => f.endsWith('.md'));
             if (!files.length) return '';
-            // 排序：Synthesis(总分析) > Merged script(合并原文) > 其余按名
+            // 排序：Report(总分析) > Full transcript(合并原文) > 其余按名
             const rank = f => f === '总分析.md' ? 0 : f === '合并原文.md' ? 1 : 2;
             files.sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
             const title = (c.author && c.author !== '该博主') ? c.author : c.url;
@@ -1571,7 +1913,7 @@ async function loadDocs() {
             const items = files.map(f => {
                 const isTotal = f === '总分析.md';
                 const isRaw = f === '合并原文.md';
-                const label = isTotal ? 'Synthesis' : isRaw ? 'Merged script'
+                const label = isTotal ? 'Report' : isRaw ? 'Full transcript'
                     : f.replace(/^分析_\d+_/, '').replace(/\.md$/, '');
                 const cls = isTotal ? 'doc-total' : isRaw ? 'doc-raw' : '';
                 return `<button class="doc-item ${cls}"
@@ -1862,6 +2204,7 @@ const settingsOverlay = document.getElementById('settings-overlay');
 const setGeminiKey = document.getElementById('set-gemini-key');
 const setGeminiBase = document.getElementById('set-gemini-base');
 const setDashKey = document.getElementById('set-dashscope-key');
+const setOpenrouterKey = document.getElementById('set-openrouter-key');
 const settingsMsg = document.getElementById('settings-msg');
 
 async function openSettings() {
@@ -1871,10 +2214,13 @@ async function openSettings() {
         setGeminiBase.value = s.gemini_base_url || '';
         setGeminiKey.value = '';
         setDashKey.value = '';
+        setOpenrouterKey.value = '';
         setGeminiKey.placeholder = s.gemini.set
             ? `saved ${s.gemini.hint} · leave blank to keep` : 'paste key…';
         setDashKey.placeholder = s.dashscope.set
             ? `saved ${s.dashscope.hint} · leave blank to keep` : 'paste key…';
+        setOpenrouterKey.placeholder = (s.openrouter && s.openrouter.set)
+            ? `saved ${s.openrouter.hint} · leave blank to keep` : 'paste key…';
         // Models（空 = 默认）
         document.getElementById('set-whisper-model').value = s.whisper_model || '';
         document.getElementById('set-gemini-transcribe').value = s.gemini_transcribe_model || '';
@@ -1883,6 +2229,7 @@ async function openSettings() {
     } catch { /* 打开即可，拉取失败不阻塞 */ }
     document.getElementById('test-gemini-res').textContent = '';
     document.getElementById('test-dashscope-res').textContent = '';
+    document.getElementById('test-openrouter-res').textContent = '';
     settingsMsg.textContent = '';
     settingsOverlay.classList.remove('hidden');
 }
@@ -2013,6 +2360,11 @@ document.getElementById('test-dashscope').addEventListener('click', () => {
         dashscope_key: setDashKey.value.trim(),
     });
 });
+document.getElementById('test-openrouter').addEventListener('click', () => {
+    testEngine('openrouter', document.getElementById('test-openrouter-res'), {
+        openrouter_key: setOpenrouterKey.value.trim(),
+    });
+});
 
 document.getElementById('settings-save').addEventListener('click', async () => {
     const body = {
@@ -2024,6 +2376,7 @@ document.getElementById('settings-save').addEventListener('click', async () => {
     };
     if (setGeminiKey.value.trim()) body.gemini_key = setGeminiKey.value.trim();
     if (setDashKey.value.trim()) body.dashscope_key = setDashKey.value.trim();
+    if (setOpenrouterKey.value.trim()) body.openrouter_key = setOpenrouterKey.value.trim();
     settingsMsg.className = 'settings-msg';
     settingsMsg.textContent = 'Saving…';
     try {
