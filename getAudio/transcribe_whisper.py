@@ -32,13 +32,19 @@ def _get_model():
             if size not in _models:
                 try:
                     from faster_whisper import WhisperModel
+                    from config import WHISPER_CPU_THREADS, ENGINE_CONCURRENCY
 
                     # CPU 上 int8 量化最快且精度损失可忽略
                     compute = 'int8' if WHISPER_DEVICE == 'cpu' else 'float16'
+                    # num_workers=并发路数 → 一个模型实例并行处理多路；cpu_threads=每路线程数。
+                    # 二者乘积贴近性能核数，避免多路互抢核导致整体变慢。
+                    workers = max(1, ENGINE_CONCURRENCY.get('whisper', 1))
                     _models[size] = (WhisperModel(
                         size,
                         device=WHISPER_DEVICE,
                         compute_type=compute,
+                        cpu_threads=WHISPER_CPU_THREADS,
+                        num_workers=workers,
                     ), 'faster')
                 except Exception:
                     # faster-whisper 不可用（未安装/模型下载失败等）→ 回退旧实现

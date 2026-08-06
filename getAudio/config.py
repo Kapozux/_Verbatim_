@@ -17,11 +17,15 @@ ALLOWED_EXTENSIONS = AUDIO_EXTENSIONS | VIDEO_EXTENSIONS
 # 批量转录并发控制：一次可以丢进很多文件，但真正同时运行的数量按引擎区分。
 # 本地 Whisper 每个任务都吃满 CPU/内存，必须保守；云引擎只是提交请求，可以放开。
 ENGINE_CONCURRENCY = {
-    'whisper': 2,
+    # 本地 Whisper 并发。M 系多核（如 M4 Max 12 性能核）可开多路；配合下面的
+    # WHISPER_CPU_THREADS，num_workers×cpu_threads ≈ 性能核数，避免多路互抢核。
+    'whisper': int(os.environ.get('WHISPER_CONCURRENCY') or 4),
     # Paid Tier 1（~150 RPM）下 8 路并发稳妥。注意每个文件不止一次请求
     # （上传 + 长音频分段各一次），所以实际 QPS 会更高；若大量 429/空文本再下调。
     'gemini': int(os.environ.get('GEMINI_CONCURRENCY') or 12),
     'dashscope': 9,
+    # Qwen-ASR：和 dashscope 同一套异步转写接口，配额也是同一个账号，给同样的并发。
+    'qwenasr': 9,
     # 精准模式：单个任务内部会并发跑 Gemini 转写 + 阿里云说话人分离，最后再 Gemini 合并。
     # 一个任务实际打 2~3 次 Gemini + 1 次阿里云，所以并发压低到 4，避免叠加把两边都打爆。
     'precise': 4,
@@ -46,8 +50,14 @@ YTDLP_COOKIES_FROM_BROWSER = os.environ.get('YTDLP_COOKIES_BROWSER', 'chrome')
 AUTH_TOKEN = os.environ.get('GETAUDIO_TOKEN', '')
 
 # Whisper
-WHISPER_MODEL_SIZE = 'small'
+# large-v3 精度最好（口语 + 专有名词多的内容值得）；M4 Max 扛得住。首次用会下载 ~3GB。
+# 想快/省内存可在 Settings 或 env 改回 small/medium（WHISPER_MODEL_SIZE 运行时读 env）。
+WHISPER_MODEL_SIZE = os.environ.get('WHISPER_MODEL_SIZE') or 'large-v3'
 WHISPER_DEVICE = 'cpu'
+# faster-whisper 每路用几个 CPU 线程 + 几个并行 worker。
+# num_workers 让一个模型实例并行处理多路请求；cpu_threads 是每路的线程数。
+# 目标：WHISPER_CONCURRENCY(=num_workers) × cpu_threads ≈ 性能核数（M4 Max 12）。
+WHISPER_CPU_THREADS = int(os.environ.get('WHISPER_CPU_THREADS') or 3)
 # None/空 = 自动检测语言（推荐，英文录音不会再被强制转成中文）；填 'zh' 可强制中文
 WHISPER_LANGUAGE = os.environ.get('WHISPER_LANGUAGE') or None
 
@@ -72,6 +82,9 @@ GEMINI_FALLBACK_MODELS = [
 # 有内容审查：只用于非敏感博主。转录不走这里（都是文本模型）。
 ALIYUN_COMPAT_BASE = os.environ.get('ALIYUN_COMPAT_BASE') or \
     'https://dashscope.aliyuncs.com/compatible-mode/v1'
+# OpenRouter：一把 key 通吃 Claude 等海外模型（OpenAI 兼容端点，无内容审查）。
+OPENROUTER_COMPAT_BASE = os.environ.get('OPENROUTER_COMPAT_BASE') or \
+    'https://openrouter.ai/api/v1'
 ANALYSIS_PRESET_DEFAULT = os.environ.get('ANALYSIS_PRESET') or 'gemini'
 # 预设 → (provider, 抽取模型, 合成模型)
 ANALYSIS_PRESETS = {
@@ -80,6 +93,9 @@ ANALYSIS_PRESETS = {
     'qwen':     ('aliyun', 'qwen3.7-plus', 'qwen3.7-plus'),
     'kimi':     ('aliyun', 'kimi-k2.6', 'kimi-k2.6'),
     'glm':      ('aliyun', 'glm-5.2', 'glm-5.2'),
+    # Claude（走 OpenRouter，带 thinking）：贵但强，抽取+合成同模型，成本随期数线性涨
+    'opus46':   ('openrouter', 'anthropic/claude-opus-4.6', 'anthropic/claude-opus-4.6'),
+    'opus5':    ('openrouter', 'anthropic/claude-opus-5', 'anthropic/claude-opus-5'),
 }
 
 
@@ -102,7 +118,14 @@ GEMINI_INLINE_LIMIT = 19 * 1024 * 1024  # 19 MB, use File API above this
 
 # DashScope (阿里云百炼)
 DASHSCOPE_API_KEY = os.environ.get('DASHSCOPE_API_KEY', '')
-DASHSCOPE_ASR_MODEL = 'paraformer-v2'
+# 阿里云 ASR 统一走 Qwen-Audio-3.0（2026-08 起）。paraformer-v2 已被阿里官方标为
+# 上一代并建议迁移；实测同一段真人录音，paraformer 会把「AI」听成「悲哀」、
+# 「语音识别」听成「原因识别」，Qwen 则准确，说话人分离两者相当（都正确分出 2 人）。
+# 两代接口完全一致（同异步端点、同 diarization_enabled/speaker_count 参数、
+# 同 sentences[].begin_time/text/speaker_id 返回结构），所以换模型名即可。
+# 单文件上限 12 小时 / 2GB。需要退回旧模型时设 DASHSCOPE_ASR_MODEL=paraformer-v2。
+DASHSCOPE_ASR_MODEL = (os.environ.get('DASHSCOPE_ASR_MODEL')
+                       or 'qwen-audio-3.0-asr-flash-filetrans')
 DASHSCOPE_LLM_MODEL = 'qwen-plus'
 
 
