@@ -7,3 +7,4 @@ dashscope>=1.20
 requests>=2.28
 torch>=2.0  # 仅 openai-whisper 回退路径需要
 # yt-dlp 用系统 brew 版（brew install yt-dlp），勿装 pip 版（py3.9 锁旧版会被 YouTube 反爬）
+mlx-whisper  # Apple Silicon GPU 后端（Metal），非 macOS/arm64 会自动跳过
