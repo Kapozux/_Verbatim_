@@ -300,7 +300,34 @@ def download_one(target, dest_dir, section=None):
                 }
         if attempt < _DOWNLOAD_ATTEMPTS:
             time.sleep(4 * attempt)      # 4s, 8s 退避
+    # B站「活动页」视频（入选盛典/榜单等）：普通 /video/BVxxx 页 yt-dlp 解析不了
+    # （Unable to extract initial state），但同一支片子的活动页 URL 可以。换它再试一次。
+    fest = _bili_festival_url(target.get('video_url'))
+    if fest and fest != target.get('video_url'):
+        return download_one({**target, 'video_url': fest}, dest_dir, section=section)
     return None
+
+
+_BV_RE = re.compile(r'(BV[0-9A-Za-z]{10})')
+
+
+def _bili_festival_url(url):
+    """查这支 B站视频的活动页地址（官方 API 的 festival_jump_url）；没有则 None。"""
+    if 'bilibili.com' not in (url or ''):
+        return None
+    m = _BV_RE.search(url or '')
+    if not m:
+        return None
+    try:
+        import urllib.request
+        req = urllib.request.Request(
+            f'https://api.bilibili.com/x/web-interface/view?bvid={m.group(1)}',
+            headers={'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.bilibili.com/'})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+        return ((data.get('data') or {}).get('festival_jump_url') or '').strip() or None
+    except Exception:  # noqa: BLE001
+        return None
 
 
 _SUB_TIMEOUT = 120
