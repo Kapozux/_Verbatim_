@@ -794,6 +794,7 @@ function dateStr() {
 // ========== History (server API) ==========
 // 搜索 + 引擎筛选状态
 let activeEngineFilter = '';
+let activeSourceFilter = '';    // '' | 'mine' | 'pipeline'
 let searchTimer = null;
 
 async function renderHistory() {
@@ -807,6 +808,9 @@ async function renderHistory() {
 
         if (activeEngineFilter) {
             entries = entries.filter(e => e.engine === activeEngineFilter);
+        }
+        if (activeSourceFilter) {
+            entries = entries.filter(e => (e.source || 'mine') === activeSourceFilter);
         }
 
         historyCount.textContent = entries.length ? `(${entries.length})` : '';
@@ -846,6 +850,15 @@ function buildHistoryCard(entry) {
     badge.className = `engine-badge engine-${entry.engine || 'unknown'}`;
     badge.textContent = engineLabel(entry.engine);
     titleRow.appendChild(badge);
+
+    // Pipeline 跑出来的挂上博主名，一眼看出这条不是我自己传的
+    if (entry.source === 'pipeline') {
+        const src = document.createElement('span');
+        src.className = 'source-badge';
+        src.textContent = `🎬 ${entry.creator || 'Creators'}`;
+        src.title = 'From a Creators pipeline run';
+        titleRow.appendChild(src);
+    }
 
     info.appendChild(titleRow);
 
@@ -920,6 +933,17 @@ engineFilters.addEventListener('click', (e) => {
     engineFilters.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
     chip.classList.add('active');
     activeEngineFilter = chip.dataset.engine || '';
+    renderHistory();
+});
+
+// 来源筛选 chips：我自己弄的 vs Creators 流水线跑的
+const sourceFilters = document.getElementById('source-filters');
+if (sourceFilters) sourceFilters.addEventListener('click', (e) => {
+    const chip = e.target.closest('.chip');
+    if (!chip) return;
+    sourceFilters.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
+    chip.classList.add('active');
+    activeSourceFilter = chip.dataset.source || '';
     renderHistory();
 });
 

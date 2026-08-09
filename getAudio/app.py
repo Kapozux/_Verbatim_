@@ -1047,23 +1047,67 @@ def stream(task_id):
 
 # ========== History API ==========
 
+# task_id → 所属链条的博主名。用来把 Library 里「Pipeline 跑的」和「我自己弄的」分开。
+# 直接从各 chain.json 的 videos 反查，所以历史数据也能分（不需要迁移 meta）。
+_chain_task_cache = {'stamp': None, 'map': {}}
+
+
+def _chain_task_map():
+    """{task_id: 博主名}。按 _chains 目录的 mtime 做缓存，避免每次轮询读几十个 json。"""
+    try:
+        stamp = max([os.path.getmtime(CHAINS_DIR)] + [
+            os.path.getmtime(os.path.join(CHAINS_DIR, n, 'chain.json'))
+            for n in os.listdir(CHAINS_DIR)
+            if os.path.isfile(os.path.join(CHAINS_DIR, n, 'chain.json'))
+        ])
+    except OSError:
+        return {}
+    if _chain_task_cache['stamp'] == stamp:
+        return _chain_task_cache['map']
+    m = {}
+    try:
+        for n in os.listdir(CHAINS_DIR):
+            cpath = os.path.join(CHAINS_DIR, n, 'chain.json')
+            if not os.path.isfile(cpath):
+                continue
+            try:
+                with open(cpath, 'r', encoding='utf-8') as f:
+                    c = json.load(f)
+            except Exception:  # noqa: BLE001
+                continue
+            author = (c.get('author') or '').strip() or '(pipeline)'
+            for v in (c.get('videos') or []):
+                if v.get('task_id'):
+                    m[v['task_id']] = author
+    except OSError:
+        return _chain_task_cache['map']
+    _chain_task_cache.update(stamp=stamp, map=m)
+    return m
+
+
 @app.route('/api/history')
 def api_history():
-    """List all saved transcription sessions."""
+    """List all saved transcription sessions（附带 source：pipeline / mine）。"""
     results_dir = config.RESULTS_FOLDER
     entries = []
 
     if not os.path.isdir(results_dir):
         return jsonify(entries)
 
+    chain_map = _chain_task_map()
     for name in os.listdir(results_dir):
         meta_path = os.path.join(results_dir, name, 'meta.json')
         if os.path.isfile(meta_path):
             try:
                 with open(meta_path, 'r', encoding='utf-8') as f:
-                    entries.append(json.load(f))
+                    e = json.load(f)
             except Exception:
-                pass
+                continue
+            author = chain_map.get(e.get('id') or name)
+            e['source'] = 'pipeline' if author else 'mine'
+            if author:
+                e['creator'] = author
+            entries.append(e)
 
     entries.sort(key=lambda e: e.get('date', ''), reverse=True)
     return jsonify(entries)
@@ -1266,7 +1310,10 @@ def api_search():
                     pass
 
         if matched:
-            hits.append({**meta, 'snippet': snippet})
+            author = _chain_task_map().get(meta.get('id') or name)
+            hits.append({**meta, 'snippet': snippet,
+                         'source': 'pipeline' if author else 'mine',
+                         **({'creator': author} if author else {})})
 
     hits.sort(key=lambda e: e.get('date', ''), reverse=True)
     return jsonify(hits)
