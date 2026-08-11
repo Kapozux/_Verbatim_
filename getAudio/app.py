@@ -1053,7 +1053,14 @@ _chain_task_cache = {'stamp': None, 'map': {}}
 
 
 def _chain_task_map():
-    """{task_id: 博主名}。按 _chains 目录的 mtime 做缓存，避免每次轮询读几十个 json。"""
+    """{'by_task': {task_id: 博主名}, 'by_video_id': {video_id: 博主名}}。
+
+    by_task 只覆盖链条【当前】指向的 task_id——一旦某集被重转/Continue，
+    chain.json 里的 task_id 会被换成新的，旧结果留在 results/ 里变孤儿，
+    单靠 by_task 会把它错判成"我自己的"。by_video_id 兜底：只要这个
+    video_id 曾经在任何一条链条里出现过（不论是不是"当前"那条），
+    就认它是 pipeline 产物。按 _chains 目录的 mtime 缓存，避免每次轮询读几十个 json。
+    """
     try:
         stamp = max([os.path.getmtime(CHAINS_DIR)] + [
             os.path.getmtime(os.path.join(CHAINS_DIR, n, 'chain.json'))
@@ -1061,10 +1068,10 @@ def _chain_task_map():
             if os.path.isfile(os.path.join(CHAINS_DIR, n, 'chain.json'))
         ])
     except OSError:
-        return {}
+        return {'by_task': {}, 'by_video_id': {}}
     if _chain_task_cache['stamp'] == stamp:
         return _chain_task_cache['map']
-    m = {}
+    by_task, by_video_id = {}, {}
     try:
         for n in os.listdir(CHAINS_DIR):
             cpath = os.path.join(CHAINS_DIR, n, 'chain.json')
@@ -1078,11 +1085,27 @@ def _chain_task_map():
             author = (c.get('author') or '').strip() or '(pipeline)'
             for v in (c.get('videos') or []):
                 if v.get('task_id'):
-                    m[v['task_id']] = author
+                    by_task[v['task_id']] = author
+                if v.get('video_id'):
+                    by_video_id.setdefault(v['video_id'], author)
     except OSError:
         return _chain_task_cache['map']
+    m = {'by_task': by_task, 'by_video_id': by_video_id}
     _chain_task_cache.update(stamp=stamp, map=m)
     return m
+
+
+def _chain_author_for(task_id, filename):
+    """给一条 results/ 记录判定来源：先按 task_id 精确匹配，
+    再从文件名里的 [video_id] 兜底匹配（救回重转后留下的孤儿结果）。"""
+    cm = _chain_task_map()
+    author = cm['by_task'].get(task_id)
+    if author:
+        return author
+    m = _VID_IN_NAME.search(filename or '')
+    if m:
+        return cm['by_video_id'].get(m.group(1))
+    return None
 
 
 @app.route('/api/history')
@@ -1094,7 +1117,6 @@ def api_history():
     if not os.path.isdir(results_dir):
         return jsonify(entries)
 
-    chain_map = _chain_task_map()
     for name in os.listdir(results_dir):
         meta_path = os.path.join(results_dir, name, 'meta.json')
         if os.path.isfile(meta_path):
@@ -1103,7 +1125,7 @@ def api_history():
                     e = json.load(f)
             except Exception:
                 continue
-            author = chain_map.get(e.get('id') or name)
+            author = _chain_author_for(e.get('id') or name, e.get('filename'))
             e['source'] = 'pipeline' if author else 'mine'
             if author:
                 e['creator'] = author
@@ -1310,7 +1332,7 @@ def api_search():
                     pass
 
         if matched:
-            author = _chain_task_map().get(meta.get('id') or name)
+            author = _chain_author_for(meta.get('id') or name, meta.get('filename'))
             hits.append({**meta, 'snippet': snippet,
                          'source': 'pipeline' if author else 'mine',
                          **({'creator': author} if author else {})})
