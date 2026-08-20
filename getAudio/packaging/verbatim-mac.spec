@@ -14,9 +14,9 @@ torch / numba / mlx 这几个包会在运行时动态 import 子模块或加载�
 from PyInstaller.utils.hooks import collect_all
 
 datas = [
-    ('static', 'static'),
-    ('templates', 'templates'),
-    ('bin', 'bin'),   # 内置的 ffmpeg / ffprobe / yt-dlp（见 config.py 的 _find_binary）
+    ('../static', 'static'),
+    ('../templates', 'templates'),
+    ('../bin', 'bin'),   # 内置的 ffmpeg / ffprobe / yt-dlp（见 config.py 的 _find_binary）
 ]
 binaries = []
 hiddenimports = []
@@ -64,7 +64,7 @@ hiddenimports += [
 ]
 
 a = Analysis(
-    ['packaging/launcher.py'],
+    ['launcher.py'],
     pathex=[],
     binaries=binaries,
     datas=datas,

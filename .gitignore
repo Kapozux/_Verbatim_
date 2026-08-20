@@ -28,3 +28,6 @@ getAudio/立党_转写文本/
 getAudio/立党_议题综合看法_总文档.md
 getAudio/合并文本_短剧CP系列.txt
 data/
+getAudio/bin/
+getAudio/build/
+getAudio/dist/

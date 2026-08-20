@@ -14,9 +14,9 @@ onefile 每次启动都要先解压，onedir 直接从磁盘跑。
 from PyInstaller.utils.hooks import collect_all
 
 datas = [
-    ('static', 'static'),
-    ('templates', 'templates'),
-    ('bin', 'bin'),   # 内置的 ffmpeg.exe / ffprobe.exe / yt-dlp.exe（见 config.py 的 _find_binary）
+    ('../static', 'static'),
+    ('../templates', 'templates'),
+    ('../bin', 'bin'),   # 内置的 ffmpeg.exe / ffprobe.exe / yt-dlp.exe（见 config.py 的 _find_binary）
 ]
 binaries = []
 hiddenimports = []
@@ -58,7 +58,7 @@ hiddenimports += [
 ]
 
 a = Analysis(
-    ['packaging/launcher.py'],
+    ['launcher.py'],
     pathex=[],
     binaries=binaries,
     datas=datas,
