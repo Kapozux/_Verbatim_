@@ -33,3 +33,6 @@ getAudio/build/
 getAudio/dist/
 verbatim-mcp/.venv/
 verbatim-mcp/*.egg-info/
+verbatim-mcp/dist/
+verbatim-mcp/mcp-publisher
+verbatim-mcp/*.egg-info/

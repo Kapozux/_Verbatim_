@@ -1,5 +1,5 @@
 [project]
-name = "verbatim-mcp"
+name = "verbatim-transcribe-mcp"
 version = "0.1.0"
 description = "MCP server for Verbatim — 让 agent 直接驱动本机的音视频转写与博主观点分析"
 readme = "README.md"

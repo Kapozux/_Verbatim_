@@ -1,0 +1,30 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.xyzxinlu-max/verbatim-transcribe-mcp",
+  "title": "Verbatim Transcribe",
+  "description": "让 agent 驱动本机的 Verbatim 音视频转写与博主观点分析：提交转写、轮询、搜索转写库。",
+  "repository": {
+    "url": "https://github.com/xyzxinlu-max/getAudio",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "verbatim-transcribe-mcp",
+      "version": "0.1.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "VERBATIM_URL",
+          "description": "Verbatim 服务地址，默认 http://127.0.0.1:5001",
+          "isRequired": false,
+          "isSecret": false,
+          "format": "string"
+        }
+      ]
+    }
+  ]
+}

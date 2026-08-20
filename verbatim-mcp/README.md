@@ -1,5 +1,7 @@
 # Verbatim MCP
 
+<!-- mcp-name: io.github.xyzxinlu-max/verbatim-transcribe-mcp -->
+
 让 AI agent 直接驱动 [Verbatim](https://github.com/xyzxinlu-max/getAudio) —— 本机自托管的音视频转写 + 博主观点分析工具。
 
 装好之后，你可以直接对 Claude 说：
