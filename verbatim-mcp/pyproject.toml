@@ -1,0 +1,26 @@
+[project]
+name = "verbatim-mcp"
+version = "0.1.0"
+description = "MCP server for Verbatim — 让 agent 直接驱动本机的音视频转写与博主观点分析"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "mcp>=2.0",
+    "httpx>=0.27",
+]
+
+[project.urls]
+Homepage = "https://github.com/xyzxinlu-max/getAudio"
+
+[project.scripts]
+# 装完之后有个 verbatim-mcp 命令，MCP 客户端配置里直接写它就行，
+# 不用关心 python 解释器路径，也不依赖启动时的工作目录。
+verbatim-mcp = "verbatim_mcp.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["verbatim_mcp"]

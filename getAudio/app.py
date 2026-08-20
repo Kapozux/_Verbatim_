@@ -1108,6 +1108,32 @@ def _chain_author_for(task_id, filename):
     return None
 
 
+@app.route('/api/task/<task_id>')
+def api_task_status(task_id):
+    """单个转写任务的状态快照（普通 JSON，不是 SSE）。
+
+    网页端靠 /stream/<id> 的 SSE 实时流；但脚本、agent、MCP 这类客户端只想
+    轮询问一句「好了没」，为此专门开一条 SSE 连接既别扭又容易泄漏连接。
+    转写完成前 /api/history/<id> 是 404（meta.json 最后才写），所以那条路
+    也当不了状态查询。这里直接读 taskdb + 内存里的进度百分比。
+    """
+    if not _is_valid_task_id(task_id):
+        return jsonify({'error': 'Invalid task id'}), 400
+    row = taskdb.get(task_id)
+    if not row:
+        return jsonify({'error': 'Not found'}), 404
+    return jsonify({
+        'task_id': task_id,
+        'status': row.get('status'),          # pending / running / done / failed
+        'filename': row.get('filename'),
+        'engine': row.get('engine'),
+        'error': row.get('error'),
+        'progress': _task_progress.get(task_id),   # 0-100，没在跑时为 null
+        'created_at': row.get('created_at'),
+        'updated_at': row.get('updated_at'),
+    })
+
+
 @app.route('/api/history')
 def api_history():
     """List all saved transcription sessions（附带 source：pipeline / mine）。"""

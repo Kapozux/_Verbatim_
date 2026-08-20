@@ -31,3 +31,5 @@ data/
 getAudio/bin/
 getAudio/build/
 getAudio/dist/
+verbatim-mcp/.venv/
+verbatim-mcp/*.egg-info/
