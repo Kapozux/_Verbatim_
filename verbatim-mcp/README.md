@@ -21,16 +21,33 @@ Claude 会自己调用转写、轮询进度、取回结果。
 
 ## 安装
 
+推荐用 [pipx](https://pipx.pypa.io)（专门装 CLI 工具用的，自动放进独立环境、命令直接进 PATH，不会跟系统 Python 打架）：
+
+```bash
+pipx install verbatim-transcribe-mcp
+```
+
+装完之后 `verbatim-mcp` 命令就在 PATH 上了，下面配置示例直接写 `verbatim-mcp` 即可，不用管它实际装在哪。
+
+没有 pipx 就退回普通 pip（命令会装到你当前 Python 环境里）：
+
+```bash
+pip install verbatim-transcribe-mcp
+```
+
+或者从源码装：
+
 ```bash
 git clone https://github.com/xyzxinlu-max/getAudio.git
 cd getAudio/verbatim-mcp
 python3 -m venv .venv && .venv/bin/pip install -e .
+# 这种方式命令在 .venv/bin/verbatim-mcp，下面配置要写这个绝对路径
 ```
 
 ## 接到 Claude Code
 
 ```bash
-claude mcp add verbatim --scope user -- /绝对路径/verbatim-mcp/.venv/bin/verbatim-mcp
+claude mcp add verbatim --scope user -- verbatim-mcp
 ```
 
 接到 Claude Desktop 的话，编辑 `claude_desktop_config.json`：
@@ -39,7 +56,7 @@ claude mcp add verbatim --scope user -- /绝对路径/verbatim-mcp/.venv/bin/ver
 {
   "mcpServers": {
     "verbatim": {
-      "command": "/绝对路径/verbatim-mcp/.venv/bin/verbatim-mcp"
+      "command": "verbatim-mcp"
     }
   }
 }
@@ -51,12 +68,14 @@ Verbatim 不在默认地址时，加一个环境变量：
 {
   "mcpServers": {
     "verbatim": {
-      "command": "/绝对路径/verbatim-mcp/.venv/bin/verbatim-mcp",
+      "command": "verbatim-mcp",
       "env": { "VERBATIM_URL": "http://127.0.0.1:5002" }
     }
   }
 }
 ```
+
+> 从源码装的话，把上面几处 `verbatim-mcp` 换成 `.venv/bin/verbatim-mcp` 的绝对路径。
 
 ## 提供的工具
 
