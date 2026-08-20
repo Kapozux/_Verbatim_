@@ -13,10 +13,13 @@ import sqlite3
 import threading
 from datetime import datetime
 
+import config
+
 # GETAUDIO_DB 允许把库挪到持久卷里（Docker 把它指到 results/ 下，
-# 否则镜像重建就丢任务状态）；本地默认还是 getAudio/tasks.db 不变。
+# 否则镜像重建就丢任务状态）；默认落在 config.DATA_DIR——源码直跑时是
+# getAudio/tasks.db（不变），打包成 .app 跑时是 Application Support 目录。
 DB_PATH = (os.environ.get('GETAUDIO_DB')
-           or os.path.join(os.path.dirname(__file__), 'tasks.db'))
+           or os.path.join(config.DATA_DIR, 'tasks.db'))
 
 # sqlite3 连接不跨线程共享；每次操作开新连接（量小，开销可忽略），
 # 写操作用锁串行化，避免 WAL 下偶发的 database is locked。

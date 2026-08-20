@@ -1,0 +1,124 @@
+name: Build Windows EXE
+
+# 手动触发，不跟着每次 push 自动跑——打包一次要装 torch 这类大依赖，
+# 没必要每次改动都烧一次 CI 分钟数，需要新版本时手动点。
+on:
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install app dependencies
+        working-directory: getAudio
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r packaging/requirements-windows.txt
+          pip install pyinstaller pyinstaller-hooks-contrib
+
+      # ffmpeg/ffprobe：Homebrew 那套「装了动态链接、事后用 dylibbundler 收拢」
+      # 的思路在 Windows 上没有对应工具；直接用 BtbN 的静态构建最简单可靠，
+      # 这是 yt-dlp/ffmpeg 生态里最常用的 Windows 静态包来源之一。
+      - name: Fetch static ffmpeg/ffprobe (Windows)
+        working-directory: getAudio
+        run: |
+          mkdir -p bin
+          curl -L -o ffmpeg.zip \
+            "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+          unzip -q ffmpeg.zip -d ffmpeg-extracted
+          FF_BIN=$(find ffmpeg-extracted -type d -name bin | head -1)
+          cp "$FF_BIN/ffmpeg.exe" bin/ffmpeg.exe
+          cp "$FF_BIN/ffprobe.exe" bin/ffprobe.exe
+          rm -rf ffmpeg.zip ffmpeg-extracted
+          ./bin/ffmpeg.exe -version | head -1
+
+      # yt-dlp：跟 Mac 版同一个思路——单独打包成一个独立可执行文件，而不是
+      # 让主 App 直接 import yt_dlp。理由见 getAudio-dmg-build 那次的踩坑记录：
+      # 必须装 yt-dlp[default]（不能裸装），否则打包后会丢 requests/websockets
+      # 网络后端，YouTube 解析直接报「需要重新加载页面」。
+      - name: Build standalone yt-dlp.exe
+        run: |
+          python -m venv ytdlp-venv
+          source ytdlp-venv/Scripts/activate
+          pip install --quiet --no-cache-dir "yt-dlp[default]" pyinstaller
+          pyinstaller --onefile --name yt-dlp --distpath dist-ytdlp --clean --noconfirm \
+            getAudio/packaging/ytdlp_entry.py
+          cp dist-ytdlp/yt-dlp.exe getAudio/bin/yt-dlp.exe
+          deactivate
+          ./getAudio/bin/yt-dlp.exe --version
+
+      - name: Build main app with PyInstaller
+        working-directory: getAudio
+        run: |
+          python -m PyInstaller packaging/verbatim-windows.spec --clean --noconfirm
+
+      # 真正启动打包产物、发一个合成的静音 wav 走完整的上传→ffmpeg 解码→
+      # faster-whisper 推理链路——只验证「跑得通、不崩」，不验证转写内容对不对
+      # （静音没有内容可转）。这不等价于 Mac 那次用真实语音做的内容验证，
+      # 但足够确认 torch/ctranslate2/onnxruntime 这些编译依赖在 Windows 上
+      # 确实被正确打包、真的能跑推理，而不是只测「进程起来了」。
+      - name: Boot-test the packaged exe
+        working-directory: getAudio
+        run: |
+          export GETAUDIO_DATA_DIR="$RUNNER_TEMP/verbatim-data"
+          export PORT=5099
+          # 默认模型是 large-v3（~3GB），冒烟测试只要证明链路跑得通，
+          # 用 tiny 免得在 CI 里白等一次大模型下载
+          export WHISPER_MODEL_SIZE=tiny
+          ./dist/Verbatim/Verbatim.exe &
+          APP_PID=$!
+          ok=0
+          for i in $(seq 1 60); do
+            if curl -s -o /dev/null http://127.0.0.1:5099/; then ok=1; break; fi
+            sleep 1
+          done
+          if [ "$ok" != "1" ]; then
+            echo "::error::打包后的 exe 在 60 秒内没能响应端口 5099"
+            exit 1
+          fi
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:5099/)
+          echo "首页 HTTP $code"
+          if [ "$code" != "200" ]; then exit 1; fi
+
+          python packaging/make_smoke_test_wav.py smoke_test.wav
+          curl -s -X POST http://127.0.0.1:5099/upload \
+            -F "audio=@smoke_test.wav" -F "engine=whisper" > upload_resp.json
+          cat upload_resp.json
+          # 用文件传 JSON 给 python，别把响应体插进 shell 字符串里拼——
+          # 响应里出现引号/反斜杠会直接把这行拼断，之前吃过这个亏。
+          task_id=$(python -c "import json; print(json.load(open('upload_resp.json')).get('task_id',''))")
+          if [ -z "$task_id" ]; then
+            echo "::error::/upload 没有返回 task_id，本地转写链路没跑通"
+            exit 1
+          fi
+          # 留够时间：tiny 模型第一次用要从 HuggingFace 下（哪怕只有几十 MB，
+          # CI 全新环境走一次完整下载+加载也可能要一分多钟）
+          curl -sN --max-time 150 "http://127.0.0.1:5099/stream/$task_id" | tee stream.log
+          if ! grep -q '"type": *"done"' stream.log; then
+            echo "::error::转写没能走到 done——ffmpeg/faster-whisper 打包可能不完整"
+            exit 1
+          fi
+          echo "✔ 打包产物成功跑完一次真实的 上传→ffmpeg解码→本地转写 链路"
+          kill $APP_PID 2>/dev/null || true
+
+      - name: Zip the build
+        working-directory: getAudio/dist
+        # 用 PowerShell 内置的 Compress-Archive，不依赖 7z 之类外部工具
+        # 是否真的在 PATH 上——runner 镜像换版本时这类假设最容易悄悄失效。
+        run: Compress-Archive -Path Verbatim -DestinationPath ../../Verbatim-windows.zip
+        shell: pwsh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Verbatim-windows
+          path: Verbatim-windows.zip
+          retention-days: 30

@@ -22,6 +22,7 @@ import re
 import shutil
 import subprocess
 from collections import Counter
+import config
 
 # —— 阈值（保守）——
 _MICRO_MAX = 4        # 「核心字数 <= 4」算微段（嗯/然後/我/对…）
@@ -271,7 +272,7 @@ def detect_silence(filepath, noise_db=-35, min_silence=2.0):
     best-effort：ffmpeg 缺失或出错就返回 []（退化为纯文字证伪）。
     noise_db 以下、持续 min_silence 秒以上判为静音。
     """
-    ffmpeg = shutil.which('ffmpeg') or '/opt/homebrew/bin/ffmpeg'
+    ffmpeg = config.FFMPEG_BIN
     if not os.path.exists(ffmpeg) or not os.path.isfile(filepath):
         return []
     try:

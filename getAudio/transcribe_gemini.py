@@ -12,6 +12,7 @@ import time
 from google import genai
 from google.genai import types
 from config import GEMINI_API_KEY, GEMINI_MODEL, GEMINI_INLINE_LIMIT, make_gemini_client
+import config
 
 TRANSCRIPTION_PROMPT = """请对这段音频进行精确的逐字转录。
 
@@ -241,14 +242,14 @@ def _transcribe_single_file(client, filepath, progress_callback=None):
 
 def _can_split_audio():
     """Check if ffmpeg and ffprobe are available for chunking."""
-    ffmpeg_bin = shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"
-    ffprobe_bin = shutil.which("ffprobe") or "/opt/homebrew/bin/ffprobe"
+    ffmpeg_bin = config.FFMPEG_BIN
+    ffprobe_bin = config.FFPROBE_BIN
     return os.path.exists(ffmpeg_bin) and os.path.exists(ffprobe_bin)
 
 
 def _get_audio_duration_seconds(filepath):
     """Return audio duration in seconds using ffprobe."""
-    ffprobe_bin = shutil.which("ffprobe") or "/opt/homebrew/bin/ffprobe"
+    ffprobe_bin = config.FFPROBE_BIN
     command = [
         ffprobe_bin,
         "-v",
@@ -291,7 +292,7 @@ def split_audio_file(filepath, chunk_duration_seconds):
         this_len = chunk_duration_seconds
         if remaining <= chunk_duration_seconds + 30:
             this_len = remaining + 1        # 最后一块，吃掉全部剩余
-        ffmpeg_bin = shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"
+        ffmpeg_bin = config.FFMPEG_BIN
         chunk_path = os.path.join(temp_dir, f"chunk_{index:04d}.wav")
         ffmpeg_cmd = [
             ffmpeg_bin,

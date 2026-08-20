@@ -1,11 +1,60 @@
 import os
+import sys
 from dotenv import load_dotenv
 
 load_dotenv()
 
+
+def _resolve_data_dir():
+    """
+    源码直跑（dev）：数据就放在项目目录旁，跟以前一样，不改变任何人的工作流。
+    打包成 .app 跑（sys.frozen，PyInstaller 设的标记）：改存到
+    ~/Library/Application Support/Verbatim ——包本身签名后是只读的，
+    应用更新/重装也不该把用户的转写结果和任务库带走。
+    GETAUDIO_DATA_DIR 环境变量可显式覆盖，两种场景都认。
+    """
+    override = os.environ.get('GETAUDIO_DATA_DIR')
+    if override:
+        return os.path.abspath(override)
+    if getattr(sys, 'frozen', False):
+        return os.path.expanduser('~/Library/Application Support/Verbatim')
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+DATA_DIR = _resolve_data_dir()
+os.makedirs(DATA_DIR, exist_ok=True)
+
+
+def _find_binary(name):
+    """
+    找 ffmpeg/ffprobe/yt-dlp 这类外部可执行文件，打包和源码直跑两种场景都要能定位到。
+    打包成 .app 后（sys.frozen，PyInstaller 设的标记）：优先找内置在 Resources/bin/
+    里的版本——收件人的机器大概率没装 Homebrew，不能指望 /opt/homebrew/bin 有东西。
+    源码直跑：PATH → Homebrew 默认路径，跟以前完全一样，不改变任何人的开发体验。
+    找不到就原样返回 name，让调用方按「命令不存在」正常报错，而不是这里静默失败。
+    """
+    if getattr(sys, 'frozen', False):
+        bundle_root = getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
+        # Windows 下可执行文件必须带 .exe 后缀，Mac/Linux 没有
+        filename = f'{name}.exe' if sys.platform == 'win32' else name
+        bundled = os.path.join(bundle_root, 'bin', filename)
+        if os.path.isfile(bundled):
+            return bundled
+    import shutil as _shutil
+    found = _shutil.which(name)
+    if found:
+        return found
+    homebrew = f'/opt/homebrew/bin/{name}'
+    return homebrew if os.path.isfile(homebrew) else name
+
+
+FFMPEG_BIN = _find_binary('ffmpeg')
+FFPROBE_BIN = _find_binary('ffprobe')
+YTDLP_BIN = _find_binary('yt-dlp')
+
 # Flask
-UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), 'uploads')
-RESULTS_FOLDER = os.path.join(os.path.dirname(__file__), 'results')
+UPLOAD_FOLDER = os.path.join(DATA_DIR, 'uploads')
+RESULTS_FOLDER = os.path.join(DATA_DIR, 'results')
 # 上传上限：视频（尤其 1080p 一小时）常轻松超过 500MB，之前会被 413 顶掉。
 # 默认 4GB，可用 MAX_UPLOAD_MB 环境变量调。本地单用户，放宽无碍。
 MAX_UPLOAD_MB = int(os.environ.get('MAX_UPLOAD_MB', '4096'))

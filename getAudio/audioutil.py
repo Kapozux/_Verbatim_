@@ -9,15 +9,15 @@ import os
 import shutil
 import subprocess
 
+import config
+
 # 目标码率可用环境变量覆盖；默认 24k（语音够清晰，体积最省）
 OPUS_BITRATE = os.environ.get('AUDIO_OPUS_BITRATE', '24k')
 _TARGET_EXT = '.ogg'          # opus 放 ogg 容器，浏览器 <audio> 直接能放
 
 
 def _ffmpeg():
-    if os.path.exists('/opt/homebrew/bin/ffmpeg'):
-        return '/opt/homebrew/bin/ffmpeg'
-    return shutil.which('ffmpeg') or 'ffmpeg'
+    return config.FFMPEG_BIN
 
 
 def _find_audio(task_dir, meta):

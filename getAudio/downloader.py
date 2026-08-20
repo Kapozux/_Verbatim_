@@ -19,6 +19,7 @@ import shutil
 import subprocess
 
 from config import YTDLP_LANG, YTDLP_COOKIES_FROM_BROWSER
+import config
 
 _PROBE_TIMEOUT = 120        # 元数据解析超时（秒）
 _PROBE_ATTEMPTS = 3         # B站 412 等间歇风控：解析链接也退避重试
@@ -30,7 +31,7 @@ _YT_ID_RE = re.compile(r'^[A-Za-z0-9_-]{11}$')
 def _resolve_ytdlp():
     # brew 版优先：venv 的 PATH 里可能残留 pip 装的旧版 yt-dlp（py3.9 锁旧版），
     # 旧版会被 YouTube 反爬挡掉，必须避开。
-    candidates = ['/opt/homebrew/bin/yt-dlp', shutil.which('yt-dlp')]
+    candidates = [config.YTDLP_BIN, shutil.which('yt-dlp')]
     for binary in candidates:
         if binary and os.path.exists(binary):
             return binary
@@ -39,6 +40,12 @@ def _resolve_ytdlp():
 
 def _lang_args():
     return ['--extractor-args', f'youtube:lang={YTDLP_LANG}'] if YTDLP_LANG else []
+
+
+def _ffmpeg_location_args():
+    # 打包成 App 后 ffmpeg 是内置的，不一定在 PATH 上（收件人机器大概率没装
+    # Homebrew）；显式告诉 yt-dlp 去哪找，供切片/转封装/字幕转换等后处理步骤用。
+    return ['--ffmpeg-location', os.path.dirname(config.FFMPEG_BIN)]
 
 
 def _cookie_args():
@@ -164,7 +171,7 @@ def channel_followers(url):
     try:
         binary = _resolve_ytdlp()
         cmd = [binary, '--flat-playlist', '-J', '--no-warnings',
-               *_cookie_args(), '--playlist-end', '1', _normalize_url(url)]
+               *_cookie_args(), *_ffmpeg_location_args(), '--playlist-end', '1', _normalize_url(url)]
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=_PROBE_TIMEOUT)
         if r.returncode == 0 and r.stdout.strip():
             fc = json.loads(r.stdout).get('channel_follower_count') or 0
@@ -184,7 +191,7 @@ def probe(url, max_videos=None):
     binary = _resolve_ytdlp()
     url = _normalize_url(url)          # 频道主页 → /videos，避免下成整个频道
     cmd = [binary, '--flat-playlist', '-J', '--no-warnings',
-           *_lang_args(), *_cookie_args()]
+           *_lang_args(), *_cookie_args(), *_ffmpeg_location_args()]
     if max_videos:
         cmd += ['--playlist-end', str(max_videos)]
     cmd.append(url)
@@ -266,7 +273,7 @@ def download_one(target, dest_dir, section=None):
         '-o', outtmpl,
         '--no-playlist', '--no-warnings', '--quiet',
         *section_args,
-        *_lang_args(), *_cookie_args(),
+        *_lang_args(), *_cookie_args(), *_ffmpeg_location_args(),
         # 下载+后处理完成后打印最终文件路径和元信息，逐行读取
         '--print', 'after_move:filepath',
         '--print', 'after_move:title',
@@ -373,7 +380,7 @@ def fetch_subtitle(target, dest_dir):
     try:
         r = subprocess.run(
             [binary, '-J', '--skip-download', '--no-playlist', '--no-warnings',
-             *_cookie_args(), url],
+             *_cookie_args(), *_ffmpeg_location_args(), url],
             capture_output=True, text=True, timeout=_SUB_TIMEOUT,
         )
         info = json.loads(r.stdout) if r.stdout.strip() else {}
@@ -402,7 +409,7 @@ def fetch_subtitle(target, dest_dir):
         subprocess.run(
             [binary, '--skip-download', flag, '--sub-langs', chosen,
              '--convert-subs', 'srt', '-o', outtmpl,
-             '--no-playlist', '--no-warnings', '--quiet', *_cookie_args(), url],
+             '--no-playlist', '--no-warnings', '--quiet', *_cookie_args(), *_ffmpeg_location_args(), url],
             capture_output=True, text=True, timeout=_SUB_TIMEOUT,
         )
     except subprocess.TimeoutExpired:

@@ -1,0 +1,21 @@
+# Windows 打包专用依赖清单。
+#
+# 不能用 `-r ../requirements.txt` 整份引用——那份里的 mlx-whisper 在 PyPI 上
+# 根本没有 Windows wheel，`pip install -r` 里只要有一行找不到匹配包整条命令
+# 就会失败退出，会直接把 CI 打断。所以这里手动把主文件的内容抄一份、去掉
+# mlx-whisper：transcribe_whisper.py 的 _mlx_usable() 本来就会在 import 失败
+# 时自动退到 faster-whisper，代码不用改，Windows 上就是走这条路径。
+#
+# 改了主 requirements.txt 记得回来对一下这份是否也要同步。
+flask>=3.0
+python-dotenv>=1.0
+faster-whisper>=1.0
+openai-whisper>=20231117
+google-genai>=1.0
+dashscope>=1.20
+requests>=2.28
+torch>=2.0
+
+# Windows 托盘图标（对应 mac 用的 rumps）
+pystray>=0.19
+pillow>=10.0

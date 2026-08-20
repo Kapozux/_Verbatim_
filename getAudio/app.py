@@ -55,7 +55,7 @@ taskdb.init()
 # 让用户在网页 Settings 里填 key，免去手动改 .env。存到 gitignore 的
 # settings.local.json；启动时和每次保存后写进 os.environ，各引擎调用时即时读到
 # （模块里都是 `KEY or os.environ.get(...)` 在调用时求值，所以不用重启）。
-SETTINGS_PATH = os.path.join(os.path.dirname(__file__), 'settings.local.json')
+SETTINGS_PATH = os.path.join(config.DATA_DIR, 'settings.local.json')
 # 前端字段名 -> 环境变量名
 _SETTING_ENV = {
     'gemini_key': 'GEMINI_API_KEY',
@@ -188,11 +188,11 @@ def is_video_file(filepath):
 
 
 def resolve_ffmpeg_binary():
-    return shutil.which('ffmpeg') or '/opt/homebrew/bin/ffmpeg'
+    return config.FFMPEG_BIN
 
 
 def resolve_ffprobe_binary():
-    return shutil.which('ffprobe') or '/opt/homebrew/bin/ffprobe'
+    return config.FFPROBE_BIN
 
 
 def probe_audio_duration_seconds(filepath):
