@@ -636,19 +636,30 @@
                     <section class="settings-pane" data-pane="storage">
                         <h3 data-i18n="settings.paneStorage">Storage</h3>
                         <p class="settings-desc" data-i18n="settings.storageDesc">
-                            After a recording is transcribed, its audio is only kept for playback.
-                            Compressing it to Opus (24 kbps mono) keeps speech clear while shrinking
-                            the library by roughly 70%. New transcriptions are compressed automatically.
+                            Transcripts, summaries and metadata are tiny. Nearly all disk usage is the
+                            audio copy kept for the playback bar in the transcript view. Nothing else
+                            uses it: search, export, Reflect and re-transcribing all work without it.
                         </p>
+                        <label class="settings-field settings-check">
+                            <input type="checkbox" id="set-keep-audio">
+                            <span class="settings-label"><span data-i18n="settings.keepAudio">Keep audio for playback</span>
+                                <span class="settings-opt" data-i18n="settings.keepAudioOpt">off = new transcriptions store no audio · saved with the Save button below</span>
+                            </span>
+                        </label>
                         <div class="storage-stat">
                             <div><b id="storage-size">—</b><span data-i18n="settings.audioOnDisk">audio on disk</span></div>
                             <div><b id="storage-done">—</b><span data-i18n="settings.alreadyCompressed">already compressed</span></div>
+                            <div><b id="storage-uploads">—</b><span data-i18n="settings.uploadsLeftover">leftover uploads</span></div>
+                        </div>
+                        <div class="settings-test-row">
+                            <button type="button" id="purge-audio" class="btn-secondary btn-danger" data-i18n="settings.purgeAudio">Delete all stored audio</button>
+                            <span id="purge-res" class="test-res"></span>
                         </div>
                         <div class="settings-test-row">
                             <button type="button" id="compress-all" class="btn-secondary" data-i18n="settings.compressAll">Compress existing library</button>
                             <span id="compress-res" class="test-res"></span>
                         </div>
-                        <p class="settings-opt" data-i18n="settings.storageFooter">Lossy and irreversible — fine for playback, but you can't re-transcribe at original quality afterward. Chrome/Firefox play Opus natively.</p>
+                        <p class="settings-opt" data-i18n="settings.storageFooter">Deleting removes only the audio copies and leftover upload files; every transcript stays. Compression (Opus 24 kbps mono) is for people who keep audio.</p>
                     </section>
 
                     <!-- About -->

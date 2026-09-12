@@ -68,11 +68,19 @@ _SETTING_ENV = {
     'gemini_transcribe_model': 'GEMINI_TRANSCRIBE_MODEL',
     'gemini_analysis_model': 'GEMINI_ANALYSIS_MODEL',
     'gemini_extract_model': 'GEMINI_EXTRACT_MODEL',
+    # Storage：转写完成后是否把音频留在 results/ 里供回放。'1' = 留；空 = 不留（默认）。
+    'keep_audio': 'KEEP_AUDIO',
 }
 
 # 非秘密、可清空（空 = 回默认）的设置字段
 _PLAIN_FIELDS = ('gemini_base_url', 'whisper_model', 'gemini_transcribe_model',
-                 'gemini_analysis_model', 'gemini_extract_model')
+                 'gemini_analysis_model', 'gemini_extract_model', 'keep_audio')
+
+
+def _keep_audio():
+    """转写完是否保留音频。默认不留：实测音频占 results/ 的 99%，而回放几乎没人用；
+    转写、摘要、搜索、导出、重转写都不依赖它（重转写是重新下载）。"""
+    return (os.environ.get('KEEP_AUDIO') or '').strip() == '1'
 
 
 def _load_settings():
@@ -115,7 +123,8 @@ def _demo_readonly_guard():
     if not DEMO_MODE:
         return None
     path = request.path or ''
-    if request.method == 'DELETE' or (request.method == 'POST' and path.startswith('/api/settings')):
+    if request.method == 'DELETE' or (request.method == 'POST' and
+                                      path.startswith(('/api/settings', '/api/audio/purge'))):
         return jsonify({'error': 'demo workspace is read-only'}), 403
     return None
 
@@ -423,10 +432,12 @@ def _save_results(task_id, original_filename, engine, audio_source_path,
     os.makedirs(task_dir, exist_ok=True)
 
     ext = os.path.splitext(audio_source_path)[1].lower()
-    audio_dest = os.path.join(task_dir, f"audio{ext}")
-    shutil.copy2(audio_source_path, audio_dest)
-
-    duration = probe_audio_duration_seconds(audio_dest)
+    keep_audio = _keep_audio()
+    if keep_audio:
+        audio_dest = os.path.join(task_dir, f"audio{ext}")
+        shutil.copy2(audio_source_path, audio_dest)
+    # 时长照常探测（Reflect / 统计 / 速度表都靠它），只是不再落一份音频副本
+    duration = probe_audio_duration_seconds(audio_source_path)
 
     # 证伪层：清洗前先留住原始稿，只有真删了东西才落 transcript_raw.json
     raw_segments = segments
@@ -449,7 +460,7 @@ def _save_results(task_id, original_filename, engine, audio_source_path,
         'filename': os.path.basename(original_filename or ''),
         'engine': engine,
         'date': __import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        'audio_ext': ext,
+        'audio_ext': ext if keep_audio else '',
         'segment_count': len(segments),
         'duration_seconds': round(duration, 2) if duration else None,
         'has_summary': bool(summary),
@@ -1449,7 +1460,10 @@ def api_history_detail(task_id):
         author = _chain_author_for(task_id, meta.get('filename'))
         if author:
             meta['creator'] = author
-    return jsonify({**meta, 'segments': segments, 'summary': summary})
+    has_audio = bool(meta.get('audio_ext')) and os.path.isfile(
+        os.path.join(task_dir, f"audio{meta.get('audio_ext')}"))
+    return jsonify({**meta, 'segments': segments, 'summary': summary,
+                    'has_audio': has_audio})
 
 
 @app.route('/api/history/<task_id>/audio')
@@ -1467,7 +1481,7 @@ def api_history_audio(task_id):
     with open(meta_path, 'r', encoding='utf-8') as f:
         meta = json.load(f)
 
-    audio_ext = meta.get('audio_ext', '.wav')
+    audio_ext = meta.get('audio_ext') or '.wav'
     audio_path = os.path.join(task_dir, f"audio{audio_ext}")
 
     if not os.path.isfile(audio_path):
@@ -3267,8 +3281,80 @@ def api_storage():
         count += 1
         if is_opus:
             compressed += 1
+    up_bytes, up_count = 0, 0
+    for path in _stale_uploads():
+        try:
+            up_bytes += os.path.getsize(path)
+        except OSError:
+            continue
+        up_count += 1
     return jsonify({'audio_bytes': total, 'audio_count': count,
-                    'compressed_count': compressed})
+                    'compressed_count': compressed,
+                    'upload_bytes': up_bytes, 'upload_count': up_count,
+                    'keep_audio': _keep_audio()})
+
+
+def _stale_uploads():
+    """uploads/ 里可以删的文件：所属任务已完成、或任务库里根本没这条（孤儿）。
+    排队中 / 运行中 / 失败的任务不动——失败的留着给 Continue 直接重转。"""
+    up = config.UPLOAD_FOLDER
+    if not os.path.isdir(up):
+        return
+    for name in os.listdir(up):
+        path = os.path.join(up, name)
+        if not (os.path.isfile(path) or os.path.islink(path)):
+            continue
+        tid = name.split('.')[0].replace('_audio', '')
+        row = taskdb.get(tid) if _is_valid_task_id(tid) else None
+        if row and row.get('status') in ('pending', 'running', 'failed'):
+            continue
+        yield path
+
+
+_purge_state = {'running': False, 'done': 0, 'total': 0, 'freed': 0, 'errors': 0}
+_purge_lock = threading.Lock()
+
+
+def _run_purge_audio():
+    """删掉所有已转写任务的音频副本 + 残留上传。转写稿、摘要、元数据一个字节不动。"""
+    audio = [p for p, _ in _audio_files()]
+    stale = list(_stale_uploads())
+    with _purge_lock:
+        _purge_state.update(running=True, done=0, total=len(audio) + len(stale),
+                            freed=0, errors=0)
+    for path in audio + stale:
+        try:
+            size = os.path.getsize(path) if not os.path.islink(path) else 0
+            os.remove(path)          # 软链只删链接本身，原文件不受影响
+            with _purge_lock:
+                _purge_state['freed'] += size
+        except OSError:
+            with _purge_lock:
+                _purge_state['errors'] += 1
+        with _purge_lock:
+            _purge_state['done'] += 1
+    # meta 里的 audio_ext 清空，回放接口和详情页据此判断「没有音频」
+    for d in os.listdir(config.RESULTS_FOLDER):
+        mp = os.path.join(config.RESULTS_FOLDER, d, 'meta.json')
+        if _is_valid_task_id(d) and os.path.isfile(mp):
+            _update_meta(mp, {'audio_ext': ''})
+    with _purge_lock:
+        _purge_state['running'] = False
+
+
+@app.route('/api/audio/purge', methods=['POST'])
+def api_audio_purge():
+    with _purge_lock:
+        if _purge_state['running']:
+            return jsonify({'ok': False, 'error': 'already running'}), 409
+    threading.Thread(target=_run_purge_audio, daemon=True).start()
+    return jsonify({'ok': True})
+
+
+@app.route('/api/audio/purge_status')
+def api_audio_purge_status():
+    with _purge_lock:
+        return jsonify(dict(_purge_state))
 
 
 def _run_compress_all():

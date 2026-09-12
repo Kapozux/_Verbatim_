@@ -1180,8 +1180,13 @@ async function openDetailView(taskId) {
 
         detailAudioPlayer.pause();
         detailAudioPlayer.currentTime = 0;
-        detailAudioPlayer.src = `/api/history/${taskId}/audio`;
-        detailPlayerSection.classList.remove('hidden');
+        if (data.has_audio) {
+            detailAudioPlayer.src = `/api/history/${taskId}/audio`;
+            detailPlayerSection.classList.remove('hidden');
+        } else {
+            detailAudioPlayer.src = '';
+            detailPlayerSection.classList.add('hidden');
+        }
 
         detailSegments = data.segments || [];
         detailSegmentsContainer.innerHTML = '';
@@ -2660,6 +2665,7 @@ async function openSettings(pane) {
         document.getElementById('set-gemini-transcribe').value = s.gemini_transcribe_model || '';
         document.getElementById('set-gemini-analysis').value = s.gemini_analysis_model || '';
         document.getElementById('set-gemini-extract').value = s.gemini_extract_model || '';
+        document.getElementById('set-keep-audio').checked = s.keep_audio === '1';
     } catch { /* 打开即可，拉取失败不阻塞 */ }
     document.getElementById('test-gemini-res').textContent = '';
     document.getElementById('test-dashscope-res').textContent = '';
@@ -2714,6 +2720,8 @@ async function loadStorage() {
         const s = await (await fetch('/api/storage')).json();
         sizeEl.textContent = fmtBytes(s.audio_bytes);
         doneEl.textContent = `${s.compressed_count} / ${s.audio_count}`;
+        document.getElementById('storage-uploads').textContent =
+            `${fmtBytes(s.upload_bytes || 0)} · ${s.upload_count || 0}`;
     } catch { sizeEl.textContent = '—'; }
     // 若已有批量压缩在跑，接着显示进度
     try {
@@ -2771,6 +2779,41 @@ document.getElementById('compress-all').addEventListener('click', async () => {
     btn.disabled = true;
     pollCompress();
 });
+
+// 删除全部音频副本 + 残留上传（转写稿不动）。后台线程 + 轮询，跟压缩同一套节奏。
+let purgePollTimer = null;
+async function pollPurge() {
+    const res = document.getElementById('purge-res');
+    const btn = document.getElementById('purge-audio');
+    clearTimeout(purgePollTimer);
+    try {
+        const s = await (await fetch('/api/audio/purge_status')).json();
+        if (s.running) {
+            btn.disabled = true;
+            res.textContent = T('settings.purging', { done: s.done, total: s.total, freed: fmtBytes(s.freed) });
+            if (!document.hidden) purgePollTimer = setTimeout(pollPurge, 2000);
+        } else {
+            btn.disabled = false;
+            if (s.total) {
+                res.textContent = T('settings.purgeDone', { freed: fmtBytes(s.freed) })
+                    + (s.errors ? ` (${T('settings.compressErrors', { n: s.errors })})` : '');
+            }
+            loadStorage();
+        }
+    } catch { btn.disabled = false; }
+}
+document.getElementById('purge-audio').addEventListener('click', async () => {
+    if (!confirm(T('settings.purgeConfirm'))) return;
+    const res = document.getElementById('purge-res');
+    const btn = document.getElementById('purge-audio');
+    btn.disabled = true;
+    res.textContent = '…';
+    try {
+        const r = await (await fetch('/api/audio/purge', { method: 'POST' })).json();
+        if (!r.ok) { res.textContent = r.error || T('settings.saveFailed'); btn.disabled = false; return; }
+        pollPurge();
+    } catch { res.textContent = T('settings.saveFailed'); btn.disabled = false; }
+});
 document.querySelectorAll('.settings-nav-item').forEach(b =>
     b.addEventListener('click', () => showSettingsPane(b.dataset.pane)));
 
@@ -2823,6 +2866,7 @@ document.getElementById('settings-save').addEventListener('click', async () => {
         gemini_transcribe_model: document.getElementById('set-gemini-transcribe').value.trim(),
         gemini_analysis_model: document.getElementById('set-gemini-analysis').value.trim(),
         gemini_extract_model: document.getElementById('set-gemini-extract').value.trim(),
+        keep_audio: document.getElementById('set-keep-audio').checked ? '1' : '',
     };
     if (setGeminiKey.value.trim()) body.gemini_key = setGeminiKey.value.trim();
     if (setDashKey.value.trim()) body.dashscope_key = setDashKey.value.trim();

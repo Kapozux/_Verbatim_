@@ -187,10 +187,17 @@ const STRINGS = {
         'settings.audioOnDisk': 'audio on disk',
         'settings.alreadyCompressed': 'already compressed',
         'settings.compressAll': 'Compress existing library',
-        'settings.storageDesc': 'After a recording is transcribed, its audio is only kept for playback. '
-            + 'Compressing it to Opus (24 kbps mono) keeps speech clear while shrinking '
-            + 'the library by roughly 70%. New transcriptions are compressed automatically.',
-        'settings.storageFooter': "Lossy and irreversible — fine for playback, but you can't re-transcribe at original quality afterward. Chrome/Firefox play Opus natively.",
+        'settings.storageDesc': 'Transcripts, summaries and metadata are tiny. Nearly all disk usage is the '
+            + 'audio copy kept for the playback bar in the transcript view. Nothing else uses it: '
+            + 'search, export, Reflect and re-transcribing all work without it.',
+        'settings.storageFooter': 'Deleting removes only the audio copies and leftover upload files; every transcript stays. Compression (Opus 24 kbps mono) is for people who keep audio.',
+        'settings.keepAudio': 'Keep audio for playback',
+        'settings.keepAudioOpt': 'off = new transcriptions store no audio · saved with the Save button below',
+        'settings.uploadsLeftover': 'leftover uploads',
+        'settings.purgeAudio': 'Delete all stored audio',
+        'settings.purgeConfirm': 'Delete the audio copy of every transcript plus leftover upload files? Transcripts, summaries and tags are kept. This cannot be undone.',
+        'settings.purging': 'Deleting {done}/{total}… freed {freed}',
+        'settings.purgeDone': 'Done — freed {freed}',
         'settings.aboutDesc1': '<strong>Verbatim</strong> — a local, self-hosted tool that turns audio and video '
             + 'into transcripts, then into cross-episode research.',
         'settings.aboutDesc2': 'Keys you enter here are stored only in <code>settings.local.json</code> on this '
@@ -643,9 +650,16 @@ const STRINGS = {
         'settings.audioOnDisk': '磁盘上的音频',
         'settings.alreadyCompressed': '已压缩',
         'settings.compressAll': '压缩现有库',
-        'settings.storageDesc': '一条录音转写完成后，它的音频只用于回放。压成 Opus（24 kbps 单声道）'
-            + '能保持人声清晰，同时把体积缩小约 70%。新转写会自动压缩。',
-        'settings.storageFooter': '有损且不可逆——回放没问题，但之后没法用原始质量重新转写。Chrome/Firefox 原生支持播放 Opus。',
+        'settings.storageDesc': '转写稿、摘要和元数据都很小，磁盘几乎全被「转写详情页那条回放条」用的音频副本占着。'
+            + '别的功能都不依赖它：搜索、导出、回顾、重新转写都照常。',
+        'settings.storageFooter': '删除只清音频副本和残留的上传文件，所有转写稿原样保留。压缩（Opus 24 kbps 单声道）是给保留音频的人用的。',
+        'settings.keepAudio': '保留音频用于回放',
+        'settings.keepAudioOpt': '关 = 新转写不再存音频 · 用下方 Save 按钮保存',
+        'settings.uploadsLeftover': '残留上传',
+        'settings.purgeAudio': '删除全部已存音频',
+        'settings.purgeConfirm': '删除每条转写的音频副本和残留上传文件？转写稿、摘要、标签都会保留。此操作不可撤销。',
+        'settings.purging': '删除中 {done}/{total}… 已释放 {freed}',
+        'settings.purgeDone': '完成——释放 {freed}',
         'settings.aboutDesc1': '<strong>Verbatim</strong> ——一个本地自托管的工具，把音视频变成转写稿，再变成跨期研究。',
         'settings.aboutDesc2': '这里填的 key 只存在这台机器上的 <code>settings.local.json</code> 里，'
             + '除了发给它所属的服务商，不会发到任何别的地方。某个 key 字段留空就保留现在的值。',

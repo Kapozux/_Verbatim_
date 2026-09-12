@@ -911,3 +911,7 @@ html[lang="zh-CN"] .reflect-topic .desc { font-family: var(--sans); font-size: 1
 .speed-table td:first-child { font-weight: 600; }
 .speed-table tr.approx td { color: var(--faint); font-weight: 400; }
 .speed-table td i { font-style: normal; font-size: 11px; color: var(--faint); margin-left: 6px; }
+
+/* Storage：带复选框的设置行 */
+.settings-check { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
+.settings-check input { margin-top: 3px; accent-color: var(--coral); }
