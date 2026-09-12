@@ -4,7 +4,7 @@ Transfer audio and video to text with time-stamps, and then organize tens of vid
 
 I made it because I have a lot of class audio and Chinese Youtuber videos I want to analyze. The current tools are either expensive or have a bad understanding of the audio language. So I just made one. I have used it for about half a year, already processed 1340 files, 533 hours of audio.
 
-![Verbatim](docs/verbatim.webp)
+![Verbatim](docs/verbatim.png)
 
 ## What can it do?
 

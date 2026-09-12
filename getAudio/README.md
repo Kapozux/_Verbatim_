@@ -12,7 +12,7 @@ output explicitly).
 > accelerated on Apple Silicon) or cloud (Gemini / Alibaba); nothing leaves your machine unless you
 > configure and use a cloud engine.
 
-![Verbatim](../docs/verbatim.webp)
+![Verbatim](../docs/verbatim.png)
 
 ---
 
