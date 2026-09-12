@@ -169,7 +169,7 @@ async def get_transcript(task_id: str, full: bool = False) -> dict:
         "one_line": payload.get("ai_one_line"),
         "tags": payload.get("ai_tags"),
         "summary": payload.get("summary"),
-        "duration": payload.get("duration"),
+        "duration": payload.get("duration_seconds"),
         "engine": payload.get("engine"),
         "segment_count": len(segments),
         "text": text if full else _trim(text, 4000),
@@ -206,7 +206,7 @@ async def list_transcripts(limit: int = 30, source: str = "all") -> dict:
             "task_id": e.get("id"),
             "title": e.get("ai_title") or e.get("filename"),
             "date": e.get("date"),
-            "duration": e.get("duration"),
+            "duration": e.get("duration_seconds"),
             "source": e.get("source"),
             "creator": e.get("creator"),
         }
