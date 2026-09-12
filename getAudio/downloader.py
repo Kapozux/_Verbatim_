@@ -255,11 +255,28 @@ def probe(url, max_videos=None):
 
 _DOWNLOAD_ATTEMPTS = 3        # B站 412 等间歇性风控：退避重试，绝大多数第二次就过
 
+# 每次重试换一档音质，而不是原样重试同一条命令。
+#
+# 踩过的真实案例：某条 B 站视频，yt-dlp 默认挑的「最佳音质」那一档（175kbps）
+# 被分配到的 CDN 边缘节点直接 404——节点本身挂了，跟账号/网络/cookie 都无关，
+# 同一视频的其它音质档（66k/96k）分到的是别的节点，一切正常。yt-dlp 的格式
+# 回退语法 `-f "bestaudio/worstaudio"` 在这种情况下**不会生效**：那只在「格式
+# 不存在」时回退，格式存在、只是下载 URL 本身挂了不算数，照样直接报错退出。
+# 所以只能在重试循环里手动换一次 -f，逼它问一条不同的音轨（大概率分到别的
+# CDN 节点）。转写用途对音质要求很低，worstaudio 完全够用。
+#
+# 首选 m4a 音轨：YouTube / B站 都有现成的 m4a（AAC），拿到就是最终文件、零转码；
+# 没有 m4a 才退到平台给的最佳音轨（多半是 opus，落成 .opus，下游同样直接认）。
+_FORMAT_ATTEMPTS = ('bestaudio[ext=m4a]/bestaudio', 'worstaudio',
+                    'bestaudio[ext=m4a]/bestaudio')
+
 
 def download_one(target, dest_dir, section=None):
     """下载单个目标的音频，返回 {'path','title','video_id','thumbnail'} 或 None。
 
-    带退避重试：B站 412 / 网络抖动这类间歇失败，隔几秒重试常能过。
+    带退避重试：B站 412 / 网络抖动这类间歇失败，隔几秒重试常能过；
+    也会在重试时换一档音质，应对「格式存在但 CDN 节点挂了」这种单纯换个
+    格式就能绕过、重试同一格式却怎么都过不去的情况（见 _FORMAT_ATTEMPTS）。
     section: 可选时间段（yt-dlp --download-sections 的值，如 '*600-1500'），
              只下载/切出那一段音频，转写成本随之下降。
     """
@@ -267,22 +284,33 @@ def download_one(target, dest_dir, section=None):
     binary = _resolve_ytdlp()
     outtmpl = os.path.join(dest_dir, '%(title)s [%(id)s].%(ext)s')
     section_args = ['--download-sections', section] if section else []
-    cmd = [
-        binary,
-        '-x', '--audio-format', 'mp3', '--audio-quality', '128K',
-        '-o', outtmpl,
-        '--no-playlist', '--no-warnings', '--quiet',
-        *section_args,
-        *_lang_args(), *_cookie_args(), *_ffmpeg_location_args(),
-        # 下载+后处理完成后打印最终文件路径和元信息，逐行读取
-        '--print', 'after_move:filepath',
-        '--print', 'after_move:title',
-        '--print', 'after_move:id',
-        '--print', 'after_move:view_count',
-        '--no-simulate',
-        target['video_url'],
-    ]
+
+    def build_cmd(fmt):
+        return [
+            binary,
+            *(['-f', fmt] if fmt else []),
+            # -x 不带 --audio-format：默认 best = 只抽音轨、不转码。下载到的 opus/m4a
+            # 本来就是压缩好的，之前强制转 mp3 128K 是每个视频白跑一遍 ffmpeg，体积还不降。
+            '-x',
+            '-N', '4',                      # 分片并发下载，长视频的 DASH 分片明显更快
+            '-o', outtmpl,
+            '--no-playlist', '--no-warnings', '--quiet',
+            *section_args,
+            *_lang_args(), *_cookie_args(), *_ffmpeg_location_args(),
+            # 下载+后处理完成后打印最终文件路径和元信息，逐行读取
+            '--print', 'after_move:filepath',
+            '--print', 'after_move:title',
+            '--print', 'after_move:id',
+            '--print', 'after_move:view_count',
+            # 博主名：channel 优先、uploader 兜底；都没有打印 '-' 占位（空行会被过滤掉，打乱行序）
+            '--print', 'after_move:%(channel,uploader|-)s',
+            '--no-simulate',
+            target['video_url'],
+        ]
+
     for attempt in range(1, _DOWNLOAD_ATTEMPTS + 1):
+        fmt = _FORMAT_ATTEMPTS[(attempt - 1) % len(_FORMAT_ATTEMPTS)]
+        cmd = build_cmd(fmt)
         try:
             result = subprocess.run(
                 cmd, capture_output=True, text=True, timeout=_DOWNLOAD_TIMEOUT,
@@ -298,12 +326,16 @@ def download_one(target, dest_dir, section=None):
                         vc = int(lines[3])
                     except (ValueError, TypeError):
                         vc = 0
+                uploader = lines[4].strip() if len(lines) >= 5 else ''
+                if uploader in ('-', 'NA'):
+                    uploader = ''
                 return {
                     'path': lines[0],
                     'title': lines[1] or target.get('title') or 'untitled',
                     'video_id': lines[2] or target.get('video_id', ''),
                     'thumbnail': target.get('thumbnail', ''),
                     'view_count': vc or int(target.get('view_count') or 0),
+                    'uploader': uploader,
                 }
         if attempt < _DOWNLOAD_ATTEMPTS:
             time.sleep(4 * attempt)      # 4s, 8s 退避
@@ -350,27 +382,78 @@ def _collect_srt(dest_dir, vid):
     return os.path.join(dest_dir, names[0]) if names else None
 
 
-def _pick_sub_lang(tracks, orig):
-    """从可用字幕轨里挑一条：原语言 > 英 > 中(含B站 AI字幕 ai-zh) > 任意。避免下成机翻。"""
-    if not tracks:
-        return None
-    pref = [orig, 'en', 'en-US', 'zh-Hans', 'zh', 'zh-CN', 'zh-Hant',
-            'ai-zh', 'ai-en']          # ai-zh/ai-en：B站等平台的 AI 自动字幕
-    for code in [c for c in pref if c]:
-        if code in tracks:
-            return code
-    # 兜底：任何 zh 开头(含 ai-zh)的轨优先，再不行取第一条
-    for code in tracks:
-        if str(code).lower().startswith(('zh', 'ai-zh')):
-            return code
-    return next(iter(tracks))
+# 字幕语言匹配：用户/自动选定的「想要的语言」（zh / en / ja …）对平台字幕轨代码做宽松匹配。
+# zh 要能匹配 zh-Hans / zh-CN / zh-Hant / ai-zh（B站 AI 字幕）；en 匹配 en-US / en-orig 等。
+_CJK_RE = re.compile(r'[\u4e00-\u9fff]')
+_KANA_RE = re.compile(r'[\u3040-\u30ff]')
+_HANGUL_RE = re.compile(r'[\uac00-\ud7af]')
 
 
-def fetch_subtitle(target, dest_dir):
-    """抓取视频已有字幕并转 srt。返回 (srt路径, 类型) 或 (None, None)。
+def _lang_matches(code, want):
+    c = (code or '').lower()
+    w = (want or '').lower()
+    if not c or not w:
+        return False
+    if c.startswith('ai-'):            # B站等平台的 AI 自动字幕：ai-zh / ai-en
+        c = c[3:]
+    if c.endswith('-orig'):            # YouTube 原声自动字幕：en-orig / zh-Hans-orig
+        c = c[:-5]
+    return c == w or c.split('-')[0] == w
 
-    先用一次 -J 拿到视频语言 + 可用字幕清单，只下『原语言那一条轨』——
-    避免请求多语言触发 429，也避免下成机器翻译。人工字幕优先，其次自动字幕。
+
+def _detect_orig_lang(info):
+    """猜视频的原始语言：平台标注 > YouTube 自动字幕里的 -orig 轨 > 标题文字系统。
+
+    返回 'zh' / 'en' / 'ja' … 或 ''（实在猜不到）。猜不到时调用方**不选字幕、直接转写**，
+    绝不再随便挑一条别的语言——之前的做法是在语言未知时先挑 en，YouTube 的自动字幕
+    清单里有一百多种机翻语言，中文视频就这样拿到了英文机翻。
+    """
+    lang = (info.get('language') or '').split('-')[0].lower()
+    if lang:
+        return lang
+    for code in (info.get('automatic_captions') or {}):
+        if str(code).endswith('-orig'):
+            return str(code)[:-5].split('-')[0].lower()
+    title = info.get('title') or ''
+    if _KANA_RE.search(title):
+        return 'ja'
+    if _HANGUL_RE.search(title):
+        return 'ko'
+    if _CJK_RE.search(title):
+        return 'zh'
+    return ''
+
+
+def _choose_track(manual, autos, want):
+    """在人工字幕 / 自动字幕里找「想要的语言」那一条。返回 (kind, code) 或 (None, None)。
+
+    人工 > 自动；自动里优先 -orig（真正的语音识别轨，不是机翻）。
+    找不到该语言就返回空——调用方落回音频转写，而不是换一种语言凑合。
+    """
+    for code in manual:
+        if _lang_matches(code, want):
+            return 'manual', code
+    for code in autos:
+        if str(code).endswith('-orig') and _lang_matches(code, want):
+            return 'auto', code
+    for code in autos:
+        if _lang_matches(code, want):
+            return 'auto', code
+    return None, None
+
+
+def fetch_subtitle(target, dest_dir, lang='auto'):
+    """抓取视频已有字幕并转 srt。返回 (srt路径, 类型, meta) 或 (None, None, meta)。
+
+    lang：'auto' = 只要视频原始语言那一条（猜不出原语言就不用字幕）；
+          'zh' / 'en' / 'ja' … = 只要这种语言（人工优先，其次平台自动/机翻字幕）；
+          都找不到 → 返回 None，让调用方走下载 + 转写。**绝不返回别的语言的字幕。**
+
+    先用一次 -J 拿到视频语言 + 可用字幕清单，只下选中的那一条轨——
+    避免请求多语言触发 429。
+
+    meta = {'title', 'video_id', 'sub_lang', 'want'}：顺手把这次元数据调用里的标题/id
+    一并带回去——调用方（如直接贴链接转写）事先并不知道这些，省得再单独探测一次。
     """
     os.makedirs(dest_dir, exist_ok=True)
     binary = _resolve_ytdlp()
@@ -385,22 +468,20 @@ def fetch_subtitle(target, dest_dir):
         )
         info = json.loads(r.stdout) if r.stdout.strip() else {}
     except Exception:
-        return None, None
+        return None, None, None
 
-    orig = (info.get('language') or '').split('-')[0]
+    meta = {'title': info.get('title'), 'video_id': info.get('id') or target.get('video_id', '')}
     manual = info.get('subtitles') or {}
     autos = info.get('automatic_captions') or {}
 
-    kind = chosen = None
-    m = _pick_sub_lang(manual, orig)
-    if m:
-        kind, chosen = 'manual', m
-    else:
-        a = orig if (orig and orig in autos) else _pick_sub_lang(autos, orig)
-        if a:
-            kind, chosen = 'auto', a
+    want = _detect_orig_lang(info) if (lang or 'auto') == 'auto' else str(lang).lower()
+    meta['want'] = want
+    if not want:
+        return None, None, meta          # 原语言猜不到 → 不赌，去转写
+    kind, chosen = _choose_track(manual, autos, want)
     if not chosen:
-        return None, None
+        return None, None, meta
+    meta['sub_lang'] = chosen
 
     # 2) 只下这一条轨
     outtmpl = os.path.join(dest_dir, 'sub_%(id)s.%(ext)s')
@@ -413,9 +494,9 @@ def fetch_subtitle(target, dest_dir):
             capture_output=True, text=True, timeout=_SUB_TIMEOUT,
         )
     except subprocess.TimeoutExpired:
-        return None, None
-    path = _collect_srt(dest_dir, target.get('video_id', ''))
-    return (path, kind) if path else (None, None)
+        return None, None, meta
+    path = _collect_srt(dest_dir, meta['video_id'])
+    return (path, kind, meta) if path else (None, None, meta)
 
 
 def _fmt_ts(sec):

@@ -2,7 +2,7 @@
 精准模式（说话人分离）合并逻辑。
 
 思路：用每个引擎最擅长的部分，各取所长：
-  - 阿里云 Paraformer（diarization）负责"谁在说"——声纹分离，句级 speaker + 时间戳；
+  - 阿里云 Qwen-ASR（diarization）负责"谁在说"——声纹分离，句级 speaker + 时间戳；
   - Gemini 负责"说了什么"——高质量文字；
   - 最后再让 Gemini 把两份稿按时间轴对齐合并，输出带说话人的成稿。
 

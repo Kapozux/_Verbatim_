@@ -1,6 +1,7 @@
 """
 DashScope transcription engine (阿里云百炼).
-Uses Paraformer ASR via REST API for speech-to-text.
+默认走 Qwen-Audio-3.0 ASR（见 config.DASHSCOPE_ASR_MODEL）；paraformer-v2 是同接口
+的上一代模型，改 env 即可退回。两者请求/返回结构一致，共用本模块。
 """
 
 import json
@@ -15,14 +16,16 @@ BASE_URL = 'https://dashscope.aliyuncs.com/api/v1'
 
 
 def transcribe_audio(filepath, progress_callback=None, diarization=False,
-                     speaker_count=None):
+                     speaker_count=None, model=None):
     """
-    Transcribe audio using DashScope Paraformer via REST API.
+    Transcribe audio using DashScope ASR (Qwen-Audio-3.0 by default) via REST API.
 
     Args:
         diarization: 开启说话人分离（声纹），返回的每段会带 'speaker' 字段。
         speaker_count: 已知说话人数量时传入作为提示，能显著改善聚类；
             不填（None）则让阿里云自动判断人数。
+        model: 覆盖默认 ASR 模型（如 qwen-audio-3.0-asr-flash-filetrans）。
+            两代模型的请求/返回结构一致，所以共用这一条链路。
 
     Returns:
         List of segment dicts with keys: timestamp (str), text (str),
@@ -33,17 +36,18 @@ def transcribe_audio(filepath, progress_callback=None, diarization=False,
         raise RuntimeError(
             "DashScope API Key 未设置。请在 .env 文件中设置 DASHSCOPE_API_KEY。"
         )
+    model = model or DASHSCOPE_ASR_MODEL
 
     if progress_callback:
         progress_callback(5)
 
-    file_url = _upload_file(filepath, api_key)
+    file_url = _upload_file(filepath, api_key, model)
 
     if progress_callback:
         progress_callback(15)
 
     task_id = _submit_task(file_url, api_key, diarization=diarization,
-                           speaker_count=speaker_count)
+                           speaker_count=speaker_count, model=model)
 
     if progress_callback:
         progress_callback(20)
@@ -61,14 +65,14 @@ def transcribe_audio(filepath, progress_callback=None, diarization=False,
     return segments
 
 
-def _upload_file(filepath, api_key):
+def _upload_file(filepath, api_key, model=None):
     """Upload a local file to DashScope temporary OSS and return oss:// URL."""
     filename = os.path.basename(filepath)
 
     policy_resp = http_requests.get(
         f'{BASE_URL}/uploads',
         headers={'Authorization': f'Bearer {api_key}'},
-        params={'action': 'getPolicy', 'model': DASHSCOPE_ASR_MODEL},
+        params={'action': 'getPolicy', 'model': model or DASHSCOPE_ASR_MODEL},
         timeout=30,
     )
     policy_resp.raise_for_status()
@@ -101,13 +105,14 @@ def _upload_file(filepath, api_key):
     return f"oss://{oss_key}"
 
 
-def _submit_task(file_url, api_key, diarization=False, speaker_count=None):
+def _submit_task(file_url, api_key, diarization=False, speaker_count=None,
+                 model=None):
     """Submit a transcription task via REST API and return task_id."""
     parameters = {
         'language_hints': ['zh', 'en'],
     }
     if diarization:
-        # paraformer-v2 声纹说话人分离
+        # 声纹说话人分离（paraformer-v2 与 qwen-audio-3.0 同名参数）
         parameters['diarization_enabled'] = True
         # 传入已知人数作为提示，远场/多人场景能明显改善聚类；不填则自动判断
         if speaker_count and speaker_count > 0:
@@ -122,7 +127,7 @@ def _submit_task(file_url, api_key, diarization=False, speaker_count=None):
             'X-DashScope-OssResourceResolve': 'enable',
         },
         json={
-            'model': DASHSCOPE_ASR_MODEL,
+            'model': model or DASHSCOPE_ASR_MODEL,
             'input': {
                 'file_urls': [file_url],
             },

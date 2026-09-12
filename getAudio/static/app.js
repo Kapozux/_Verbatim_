@@ -46,21 +46,13 @@ const detailSrtBtn = document.getElementById('detail-srt-btn');
 
 // ========== State ==========
 let detailSegments = [];
+let detailRecord = null;   // 当前详情视图整条记录（含 ai_title），下载文件名要用
 let batchTotal = 0;
 let batchFinished = 0;
 
 // ========== Helpers ==========
-const ENGINE_LABELS = {
-    whisper: 'Whisper',
-    gemini: 'Gemini',
-    // dashscope = 2026-08 之前用 paraformer-v2 转的老稿，保留标签让历史记录如实显示
-    dashscope: 'DashScope (Paraformer)',
-    qwenasr: 'Qwen-ASR',
-    precise: 'Precise (diarization)',
-};
-
 function engineLabel(engine) {
-    return ENGINE_LABELS[engine] || (engine || 'Unknown');
+    return STRINGS.en['engine.' + engine] ? T('engine.' + engine) : (engine || 'Unknown');
 }
 
 function formatDuration(seconds) {
@@ -104,7 +96,7 @@ function addFiles(files) {
 
 function updateFileLabel() {
     if (intakeFiles.length === 0) {
-        fileLabelText.textContent = 'Choose or drop audio / video files (multiple ok)';
+        fileLabelText.textContent = T('transcribe.dropLabel');
         fileInfo.textContent = '';
         fileLabel.classList.remove('has-file');
         return;
@@ -140,7 +132,7 @@ function parseTextLines() {
     return out;
 }
 
-const INTAKE_BADGES = { file: 'File', link: 'Link', path: 'Local path', invalid: '?' };
+function intakeBadge(kind) { return T('intake.' + kind); }
 
 function buildIntakeRow(r) {
     const row = document.createElement('div');
@@ -148,7 +140,7 @@ function buildIntakeRow(r) {
 
     const badge = document.createElement('span');
     badge.className = `intake-badge intake-badge-${r.kind}`;
-    badge.textContent = INTAKE_BADGES[r.kind];
+    badge.textContent = intakeBadge(r.kind);
     row.appendChild(badge);
 
     const name = document.createElement('span');
@@ -161,7 +153,7 @@ function buildIntakeRow(r) {
         const sub = document.createElement('span');
         sub.className = 'intake-sub';
         sub.textContent = r.kind === 'invalid'
-            ? 'Not a link or a path — will be skipped' : r.sub;
+            ? T('intake.invalidHint') : r.sub;
         row.appendChild(sub);
     }
 
@@ -169,7 +161,7 @@ function buildIntakeRow(r) {
     del.type = 'button';
     del.className = 'intake-del';
     del.textContent = '×';
-    del.title = 'Remove';
+    del.title = T('common.remove');
     del.addEventListener('click', () => removeIntakeRow(r));
     row.appendChild(del);
     return row;
@@ -209,7 +201,8 @@ function updateSubmitBtn() {
     if (intakeSubmitting) { submitBtn.disabled = true; return; }
     const n = intakeValidCount();
     submitBtn.textContent = n > 0
-        ? `Transcribe ${n} item${n === 1 ? '' : 's'}` : 'Transcribe';
+        ? T('transcribe.submitCount', { n, itemWord: n === 1 ? 'item' : 'items' })
+        : T('transcribe.submit');
     submitBtn.disabled = n === 0;
 }
 
@@ -260,15 +253,10 @@ if (showMainlandBtn && mainlandEngines) {
         showMainlandBtn.classList.toggle('open');
     });
 }
-const MAINLAND_WARNING =
-    'Qwen-ASR / Precise send your audio to Alibaba Cloud (mainland China), which runs ' +
-    'mandatory content moderation.\n\n' +
-    'Do NOT use them for politically sensitive material — it may be refused, garbled, or altered. ' +
-    'For sensitive content use Whisper (local, private) or Gemini.\n\nUse this engine anyway?';
 document.querySelectorAll('input[name="engine"][value="qwenasr"], input[name="engine"][value="precise"]')
     .forEach(radio => {
         radio.addEventListener('change', () => {
-            if (radio.checked && !confirm(MAINLAND_WARNING)) {
+            if (radio.checked && !confirm(T('confirm.mainlandWarning'))) {
                 // 拒绝 → 退回 Whisper
                 const w = document.querySelector('input[name="engine"][value="whisper"]');
                 w.checked = true;
@@ -306,25 +294,25 @@ form.addEventListener('submit', async (e) => {
 
     intakeSubmitting = true;
     submitBtn.disabled = true;
-    submitBtn.textContent = 'Transcribing…';
+    submitBtn.textContent = T('transcribe.submitting');
 
     // 按预览顺序先建行（文件 → 链接 → 路径），invalid 行不进队列
     const fileJobs = files.map(file => {
         const row = createBatchRow(file.name);
-        setRowStatus(row, 'Queued', 'queued');
+        setRowStatus(row, T('rowStatus.queued'), 'queued');
         batchList.appendChild(row);
         return { file, row };
     });
     const linkRows = linkItems.map(t => {
         // Queue 里显示干净 URL + 时间段徽标，别露出 @后缀
         const row = createBatchRow(t.clip ? `${t.label}  (⏱ ${t.clip})` : t.label);
-        setRowStatus(row, 'Queued', 'queued');
+        setRowStatus(row, T('rowStatus.queued'), 'queued');
         batchList.appendChild(row);
         return row;
     });
     const pathRows = paths.map(p => {
         const row = createBatchRow(p.split('/').pop() || p);
-        setRowStatus(row, 'Queued', 'queued');
+        setRowStatus(row, T('rowStatus.queued'), 'queued');
         batchList.appendChild(row);
         return row;
     });
@@ -369,12 +357,13 @@ async function submitLinks(links, rows, engine) {
             body: JSON.stringify({
                 urls: links.join('\n'), engine,
                 max_videos: parseInt((document.getElementById('url-max-videos') || {}).value, 10) || 20,
+                subs: (document.getElementById('url-subs') || {}).value || 'auto',
             }),
         });
         const data = await resp.json().catch(() => ({}));
         if (!resp.ok || data.error) {
             rows.forEach(row => {
-                setRowStatus(row, data.error || `Failed (${resp.status})`, 'error');
+                setRowStatus(row, data.error || T('rowStatus.failedCode', { status: resp.status }), 'error');
                 onTaskFinished();
             });
             return;
@@ -392,21 +381,21 @@ async function submitLinks(links, rows, engine) {
                 const nameEl = row.querySelector('.batch-item-name');
                 if (nameEl) nameEl.textContent = t.title;   // 展开后用真实标题替掉合集URL
             }
-            setRowStatus(row, 'Downloading…', 'running');
+            setRowStatus(row, T('rowStatus.downloading'), 'running');
             connectBatchSSE(t.task_id, row);
         });
         // 超出服务器单批上限被截掉的行，明确标出而不是悄悄消失
         for (let i = data.tasks.length; i < rows.length; i++) {
-            setRowStatus(rows[i], 'Skipped — max 20 links per batch', 'error');
+            setRowStatus(rows[i], T('rowStatus.skippedMax20'), 'error');
             onTaskFinished();
         }
         // 合集枚举失败之类的问题，提示出来而不是静默
         if (data.errors && data.errors.length) {
-            showToast(`Some links could not be expanded: ${data.errors[0]}`);
+            showToast(T('toast.someLinksNotExpanded', { message: data.errors[0] }));
         }
     } catch (err) {
         rows.forEach(row => {
-            setRowStatus(row, `Failed: ${err.message}`, 'error');
+            setRowStatus(row, T('rowStatus.failedMessage', { message: err.message }), 'error');
             onTaskFinished();
         });
     }
@@ -416,7 +405,7 @@ async function submitLinks(links, rows, engine) {
 async function submitPaths(paths, rows, engine) {
     for (let i = 0; i < paths.length; i++) {
         const row = rows[i];
-        setRowStatus(row, 'Reading local file…', 'running');
+        setRowStatus(row, T('rowStatus.readingLocal'), 'running');
         const body = { path: paths[i], engine };
         const speakerEl = document.getElementById('speaker-count');
         if (engine === 'precise' && speakerEl && speakerEl.value.trim()) {
@@ -429,20 +418,20 @@ async function submitPaths(paths, rows, engine) {
             });
             const data = await resp.json().catch(() => ({}));
             if (!resp.ok || data.error) {
-                setRowStatus(row, data.error || `Failed (${resp.status})`, 'error');
+                setRowStatus(row, data.error || T('rowStatus.failedCode', { status: resp.status }), 'error');
                 onTaskFinished();
             } else {
                 connectBatchSSE(data.task_id, row);
             }
         } catch (err) {
-            setRowStatus(row, `Failed: ${err.message}`, 'error');
+            setRowStatus(row, T('rowStatus.failedMessage', { message: err.message }), 'error');
             onTaskFinished();
         }
     }
 }
 
 async function uploadOne(file, row, engine) {
-    setRowStatus(row, 'Uploading…', 'running');
+    setRowStatus(row, T('rowStatus.uploading'), 'running');
 
     const formData = new FormData();
     formData.append('audio', file);
@@ -457,7 +446,7 @@ async function uploadOne(file, row, engine) {
     try {
         const resp = await fetch('/upload', { method: 'POST', body: formData });
         if (!resp.ok) {
-            let msg = `Upload failed (${resp.status})`;
+            let msg = T('rowStatus.uploadFailedCode', { status: resp.status });
             try {
                 const d = await resp.json();
                 if (d.error) msg = d.error;
@@ -477,7 +466,7 @@ async function uploadOne(file, row, engine) {
         // 上传成功 → 服务器已排队，接 SSE 看进度
         connectBatchSSE(data.task_id, row);
     } catch (err) {
-        setRowStatus(row, `Upload failed: ${err.message}`, 'error');
+        setRowStatus(row, T('rowStatus.uploadFailedMessage', { message: err.message }), 'error');
         onTaskFinished();
     }
 }
@@ -501,10 +490,18 @@ function createBatchRow(filename) {
 
     const status = document.createElement('span');
     status.className = 'batch-item-status';
-    status.textContent = 'Queued';
+    status.textContent = T('rowStatus.queued');
+
+    // 右侧：状态文字 + 计时（已用 / 预计还要）
+    const right = document.createElement('span');
+    right.className = 'batch-item-right';
+    right.appendChild(status);
+    const clock = document.createElement('span');
+    clock.className = 'batch-item-time';
+    right.appendChild(clock);
 
     info.appendChild(name);
-    info.appendChild(status);
+    info.appendChild(right);
 
     const bar = document.createElement('div');
     bar.className = 'batch-item-progress';
@@ -548,17 +545,24 @@ function setRowProgress(row, percent) {
 function connectBatchSSE(taskId, row) {
     const actions = row.querySelector('.batch-item-actions');
     const source = new EventSource(`/stream/${taskId}`);
+    startRowClock(row);
 
     source.onmessage = (event) => {
         const msg = JSON.parse(event.data);
 
         switch (msg.type) {
             case 'queued':
-                setRowStatus(row, 'Queued', 'queued');
+                setRowStatus(row, T('rowStatus.queued'), 'queued');
+                break;
+
+            // 服务器抽完音频、知道时长后，按同引擎历史速度给的预估；null = 样本不够，不猜
+            case 'eta':
+                row._eta = msg.expected_s ? { at: Date.now(), expected: msg.expected_s } : null;
+                tickRowClock(row);
                 break;
 
             case 'progress':
-                setRowStatus(row, `Transcribing ${msg.percent}%`, 'running');
+                setRowStatus(row, T('rowStatus.transcribing', { percent: msg.percent }), 'running');
                 setRowProgress(row, msg.percent);
                 break;
 
@@ -568,15 +572,18 @@ function connectBatchSSE(taskId, row) {
                 break;
 
             case 'done':
-                setRowStatus(row, 'Done', 'done');
+                stopRowClock(row);
+                setRowStatus(row, doneLabel(msg.timing), 'done');
                 setRowProgress(row, 100);
                 addViewButton(actions, taskId);
                 source.close();
                 onTaskFinished();
                 renderHistory();
+                loadEngineSpeed();          // 多了一个样本，引擎旁的速度提示跟着更新
                 break;
 
             case 'error':
+                stopRowClock(row);
                 setRowStatus(row, `${msg.message}`, 'error');
                 source.close();
                 onTaskFinished();
@@ -590,12 +597,90 @@ function connectBatchSSE(taskId, row) {
     };
 }
 
+// ===== 队列行计时：已用时长每秒走，预估来了就并排显示「还要约 X」 =====
+function fmtElapsed(seconds) {
+    const s = Math.max(0, Math.round(seconds || 0));
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+    if (h) return `${h}h${String(m).padStart(2, '0')}m`;
+    if (m) return `${m}m${String(sec).padStart(2, '0')}s`;
+    return `${sec}s`;
+}
+
+function startRowClock(row) {
+    stopRowClock(row);
+    row._t0 = Date.now();
+    row._eta = null;
+    tickRowClock(row);
+    row._clock = setInterval(() => tickRowClock(row), 1000);
+}
+
+function stopRowClock(row) {
+    if (row._clock) clearInterval(row._clock);
+    row._clock = null;
+    const el = row.querySelector('.batch-item-time');
+    if (el) el.textContent = '';
+}
+
+function tickRowClock(row) {
+    const el = row.querySelector('.batch-item-time');
+    if (!el || !row._t0) return;
+    let txt = '⏱ ' + fmtElapsed((Date.now() - row._t0) / 1000);
+    if (row._eta && row._eta.expected) {
+        const remain = row._eta.expected - (Date.now() - row._eta.at) / 1000;
+        txt += ' · ' + (remain > 5 ? T('row.eta', { t: fmtElapsed(remain) }) : T('row.finishing'));
+    }
+    el.textContent = txt;
+}
+
+// 完成行文案：「完成 · 2m48s (13×)」——processing 不含排队；13× = 音频时长 ÷ 转写本体
+function doneLabel(timing) {
+    if (!timing || !timing.processing_s) return T('rowStatus.done');
+    let t = fmtElapsed(timing.processing_s);
+    if (timing.speed_x) t += ` (${timing.speed_x}×)`;
+    return T('rowStatus.doneIn', { t });
+}
+
+// 详情页悬停：分阶段明细
+const TIMING_STAGES = [
+    ['queued_s', 'timing.queued'], ['subs_check_s', 'timing.subs'], ['download_s', 'timing.download'],
+    ['extract_s', 'timing.extract'], ['transcribe_s', 'timing.transcribe'], ['summary_s', 'timing.summary'],
+    ['save_s', 'timing.save'], ['enrich_s', 'timing.enrich'],
+];
+function timingBreakdown(tm) {
+    const parts = TIMING_STAGES.filter(([k]) => tm[k] != null && tm[k] >= 0.5)
+        .map(([k, key]) => `${T(key)} ${fmtElapsed(tm[k])}`);
+    if (tm.fallback_from) parts.push(T('timing.fallback', { engine: engineLabel(tm.fallback_from) }));
+    return parts.join(' · ');
+}
+
+// ===== 引擎选择处的速度提示：「每小时音频约 X 分钟 · 近 N 次」，把数字放在做决定的地方 =====
+function fmtMinutes(m) {
+    if (m == null) return '—';
+    if (m < 1) return '<1';
+    return m < 10 ? String(Math.round(m * 10) / 10) : String(Math.round(m));
+}
+
+async function loadEngineSpeed() {
+    let sp;
+    try { sp = await (await fetch('/api/speed')).json(); } catch { return; }
+    document.querySelectorAll('input[name="engine"]').forEach(inp => {
+        const opt = inp.closest('.radio-option');
+        const label = opt && opt.querySelector('.radio-label');
+        if (!label) return;
+        let el = label.querySelector('.engine-speed');
+        const row = sp[inp.value];
+        if (!row || !row.n) { if (el) el.remove(); return; }
+        if (!el) { el = document.createElement('small'); el.className = 'engine-speed'; label.appendChild(el); }
+        el.textContent = T('transcribe.speedHint', { min: fmtMinutes(row.min_per_hour), n: row.n });
+    });
+}
+
 function addViewButton(actions, taskId) {
     if (actions.querySelector('.batch-view-btn')) return;
     const btn = document.createElement('button');
     btn.className = 'btn-secondary btn-small batch-view-btn';
-    btn.textContent = 'View';
-    btn.addEventListener('click', () => openDetailView(taskId));
+    btn.textContent = T('common.view');
+    btn.addEventListener('click', () => navigate('detail/' + taskId));
     actions.appendChild(btn);
 }
 
@@ -725,16 +810,17 @@ detailCopyBtn.addEventListener('click', () => {
 });
 
 detailDownloadBtn.addEventListener('click', () => {
-    downloadFile(segmentLines(detailSegments).join('\n'),
-        `transcription_${dateStr()}.txt`, 'text/plain;charset=utf-8');
-    showToast('Downloaded TXT');
+    const title = (detailRecord && detailRecord.ai_title) || (detailRecord && detailRecord.filename) || T('common.transcriptFallback');
+    const body = `# ${title}\n\n` + segmentLines(detailSegments).join('\n');
+    downloadFile(body, transcriptDownloadName(detailRecord, 'md'), 'text/markdown;charset=utf-8');
+    showToast(T('toast.downloadedMd'));
 });
 
 detailSrtBtn.addEventListener('click', () => {
     if (detailSegments.length === 0) return;
     downloadFile(buildSRT(detailSegments),
-        `subtitles_${dateStr()}.srt`, 'text/plain;charset=utf-8');
-    showToast('Downloaded SRT');
+        transcriptDownloadName(detailRecord, 'srt'), 'text/plain;charset=utf-8');
+    showToast(T('toast.downloadedSrt'));
 });
 
 // ========== SRT ==========
@@ -765,7 +851,7 @@ function pad2(n) { return String(n).padStart(2, '0'); }
 
 function copyToClipboard(text) {
     navigator.clipboard.writeText(text).then(() => {
-        showToast('Copied to clipboard');
+        showToast(T('toast.copied'));
     }).catch(() => {
         const textarea = document.createElement('textarea');
         textarea.value = text;
@@ -773,7 +859,7 @@ function copyToClipboard(text) {
         textarea.select();
         document.execCommand('copy');
         document.body.removeChild(textarea);
-        showToast('Copied to clipboard');
+        showToast(T('toast.copied'));
     });
 }
 
@@ -789,6 +875,41 @@ function downloadFile(content, filename, mimeType) {
 
 function dateStr() {
     return new Date().toISOString().slice(0, 10);
+}
+
+// 文件名安全化：去掉三大平台都不认的字符，压掉多余空白，防止导出后打不开/自动改名。
+function sanitizeFilenamePart(text, fallback) {
+    const cleaned = (text || '').trim()
+        .replace(/[\\/:*?"<>|]/g, '')
+        .replace(/\s+/g, ' ')
+        .slice(0, 60)
+        .trim();
+    return cleaned || fallback;
+}
+
+// 转写详情页的下载文件名：「博主-名字 日期.md」
+//   博主：meta 里的 creator（新转写下载时抓的 uploader；链条任务从 chain.json 反查），没有就省掉
+//   名字：原文件名本身像个标题（enrich 阶段 AI 判断的 filename_meaningful）就用原文件名，
+//         否则用 AI 标题；两者都没有退回原文件名/日期
+//   日期：转写日期（meta.date 前 10 位）
+// 不再加随机串：浏览器遇到同名下载会自己加 (1)。SRT/TXT 用同一个主体名，只换后缀。
+const VID_SUFFIX_RE = /\s*\[[A-Za-z0-9_-]{6,}\]\s*$/;
+function filenameStem(name) {
+    return (name || '').replace(/\.[a-zA-Z0-9]{1,5}$/, '').replace(VID_SUFFIX_RE, '').trim();
+}
+function transcriptDownloadName(record, ext) {
+    const r = record || {};
+    const stem = filenameStem(r.filename);
+    const aiTitle = (r.ai_title || '').trim();
+    const aiUsable = aiTitle && !/内容为空|无效|invalid|empty/i.test(aiTitle);
+    let name;
+    if (r.filename_meaningful && stem) name = stem;
+    else if (aiUsable) name = aiTitle;
+    else name = stem;
+    name = sanitizeFilenamePart(name, `transcript_${dateStr()}`);
+    const creator = sanitizeFilenamePart(r.creator, '').replace(/-/g, '‐');   // 博主名里的连字符换成 U+2010，别和分隔符混
+    const date = (r.date || '').slice(0, 10) || dateStr();
+    return `${creator ? creator + '-' : ''}${name} ${date}.${ext}`;
 }
 
 // ========== History (server API) ==========
@@ -817,16 +938,28 @@ async function renderHistory() {
 
         if (entries.length === 0) {
             historyList.innerHTML = query
-                ? '<p class="history-empty">No matching records</p>'
-                : '<p class="history-empty">No transcripts yet</p>';
+                ? `<p class="history-empty">${T('library.noMatches')}</p>`
+                : `<p class="history-empty">${T('library.noTranscripts')}</p>`;
             return;
         }
 
         historyList.innerHTML = '';
         entries.forEach(entry => historyList.appendChild(buildHistoryCard(entry)));
     } catch {
-        historyList.innerHTML = '<p class="history-empty">Failed to load history</p>';
+        historyList.innerHTML = `<p class="history-empty">${T('library.failedToLoad')}</p>`;
     }
+}
+
+function buildSourceLink(url) {
+    const a = document.createElement('a');
+    a.className = 'source-link';
+    a.href = url;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    a.textContent = '🔗';
+    a.title = `${T('library.openSource')} · ${url}`;
+    a.addEventListener('click', e => e.stopPropagation());
+    return a;
 }
 
 function buildHistoryCard(entry) {
@@ -855,9 +988,14 @@ function buildHistoryCard(entry) {
     if (entry.source === 'pipeline') {
         const src = document.createElement('span');
         src.className = 'source-badge';
-        src.textContent = `🎬 ${entry.creator || 'Creators'}`;
-        src.title = 'From a Creators pipeline run';
+        src.textContent = `🎬 ${entry.creator || T('nav.creators')}`;
+        src.title = T('library.fromPipelineRun');
         titleRow.appendChild(src);
+    }
+
+    // 来自链接的转写：挂个 🔗 直达原视频（点它不进详情页）
+    if (entry.source_url) {
+        titleRow.appendChild(buildSourceLink(entry.source_url));
     }
 
     info.appendChild(titleRow);
@@ -879,7 +1017,7 @@ function buildHistoryCard(entry) {
     (entry.ai_tags || []).forEach(t => parts.push(`#${t}`));
     parts.push(entry.date);
     if (entry.duration_seconds) parts.push(formatDuration(entry.duration_seconds));
-    parts.push(`${entry.segment_count} segments`);
+    parts.push(T('common.segmentsCount', { n: entry.segment_count }));
     if (entry.ai_title) parts.push(entry.filename);
     meta.textContent = parts.join(' · ');
     info.appendChild(meta);
@@ -889,26 +1027,26 @@ function buildHistoryCard(entry) {
 
     const viewBtn = document.createElement('button');
     viewBtn.className = 'btn-secondary btn-small';
-    viewBtn.textContent = 'View';
-    viewBtn.addEventListener('click', () => openDetailView(entry.id));
+    viewBtn.textContent = T('common.view');
+    viewBtn.addEventListener('click', () => navigate('detail/' + entry.id));
 
     const delBtn = document.createElement('button');
     delBtn.className = 'btn-secondary btn-small btn-danger';
-    delBtn.textContent = 'Delete';
+    delBtn.textContent = T('common.delete');
     delBtn.addEventListener('click', async () => {
         const label = entry.ai_title || entry.filename;
-        if (!confirm(`Delete "${label}"? This cannot be undone.`)) return;
+        if (!confirm(T('confirm.deleteHistory', { label }))) return;
         try {
             const resp = await fetch(`/api/history/${entry.id}`, { method: 'DELETE' });
             if (!resp.ok) {
                 const data = await resp.json().catch(() => ({}));
-                showToast(data.error || 'Delete failed');
+                showToast(data.error || T('toast.deleteFailed'));
                 return;
             }
             renderHistory();
-            showToast('Deleted');
+            showToast(T('toast.deleted'));
         } catch {
-            showToast('Delete failed');
+            showToast(T('toast.deleteFailed'));
         }
     });
 
@@ -950,19 +1088,19 @@ if (sourceFilters) sourceFilters.addEventListener('click', (e) => {
 // ========== AI 整理（批量生成标题/标签） ==========
 enrichBtn.addEventListener('click', async () => {
     enrichBtn.disabled = true;
-    enrichBtn.textContent = 'Enriching…';
+    enrichBtn.textContent = T('library.enriching');
     try {
         await fetch('/api/enrich_all', { method: 'POST' });
         pollEnrichStatus();
     } catch {
-        showToast('Failed to start auto-titling');
+        showToast(T('toast.autoTitleStartFailed'));
         resetEnrichBtn();
     }
 });
 
 function resetEnrichBtn() {
     enrichBtn.disabled = false;
-    enrichBtn.textContent = 'Auto-title';
+    enrichBtn.textContent = T('library.autoTitle');
 }
 
 let enrichWasPolling = false;   // 后台标签暂停 enrich 轮询时的续跑标记
@@ -981,9 +1119,9 @@ async function pollEnrichStatus() {
             resetEnrichBtn();
             renderHistory();
             if (st.total > 0) {
-                showToast(`Auto-title done: ${st.total - st.failed}/${st.total} succeeded`);
+                showToast(T('toast.autoTitleDone', { done: st.total - st.failed, total: st.total }));
             } else {
-                showToast('All records already have titles');
+                showToast(T('toast.allAlreadyTitled'));
             }
         }
     } catch {
@@ -992,7 +1130,13 @@ async function pollEnrichStatus() {
 }
 
 // ========== Detail View ==========
+let detailReturnTo = 'tab/library';   // 打开详情前在哪，返回按钮/路由跳回用
+
 async function openDetailView(taskId) {
+    // 记住"从哪来"：如果是从某个博主的详情页点进某一期，返回也回那个博主详情，
+    // 而不是死板地弹回主 Tab（旧版一直是这个毛病）。
+    detailReturnTo = (chainDetailView && !chainDetailView.classList.contains('hidden') && chainDetailId)
+        ? `chain/${chainDetailId}` : 'tab/library';
     try {
         const resp = await fetch(`/api/history/${taskId}`);
         if (!resp.ok) throw new Error('Not found');
@@ -1008,12 +1152,31 @@ async function openDetailView(taskId) {
         detailView.classList.remove('hidden');
         window.scrollTo({ top: 0 });
 
+        detailRecord = data;
         detailTitle.textContent = data.filename;
         const segCount = (data.segments || []).length;
         const parts = [data.date, engineLabel(data.engine)];
         if (data.duration_seconds) parts.push(formatDuration(data.duration_seconds));
-        parts.push(`${segCount} segments`);
+        parts.push(T('common.segmentsCount', { n: segCount }));
+        if (data.engine === 'subtitle' && data.subtitle_lang) {
+            parts.push(T('detail.subLang', { lang: data.subtitle_lang }));
+        }
         detailMeta.textContent = parts.join(' · ');
+        const tm = data.timing || {};
+        if (tm.processing_s && !tm.approx) {
+            detailMeta.appendChild(document.createTextNode(' · '));
+            const sp = document.createElement('span');
+            sp.className = 'detail-timing';
+            sp.textContent = '⚡ ' + fmtElapsed(tm.processing_s) + (tm.speed_x ? ` · ${tm.speed_x}×` : '');
+            sp.title = timingBreakdown(tm);
+            detailMeta.appendChild(sp);
+        }
+        if (data.source_url) {
+            detailMeta.appendChild(document.createTextNode(' · '));
+            const link = buildSourceLink(data.source_url);
+            link.textContent = '🔗 ' + T('library.openSource');
+            detailMeta.appendChild(link);
+        }
 
         detailAudioPlayer.pause();
         detailAudioPlayer.currentTime = 0;
@@ -1034,7 +1197,10 @@ async function openDetailView(taskId) {
             detailSummarySection.classList.add('hidden');
         }
     } catch {
-        showToast('Could not load record');
+        showToast(T('toast.couldNotLoadRecord'));
+        // 冷启动时 URL 里带着失效/已删除的 taskId 会走到这——保底别留白屏，退回资料库。
+        _showMain();
+        navigate('tab/library', { replace: true });
     }
 }
 
@@ -1048,28 +1214,29 @@ function closeDetailView() {
     detailSummarySections.innerHTML = '';
     detailSummarySection.classList.add('hidden');
     detailSegments = [];
+    detailRecord = null;
     detailSyncState.last = null;
     window.scrollTo({ top: 0 });
 }
 
-detailBackBtn.addEventListener('click', closeDetailView);
+detailBackBtn.addEventListener('click', () => navigate(detailReturnTo));
 
 clearHistoryBtn.addEventListener('click', async () => {
-    if (!confirm('Clear all history? This deletes every saved audio file and transcript.')) return;
+    if (!confirm(T('confirm.clearHistory'))) return;
 
     try {
         const resp = await fetch('/api/history', { method: 'DELETE' });
         const data = await resp.json();
         if (!resp.ok) {
-            showToast(data.error || 'Clear failed');
+            showToast(data.error || T('toast.clearFailed'));
             return;
         }
         renderHistory();
-        let msg = `Cleared ${data.deleted || 0}`;
-        if (data.skipped) msg += ` (${data.skipped} in-progress skipped)`;
+        let msg = T('toast.cleared', { n: data.deleted || 0 });
+        if (data.skipped) msg += T('toast.clearedSkipped', { n: data.skipped });
         showToast(msg);
     } catch {
-        showToast('Clear failed');
+        showToast(T('toast.clearFailed'));
     }
 });
 
@@ -1103,23 +1270,15 @@ const chainProvider = document.getElementById('chain-provider');
 const chainStartBtn = document.getElementById('chain-start');
 
 // 分析模型的用户可读名（analysis_preset 是内部字段，展示层别裸露）
-const BRAIN_LABELS = { gemini: 'Gemini', deepseek: 'DeepSeek', kimi: 'Kimi',
-    glm: 'GLM', qwen: 'Qwen',
-    opus5: 'Claude Opus 5', opus46: 'Claude Opus 4.6' };
 function brainLabel(preset) {
-    return BRAIN_LABELS[preset || 'gemini'] || preset;
+    const key = 'brain.' + (preset || 'gemini');
+    return STRINGS.en[key] ? T(key) : preset;
 }
 
-const CHAIN_STAGE_LABELS = {
-    starting: 'Starting',
-    downloading: 'Downloading',
-    transcribing: 'Transcribing',
-    analyzing: 'Analyzing',
-    synthesizing: 'Synthesizing',
-    done: 'Done',
-    failed: 'Failed',
-    cancelled: 'Stopped',
-};
+function stageLabel(stage) {
+    const key = 'stage.' + stage;
+    return STRINGS.en[key] ? T(key) : stage;
+}
 
 let chainPollTimer = null;
 
@@ -1130,9 +1289,8 @@ chainStartBtn.addEventListener('click', async () => {
     if (!url) { chainUrl.focus(); return; }
     // 花钱确认：分析/合成会按视频数调用付费模型
     {
-        const extra = chainVerify.checked ? '\n+ Web fact-check uses extra Google Search quota.' : '';
-        if (!confirm('This analyzes every video of the creator + synthesizes one portrait, spending paid model quota that scales with video count (can add up).'
-            + extra + '\n\nJust want the transcript of one or a few videos? Cancel and use the Transcribe tab instead.\n\nContinue?')) {
+        const extra = chainVerify.checked ? T('confirm.chainStartVerifyExtra') : '';
+        if (!confirm(T('confirm.chainStart', { extra }))) {
             return;
         }
     }
@@ -1149,6 +1307,7 @@ chainStartBtn.addEventListener('click', async () => {
                 engine: chainEngine.value,
                 analyze: true,
                 prefer_subs: chainPreferSubs.checked,
+                sub_lang: (document.getElementById('chain-sub-lang') || {}).value || 'auto',
                 fallback_whisper: chainFallbackWhisper.checked,
                 verify: chainVerify.checked,
                 self_verify: chainSelfVerify.checked,
@@ -1158,11 +1317,11 @@ chainStartBtn.addEventListener('click', async () => {
             }),
         });
         const data = await resp.json();
-        if (!resp.ok) throw new Error(data.error || 'Failed to create');
+        if (!resp.ok) throw new Error(data.error || T('creators.failedToCreate'));
         chainUrl.value = '';
         loadChains();
     } catch (err) {
-        alert('Failed to start the analysis: ' + err.message);
+        alert(T('alert.failedToStartAnalysis', { message: err.message }));
     } finally {
         chainSubmitting = false;
         chainStartBtn.disabled = false;
@@ -1176,8 +1335,8 @@ function chainProgressText(c) {
 
     if (c.download_total) {
         const f = by('download_failed');
-        parts.push(`Downloaded ${c.download_done || 0}/${c.download_total}` +
-            (f ? ` (${f} failed)` : ''));
+        parts.push(T('chainProgress.downloaded', { done: c.download_done || 0, total: c.download_total })
+            + (f ? ` (${T('chainProgress.failedCount', { n: f })})` : ''));
     }
 
     // 转写：显示已完成 + 正在转写 + 失败，让进度"会动"（不只在转完才 +1）
@@ -1185,14 +1344,14 @@ function chainProgressText(c) {
     const done = by('done'), transcribing = by('transcribing'), failed = by('failed');
     if (submitted.length && (done || transcribing || failed || c.stage !== 'downloading')) {
         const extra = [];
-        if (transcribing) extra.push(`${transcribing} in progress`);
-        if (failed) extra.push(`${failed} failed`);
-        parts.push(`Transcribed ${done}/${submitted.length}` +
-            (extra.length ? ` (${extra.join(', ')})` : ''));
+        if (transcribing) extra.push(T('chainProgress.inProgress', { n: transcribing }));
+        if (failed) extra.push(T('chainProgress.failedCount', { n: failed }));
+        parts.push(T('chainProgress.transcribed', { done, total: submitted.length })
+            + (extra.length ? ` (${extra.join(', ')})` : ''));
     }
 
     if (c.analyze && c.analyzed_done != null && submitted.length) {
-        parts.push(`Analyzed ${c.analyzed_done}/${submitted.length}`);
+        parts.push(T('chainProgress.analyzed', { done: c.analyzed_done, total: submitted.length }));
     }
     return parts.join(' · ');
 }
@@ -1253,7 +1412,7 @@ function buildChainCard(c) {
 
     let body;
     if (active) {
-        const prog = chainProgressText(c) || (CHAIN_STAGE_LABELS[c.stage] || c.stage);
+        const prog = chainProgressText(c) || stageLabel(c.stage);
         body = `<div class="creator-meta">${escapeHtml(prog)}</div>
             <div class="creator-progressbar"><i style="width:${chainPercent(c)}%"></i></div>`
             + (c.current ? `<div class="creator-current">${escapeHtml(c.current.slice(0, 60))}</div>` : '');
@@ -1261,18 +1420,18 @@ function buildChainCard(c) {
         const nEp = vids.filter(v => v.status === 'done').length || vids.length;
         body = `<div class="creator-meta">${nEp} episode${nEp === 1 ? '' : 's'} · ${brainLabel(c.analysis_preset)}</div>`;
     } else if (c.stage === 'failed') {
-        body = `<div class="creator-meta creator-error">⚠ ${escapeHtml(String(c.error || 'Failed').slice(0, 90))}</div>
+        body = `<div class="creator-meta creator-error">⚠ ${escapeHtml(String(c.error || T('stage.failed')).slice(0, 90))}</div>
             <button class="btn-secondary btn-small creator-retry"
-                onclick="continueChain('${c.id}', event)">Retry</button>`;
+                onclick="continueChain('${c.id}', event)">${T('creators.retry')}</button>`;
     } else {
         // cancelled，或 done 但没产出画像（中断/未合成）
         const prog = chainProgressText(c);
-        body = `<div class="creator-meta">Stopped${prog ? ' · ' + escapeHtml(prog) : ''}</div>
+        body = `<div class="creator-meta">${T('stage.cancelled')}${prog ? ' · ' + escapeHtml(prog) : ''}</div>
             <button class="btn-secondary btn-small creator-retry"
-                onclick="continueChain('${c.id}', event)">Continue</button>`;
+                onclick="continueChain('${c.id}', event)">${T('creators.continue')}</button>`;
     }
     return `<div class="creator-card ${active ? 'creator-running' : ''}"
-        onclick="openChainDetail('${c.id}')" title="${escapeHtml(author)}">
+        onclick="navigate('chain/${c.id}')" title="${escapeHtml(author)}">
         ${thumb}<div class="creator-body">${name}${body}</div></div>`;
 }
 
@@ -1301,14 +1460,14 @@ const chainDetailTitle = document.getElementById('chain-detail-title');
 const chainDetailMeta = document.getElementById('chain-detail-meta');
 const chainDetailGrid = document.getElementById('chain-detail-grid');
 
-const VIDEO_STATUS = {
-    downloading: { label: 'Downloading', cls: 'vs-active' },
-    transcribing: { label: 'Transcribing', cls: 'vs-active' },
-    pending: { label: 'Queued', cls: 'vs-active' },
-    done: { label: 'Transcribed', cls: 'vs-done' },
-    failed: { label: 'Failed', cls: 'vs-fail' },
-    download_failed: { label: 'Download failed', cls: 'vs-fail' },
+const VIDEO_STATUS_CLS = {
+    downloading: 'vs-active', transcribing: 'vs-active', pending: 'vs-active',
+    done: 'vs-done', failed: 'vs-fail', download_failed: 'vs-fail',
 };
+function videoStatusOf(status) {
+    const key = 'videoStatus.' + status;
+    return { label: STRINGS.en[key] ? T(key) : status, cls: VIDEO_STATUS_CLS[status] || '' };
+}
 
 let chainDetailId = null;
 let chainDetailTimer = null;
@@ -1341,46 +1500,43 @@ async function refreshChainDetail() {
         if (!resp.ok) throw new Error('not found');
         c = await resp.json();
     } catch {
-        chainDetailGrid.innerHTML = '<p class="history-empty">Could not load</p>';
+        chainDetailGrid.innerHTML = `<p class="history-empty">${T('common.couldNotLoad')}</p>`;
         return;
     }
-    chainDetailTitle.textContent = 'Creators';   // 顶栏只当面包屑，名字在下面的封面里
+    chainDetailTitle.textContent = T('nav.creators');   // 顶栏只当面包屑，名字在下面的封面里
     chainDetailMeta.textContent = '';          // 卡片已含状态，别重复这行灰字
 
     const vids = c.videos || [];
     const chainTerminal = ['done', 'failed', 'cancelled'].includes(c.stage);
 
     // ===== Info 面板：设置 / 模型（含降级留痕）/ 操作 =====
-    const onoff = b => b ? 'on' : 'off';
+    const onoff = b => b ? T('common.on') : T('common.off');
     const fell = vids.filter(v => v.status === 'done' && v.engine_used
         && v.engine_used !== c.engine).length;
     const fellNote = fell
-        ? `<div class="cd-alert">⚠ ${fell} episode(s) fell back to a different engine
-            (cloud failed → actual engine recorded per episode)</div>` : '';
+        ? `<div class="cd-alert">⚠ ${T('chainDetail.fellBack', { n: fell })}</div>` : '';
     const err = c.error
         ? `<div class="cd-alert">⚠ ${String(c.error).replace(/</g, '&lt;').slice(0, 180)}</div>` : '';
     const actions = chainTerminal
-        ? `<button class="btn-primary ci-btn" onclick="continueChain('${c.id}')">Continue</button>
-           <button class="btn-secondary ci-btn" onclick="reanalyzeChain('${c.id}')">Re-analyze</button>
-           <button class="btn-secondary ci-btn" onclick="closeChainDetail();gotoDocs()">Episode docs</button>
-           <button class="btn-secondary ci-btn btn-danger" onclick="deleteChain('${c.id}', true)">Delete</button>
-           <span class="ci-hint">Continue = fill whatever is missing (reuses everything done).
-           Re-analyze = redo analysis only, with the Creators form's brain/level settings.</span>`
-        : `<button class="btn-secondary ci-btn" onclick="stopChain('${c.id}')">Stop</button>`;
+        ? `<button class="btn-primary ci-btn" onclick="continueChain('${c.id}')">${T('creators.continue')}</button>
+           <button class="btn-secondary ci-btn" onclick="reanalyzeChain('${c.id}')">${T('creators.reanalyze')}</button>
+           <button class="btn-secondary ci-btn" onclick="closeChainDetail();navigate('tab/library/docs')">${T('creators.episodeDocs')}</button>
+           <button class="btn-secondary ci-btn btn-danger" onclick="deleteChain('${c.id}', true)">${T('common.delete')}</button>
+           <span class="ci-hint">${T('chainDetail.actionsHint')}</span>`
+        : `<button class="btn-secondary ci-btn" onclick="stopChain('${c.id}')">${T('creators.stop')}</button>`;
     // ===== 布局原则：主角是「这个博主 + 读他的解读」；运维细节全部折叠 =====
     const author = (c.author && c.author !== '该博主') ? c.author : '';
     const doneN = vids.filter(v => v.status === 'done').length;
     // 主 CTA：读画像 / 合并原文（核心内容，做大）
     let ctas = '';
     if (c.final_doc) ctas += `<button class="btn-primary cd-cta"
-        onclick="openDocView('${c.id}','${encodeURIComponent(c.final_doc)}')">📖 Report</button>`;
+        onclick="navigate('chain/${c.id}/doc/${encodeURIComponent(c.final_doc)}')">📖 ${T('creators.report')}</button>`;
     if (c.raw_doc) ctas += `<button class="btn-secondary cd-cta"
-        onclick="openDocView('${c.id}','${encodeURIComponent(c.raw_doc)}')">📜 Full transcript</button>`;
+        onclick="navigate('chain/${c.id}/doc/${encodeURIComponent(c.raw_doc)}')">📜 ${T('creators.fullTranscript')}</button>`;
     // 镜头：核心动作，大 chip
-    const LENSES = [['roast', '🔥 Roast'], ['craft', '✍️ Craft'],
-        ['fun', '😂 Watchability'], ['quotes', '💬 Quotes'], ['worldview', '🗺 Worldview']];
+    const LENSES = ['roast', 'craft', 'fun', 'quotes', 'worldview'].map(k => [k, T('lens.' + k)]);
     const lensBlock = (chainTerminal && c.analyze !== false)
-        ? `<div class="cd-lens-title">Read him through a lens <span class="ci-hint">same evidence cards, different angle — nearly free</span></div>
+        ? `<div class="cd-lens-title">${T('chainDetail.lensTitle')} <span class="ci-hint">${T('chainDetail.lensHint')}</span></div>
            <div class="cd-lens-row">`
           + LENSES.map(([k, label]) =>
               `<button class="lens-btn" onclick="runLens('${c.id}','${k}')">${label}</button>`).join('')
@@ -1394,18 +1550,18 @@ async function refreshChainDetail() {
         ? `<img class="cd-avatar-img" src="${escapeHtml(c.avatar || '')}" alt="" onerror="this.remove()">`
         : ''}</div>`;
     const totalViews = vids.reduce((s, v) => s + (v.view_count || 0), 0);
-    const stats = [`<div class="cd-stat"><div class="n">${doneN}</div><div class="l">episodes read</div></div>`];
-    if (c.followers) stats.push(`<div class="cd-stat"><div class="n">${fmtCount(c.followers)}</div><div class="l">followers</div></div>`);
-    if (totalViews) stats.push(`<div class="cd-stat"><div class="n">${fmtCount(totalViews)}</div><div class="l">total plays</div></div>`);
-    stats.push(`<div class="cd-stat"><div class="n">${brainLabel(c.analysis_preset)}</div><div class="l">analysis model</div></div>`);
+    const stats = [`<div class="cd-stat"><div class="n">${doneN}</div><div class="l">${T('chainDetail.episodesRead')}</div></div>`];
+    if (c.followers) stats.push(`<div class="cd-stat"><div class="n">${fmtCount(c.followers)}</div><div class="l">${T('chainDetail.followers')}</div></div>`);
+    if (totalViews) stats.push(`<div class="cd-stat"><div class="n">${fmtCount(totalViews)}</div><div class="l">${T('chainDetail.totalPlays')}</div></div>`);
+    stats.push(`<div class="cd-stat"><div class="n">${brainLabel(c.analysis_preset)}</div><div class="l">${T('chainDetail.analysisModel')}</div></div>`);
     document.getElementById('chain-detail-info').innerHTML = `
         <div class="cd-cover">
             <div class="cd-cover-top">
                 ${avatarHtml}
                 <div class="cd-id">
-                    <div class="cd-eyebrow">CREATOR READ · ${doneN} EPISODES</div>
-                    <div class="cd-name">${escapeHtml((author || c.url || 'Creator').slice(0, 60))}</div>
-                    <div class="cd-sub">${CHAIN_STAGE_LABELS[c.stage] || c.stage}${c.finished_at ? ' · ' + c.finished_at : ''}</div>
+                    <div class="cd-eyebrow">${T('chainDetail.eyebrow', { n: doneN })}</div>
+                    <div class="cd-name">${escapeHtml((author || c.url || T('chainDetail.creatorFallback')).slice(0, 60))}</div>
+                    <div class="cd-sub">${stageLabel(c.stage)}${c.finished_at ? ' · ' + c.finished_at : ''}</div>
                 </div>
             </div>
             <div class="cd-stats">${stats.join('')}</div>
@@ -1416,18 +1572,18 @@ async function refreshChainDetail() {
         </div>
         ${fellNote}
         <details class="chain-ops"${opsOpen}>
-            <summary>⚙ Run details & actions${err ? ' · <span class="ops-flag">has errors</span>' : ''}</summary>
+            <summary>⚙ ${T('chainDetail.runDetails')}${err ? ' · <span class="ops-flag">' + T('chainDetail.hasErrors') + '</span>' : ''}</summary>
             <div class="chain-info">
                 ${err}
-                <div class="ci-row"><span class="ci-k">Source</span>
+                <div class="ci-row"><span class="ci-k">${T('chainDetail.source')}</span>
                     <span class="ci-v"><a href="${safeUrl(c.url)}" target="_blank" rel="noopener">${escapeHtml((c.url || '').slice(0, 80))}</a></span></div>
-                <div class="ci-row"><span class="ci-k">Settings</span>
+                <div class="ci-row"><span class="ci-k">${T('settings.title')}</span>
                     <span class="ci-v">engine <b>${c.engine || '-'}</b> · analyze <b>${onoff(c.analyze)}</b>
                     · model <b>${brainLabel(c.analysis_preset)}</b> · level <b>${c.critique_level || 'analytical'}</b>
                     · subs-first <b>${onoff(c.prefer_subs)}</b> · web-verify <b>${onoff(c.verify)}</b>
                     · self-verify <b>${onoff(c.self_verify)}</b>
                     · whisper-fallback <b>${onoff(c.fallback_whisper)}</b></span></div>
-                <div class="ci-row"><span class="ci-k">Progress</span>
+                <div class="ci-row"><span class="ci-k">${T('chainDetail.progress')}</span>
                     <span class="ci-v">${chainProgressText(c)}</span></div>
                 <div class="ci-actions">${actions}</div>
             </div>
@@ -1436,7 +1592,7 @@ async function refreshChainDetail() {
     document.getElementById('chain-episodes-count').textContent = `(${vids.length})`;
 
     chainDetailGrid.innerHTML = vids.map((v, idx) => {
-        const st = VIDEO_STATUS[v.status] || { label: v.status, cls: '' };
+        const st = videoStatusOf(v.status);
         const clickable = v.status === 'done' && v.task_id;
         const thumb = v.thumbnail
             ? `<img class="vg-thumb" src="${v.thumbnail}" loading="lazy" alt=""
@@ -1448,13 +1604,13 @@ async function refreshChainDetail() {
         const overlay = pct != null
             ? `<div class="vg-prog" style="--p:${pct}%"><span>${pct}%</span></div>` : '';
         const onclick = clickable
-            ? ` onclick="openDetailView('${v.task_id}')" title="View transcript"` : '';
+            ? ` onclick="navigate('detail/${v.task_id}')" title="${T('chainDetail.viewTranscript')}"` : '';
         // 降级留痕：这期实际用的引擎和链条引擎不同（如 gemini 链落了 whisper）
         const engBadge = (v.engine_used && v.engine_used !== c.engine)
-            ? `<span class="vg-eng" title="cloud engine failed; actually transcribed with ${v.engine_used}">${v.engine_used}</span>` : '';
+            ? `<span class="vg-eng" title="${T('chainDetail.engineFellBack', { engine: v.engine_used })}">${v.engine_used}</span>` : '';
         // 只有完成的分集能加入合并购物车；勾选框吞掉点击，不触发打开转写
         const pick = clickable
-            ? `<label class="vg-pick" onclick="event.stopPropagation()" title="Add to merge">
+            ? `<label class="vg-pick" onclick="event.stopPropagation()" title="${T('chainDetail.addToMerge')}">
                  <input type="checkbox" ${mergeCart.has(v.task_id) ? 'checked' : ''}
                    onchange="toggleMergePick('${v.task_id}', this.checked)">
                </label>` : '';
@@ -1463,7 +1619,7 @@ async function refreshChainDetail() {
             <div class="vg-badge ${st.cls}">${st.label}${engBadge}</div>
             <div class="vg-title" title="${escapeHtml(v.title || '')}">${escapeHtml(v.title || '')}</div>
         </div>`;
-    }).join('') || '<p class="history-empty">Resolving episode list…</p>';
+    }).join('') || `<p class="history-empty">${T('chainDetail.resolving')}</p>`;
 
     clearTimeout(chainDetailTimer);
     // 链条在跑、或有单个视频在重转中 → 继续轮询刷新
@@ -1504,9 +1660,9 @@ function renderMergeBar() {
     }
     const n = mergeCart.size;
     bar.innerHTML = `
-        <span class="merge-bar-count">${n} transcript${n === 1 ? '' : 's'} selected</span>
-        <button class="btn-secondary btn-small" onclick="clearMergeCart()">Clear</button>
-        <button class="btn-primary btn-small" onclick="runMergeTranscripts()">📄 Merge</button>`;
+        <span class="merge-bar-count">${T('chainDetail.selectedCount', { n })}</span>
+        <button class="btn-secondary btn-small" onclick="clearMergeCart()">${T('common.clear')}</button>
+        <button class="btn-primary btn-small" onclick="runMergeTranscripts()">📄 ${T('chainDetail.merge')}</button>`;
 }
 
 function clearMergeCart() {
@@ -1522,16 +1678,18 @@ function clearMergeCart() {
 async function runMergeTranscripts() {
     if (!mergeCart.size) return;
     const btn = document.querySelector('#merge-bar .btn-primary');
-    if (btn) { btn.disabled = true; btn.textContent = 'Merging…'; }
+    if (btn) { btn.disabled = true; btn.textContent = T('chainDetail.merging'); }
     try {
         const r = await (await fetch('/api/transcripts/merge', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ task_ids: [...mergeCart] }),
         })).json();
         if (r.error) { alert(r.error); return; }
-        // 复用现成的内存文档视图（和小红书报告同一条路）
+        // 复用现成的内存文档视图（和小红书报告同一条路）——这个视图不接路由：
+        // 内容只存在于这一次 POST 响应里，没有可重新拉取的地方；刷新页面丢失是
+        // 已知的、可接受的局限（跟合并购物车本身一样只活在内存里）。
         currentDoc = { chainId: null, name: r.filename || '合并转写.md', raw: r.markdown };
-        docTitle.textContent = `Merged transcript · ${r.count} episode${r.count === 1 ? '' : 's'}`;
+        docTitle.textContent = T('chainDetail.mergedTitle', { count: r.count });
         docContent.innerHTML = renderMarkdown(r.markdown);
         docReturnTo = (chainDetailView && !chainDetailView.classList.contains('hidden'))
             ? 'chainDetail' : 'main';
@@ -1539,15 +1697,15 @@ async function runMergeTranscripts() {
         if (chainDetailView) chainDetailView.classList.add('hidden');
         docView.classList.remove('hidden');
         window.scrollTo({ top: 0 });
-        if (r.missing) showToast(`${r.missing} skipped (no transcript text)`);
+        if (r.missing) showToast(T('chainDetail.mergeSkipped', { n: r.missing }));
     } catch {
-        alert('Merge failed');
+        alert(T('toast.mergeFailed'));
     } finally {
-        if (btn) { btn.disabled = false; btn.textContent = '📄 Merge'; }
+        if (btn) { btn.disabled = false; btn.textContent = '📄 ' + T('chainDetail.merge'); }
     }
 }
 
-if (chainDetailBack) chainDetailBack.addEventListener('click', closeChainDetail);
+if (chainDetailBack) chainDetailBack.addEventListener('click', () => navigate('tab/creators'));
 
 async function loadChains() {
     try {
@@ -1558,7 +1716,7 @@ async function loadChains() {
             .filter(c => !['done', 'failed', 'cancelled'].includes(c.stage))
             .map(c => ({
                 label: (c.author && c.author !== '该博主') ? c.author : c.url,
-                progress: chainProgressText(c) || (CHAIN_STAGE_LABELS[c.stage] || c.stage),
+                progress: chainProgressText(c) || stageLabel(c.stage),
                 tab: 'creators',
                 chainId: c.id,
             })));
@@ -1589,36 +1747,30 @@ document.addEventListener('visibilitychange', () => {
     }
 });
 
-// 跳到「资料库 → 分析文档」子分区
-function gotoDocs() {
-    switchTab('library');
-    switchLib('docs');
-}
-
 // Continue：补全一切缺失——已完成的复用，没下的下，转写失败的（音频在就直接重转、
 // 云引擎失败自动落 Whisper），最后补分析 + 合成。用上面表单的引擎/分析大脑设置。
 async function continueChain(chainId, ev) {
     if (ev) ev.stopPropagation();
-    if (!confirm('Continue this analysis?\nReuses everything finished; only fills gaps: downloads what is missing, re-transcribes failures, then completes analysis + synthesis, using the settings in the Creators form.\n\nNote: videos content-blocked by Gemini (RECITATION/safety) auto-fall-back to local Whisper; other failures only fall back if Whisper fallback is checked.')) return;
+    if (!confirm(T('confirm.chainContinueFull'))) return;
     try {
         const r = await (await fetch(`/api/chain/${chainId}/retry`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ engine: chainEngine.value, analysis_preset: chainProvider.value }),
         })).json();
-        if (!r.ok) { alert(r.error || 'Could not continue'); }
-    } catch { alert('Could not continue'); }
+        if (!r.ok) { alert(r.error || T('alert.couldNotContinue')); }
+    } catch { alert(T('alert.couldNotContinue')); }
     loadChains();
 }
 
 async function stopChain(chainId, ev) {
     if (ev) ev.stopPropagation();
-    if (!confirm('Stop this analysis? Finished transcripts & analyses are kept; it just stops going further.')) return;
+    if (!confirm(T('confirm.chainStopFull'))) return;
     try { await fetch(`/api/chain/${chainId}/stop`, { method: 'POST' }); } catch { /* ignore */ }
     loadChains();
 }
 
 async function deleteChain(chainId, fromDetail) {
-    if (!confirm('Delete this creator analysis’s documents? (transcripts stay in the library)')) return;
+    if (!confirm(T('confirm.chainDeleteFull'))) return;
     await fetch(`/api/chain/${chainId}`, { method: 'DELETE' });
     if (fromDetail) closeChainDetail();
     loadChains();
@@ -1629,10 +1781,10 @@ async function reanalyzeChain(chainId, ev) {
     if (ev) ev.stopPropagation();
     const verify = chainVerify.checked;
     const selfVerify = chainSelfVerify.checked;
-    if (!confirm('Re-analyze: rerun AI analysis on every transcribed video'
-        + (verify ? ' + web fact-check (extra search quota)' : '')
-        + (selfVerify ? ' + self-verify (extra calls)' : '')
-        + ', using the analysis model selected in the Creators form. Transcripts untouched. Continue?')) return;
+    if (!confirm(T('confirm.chainReanalyzeFull', {
+        verifyExtra: verify ? T('confirm.chainReanalyzeVerifyExtra') : '',
+        selfVerifyExtra: selfVerify ? T('confirm.chainReanalyzeSelfVerifyExtra') : '',
+    }))) return;
     try {
         const r = await (await fetch(`/api/chain/${chainId}/reanalyze`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1641,8 +1793,8 @@ async function reanalyzeChain(chainId, ev) {
                                    critique_level: chainCritique.value,
                                    analysis_preset: chainProvider.value }),
         })).json();
-        if (!r.ok) { alert(r.error || 'Could not start re-analysis'); }
-    } catch { alert('Could not start re-analysis'); }
+        if (!r.ok) { alert(r.error || T('alert.couldNotStartReanalysis')); }
+    } catch { alert(T('alert.couldNotStartReanalysis')); }
     loadChains();   // stage 变 analyzing → 轮询自动接管显示进度
 }
 
@@ -1677,15 +1829,15 @@ async function pollXhs() {
     catch { return; }
     clearTimeout(xhsTimer);
     updateGlobalIndicator('xhs-scrape', s.running
-        ? [{ label: s.kw || 'Scraping notes', progress: `${s.scraped} scraped`, tab: 'xhs' }]
+        ? [{ label: s.kw || T('xhs.scrapingNotes'), progress: T('xhs.scrapedCount', { n: s.scraped }), tab: 'xhs' }]
         : []);
     if (!s.running && !s.log?.length) { box.classList.add('hidden'); return; }
     box.classList.remove('hidden');
-    const dot = s.running ? '<span class="xhs-live">● Scraping</span>' : '<span class="xhs-done">✓ Stopped</span>';
-    const stopBtn = s.running ? '<button class="lens-btn" onclick="stopXhs()">■ Stop</button>' : '';
+    const dot = s.running ? `<span class="xhs-live">● ${T('xhs.scraping')}</span>` : `<span class="xhs-done">✓ ${T('stage.cancelled')}</span>`;
+    const stopBtn = s.running ? `<button class="lens-btn" onclick="stopXhs()">■ ${T('creators.stop')}</button>` : '';
     box.innerHTML = `
         <div class="xhs-head">${dot}
-            <span>scraped <b>${s.scraped}</b> this run · ${s.total} in dataset${s.kw ? ' · ' + escapeHtml(s.kw) : ''}</span>
+            <span>${T('xhs.scrapedThisRun', { n: s.scraped, total: s.total })}${s.kw ? ' · ' + escapeHtml(s.kw) : ''}</span>
             ${stopBtn}</div>
         <pre class="xhs-log">${(s.log || []).map(l => escapeHtml(l)).join('\n')}</pre>`;
     const startBtn = document.getElementById('xhs-start');
@@ -1694,11 +1846,11 @@ async function pollXhs() {
 }
 
 async function stopXhs() {
-    if (!confirm('Stop the scrape? Notes already saved are kept — only the rest is skipped.')) return;
+    if (!confirm(T('confirm.xhsStop'))) return;
     try {
         const r = await (await fetch('/api/xhs/stop', { method: 'POST' })).json();
-        if (!r.ok) alert(r.error || 'Could not stop');
-    } catch { alert('Could not stop'); }
+        if (!r.ok) alert(r.error || T('alert.couldNotStop'));
+    } catch { alert(T('alert.couldNotStop')); }
     setTimeout(pollXhs, 500);
 }
 
@@ -1713,11 +1865,11 @@ async function pollXhsAnalyze() {
     catch { return; }
     clearTimeout(xhsAnTimer);
     updateGlobalIndicator('xhs-analyze', s.running
-        ? [{ label: 'Notes analysis', progress: `${s.done}/${s.total} notes`, tab: 'xhs' }]
+        ? [{ label: T('xhs.notesAnalysis'), progress: T('xhs.notesProgress', { done: s.done, total: s.total }), tab: 'xhs' }]
         : []);
     if (s.running) {
         box.classList.remove('hidden');
-        box.innerHTML = `<span class="xhs-live">● Analyzing</span> read <b>${s.done}</b>/${s.total} notes… (images + comments)`;
+        box.innerHTML = `<span class="xhs-live">● ${T('xhs.analyzing')}</span> ${T('xhs.readNotes', { done: s.done, total: s.total })}`;
         if (btn) btn.disabled = true;
         if (!document.hidden) xhsAnTimer = setTimeout(pollXhsAnalyze, 2000);
         return;
@@ -1725,11 +1877,11 @@ async function pollXhsAnalyze() {
     if (btn) btn.disabled = false;
     if (s.error) {
         box.classList.remove('hidden');
-        box.innerHTML = `<span class="xhs-done">Analysis failed: ${String(s.error).replace(/</g, '&lt;')}</span>`;
+        box.innerHTML = `<span class="xhs-done">${T('xhs.analysisFailed', { message: String(s.error).replace(/</g, '&lt;') })}</span>`;
     } else if (s.has_report) {
         box.classList.remove('hidden');
-        box.innerHTML = `<span class="xhs-done">✓ Report ready</span>
-            <button class="lens-btn" onclick="openXhsReport()">📖 Read report</button>`;
+        box.innerHTML = `<span class="xhs-done">✓ ${T('xhs.reportReady')}</span>
+            <button class="lens-btn" onclick="navigate('xhs-report')">📖 ${T('xhs.readReport')}</button>`;
     } else {
         box.classList.add('hidden');
     }
@@ -1737,12 +1889,12 @@ async function pollXhsAnalyze() {
 async function openXhsReport() {
     try {
         const r = await (await fetch('/api/xhs/report')).json();
-        if (r.markdown) showXhsReport(r.markdown); else alert(r.error || 'No report yet');
-    } catch { alert('Could not load the report'); }
+        if (r.markdown) showXhsReport(r.markdown); else alert(r.error || T('alert.noReportYet'));
+    } catch { alert(T('alert.couldNotLoadReport')); }
 }
 function showXhsReport(md) {
     currentDoc = { chainId: null, name: '小红书报告.md', raw: md };
-    docTitle.textContent = 'Xiaohongshu research report';
+    docTitle.textContent = T('xhs.reportTitle');
     docContent.innerHTML = renderMarkdown(md);
     docReturnTo = 'main';
     mainView.classList.add('hidden');
@@ -1753,10 +1905,8 @@ function showXhsReport(md) {
 const xhsAnalyzeBtn = document.getElementById('xhs-analyze-btn');
 if (xhsAnalyzeBtn) xhsAnalyzeBtn.addEventListener('click', async () => {
     const keywords = (document.getElementById('xhs-keywords').value || '').trim();
-    const scopeMsg = keywords
-        ? 'Only notes scraped by the keywords above will be analyzed (topics never mix).'
-        : '⚠ Keywords empty = analyze the WHOLE dataset (topics will mix).';
-    if (!confirm(scopeMsg + '\nReads images + comments per note, then aggregates into a report. Gemini cost scales with note count. Continue?')) return;
+    const scopeMsg = keywords ? T('confirm.xhsAnalyzeKeywords') : T('confirm.xhsAnalyzeAll');
+    if (!confirm(scopeMsg + T('confirm.xhsAnalyzeSuffix'))) return;
     xhsAnalyzeBtn.disabled = true;
     try {
         const r = await (await fetch('/api/xhs/analyze', {
@@ -1764,17 +1914,16 @@ if (xhsAnalyzeBtn) xhsAnalyzeBtn.addEventListener('click', async () => {
             body: JSON.stringify({ keywords,
                 lang: (document.getElementById('xhs-lang') || {}).value || 'auto' }),
         })).json();
-        if (!r.ok) { alert(r.error || 'Failed to start'); xhsAnalyzeBtn.disabled = false; return; }
+        if (!r.ok) { alert(r.error || T('alert.failedToStart')); xhsAnalyzeBtn.disabled = false; return; }
         pollXhsAnalyze();
-    } catch { alert('Failed to start'); xhsAnalyzeBtn.disabled = false; }
+    } catch { alert(T('alert.failedToStart')); xhsAnalyzeBtn.disabled = false; }
 });
 
 const xhsStartBtn = document.getElementById('xhs-start');
 if (xhsStartBtn) xhsStartBtn.addEventListener('click', async () => {
     const keywords = document.getElementById('xhs-keywords').value.trim();
     if (!keywords) { document.getElementById('xhs-keywords').focus(); return; }
-    if (!confirm('Start scraping? A browser window will pop up (first run asks for a Xiaohongshu QR login).\n'
-        + 'High volume risks rate-limiting — keep batches small. Continue?')) return;
+    if (!confirm(T('confirm.xhsStart'))) return;
     xhsStartBtn.disabled = true;
     try {
         const r = await (await fetch('/api/xhs/scrape', {
@@ -1785,9 +1934,9 @@ if (xhsStartBtn) xhsStartBtn.addEventListener('click', async () => {
                 max_comments: parseInt(document.getElementById('xhs-max-comments').value, 10) || 400,
             }),
         })).json();
-        if (!r.ok) { alert(r.error || 'Failed to start'); xhsStartBtn.disabled = false; return; }
+        if (!r.ok) { alert(r.error || T('alert.failedToStart')); xhsStartBtn.disabled = false; return; }
         pollXhs();
-    } catch { alert('Failed to start'); xhsStartBtn.disabled = false; }
+    } catch { alert(T('alert.failedToStart')); xhsStartBtn.disabled = false; }
 });
 
 // 页面加载各查一次：刷新页面时若有爬取/分析仍在跑（服务端进行中），
@@ -1799,8 +1948,6 @@ pollXhsAnalyze();
 // 极简聚合，不新建任何轮询：三处现有刷新（setRowStatus / loadChains / pollXhs*）
 // 每次拿到新数据后调 updateGlobalIndicator(source, tasks) 更新这里并重绘。
 const activeTasks = { transcribe: [], chains: [], 'xhs-scrape': [], 'xhs-analyze': [] };
-const GT_SOURCE_LABEL = { transcribe: 'Transcribe', chains: 'Creator',
-    'xhs-scrape': 'Xiaohongshu', 'xhs-analyze': 'Xiaohongshu' };
 const gtBtn = document.getElementById('global-tasks');
 const gtCount = document.getElementById('global-tasks-count');
 const gtPop = document.getElementById('global-tasks-pop');
@@ -1827,7 +1974,7 @@ function renderGtPop() {
             row.className = 'gt-row';
             const kind = document.createElement('span');
             kind.className = 'gt-kind';
-            kind.textContent = GT_SOURCE_LABEL[source];
+            kind.textContent = T('gtSource.' + source);
             const name = document.createElement('span');
             name.className = 'gt-name';
             name.textContent = t.label;
@@ -1840,7 +1987,7 @@ function renderGtPop() {
             row.appendChild(prog);
             row.addEventListener('click', () => {
                 gtPop.classList.add('hidden');
-                switchTab(t.tab);
+                navigate('tab/' + t.tab);
                 if (t.chainId) flashCreatorCard(t.chainId);
             });
             gtPop.appendChild(row);
@@ -1869,16 +2016,22 @@ document.addEventListener('click', (e) => {
     }
 });
 
-// 大数字人性化：万 / 亿
+// 大数字人性化：中文界面用 万/亿，英文界面用 K/M（这个函数以前写死中文，
+// 界面语言能切英文之后不跟着切就是个真 bug，不只是缺翻译）
 function fmtCount(n) {
     n = Number(n) || 0;
-    if (n >= 1e8) return (n / 1e8).toFixed(1).replace(/\.0$/, '') + '亿';
-    if (n >= 1e4) return (n / 1e4).toFixed(1).replace(/\.0$/, '') + '万';
+    if (currentLang === 'zh') {
+        if (n >= 1e8) return (n / 1e8).toFixed(1).replace(/\.0$/, '') + '亿';
+        if (n >= 1e4) return (n / 1e4).toFixed(1).replace(/\.0$/, '') + '万';
+        return String(n);
+    }
+    if (n >= 1e6) return (n / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
+    if (n >= 1e3) return (n / 1e3).toFixed(1).replace(/\.0$/, '') + 'K';
     return String(n);
 }
 
 navTabs.forEach(btn => {
-    btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+    btn.addEventListener('click', () => navigate('tab/' + btn.dataset.tab));
 });
 
 // ========== 资料库子分区（转写记录 / 分析文档） ==========
@@ -1897,7 +2050,7 @@ function switchLib(name) {
 }
 
 subTabs.forEach(btn => {
-    btn.addEventListener('click', () => switchLib(btn.dataset.lib));
+    btn.addEventListener('click', () => navigate('tab/library/' + btn.dataset.lib));
 });
 
 // ========== 分析文档浏览 ==========
@@ -1919,7 +2072,7 @@ async function loadDocs() {
         // 只列出有产物的链条（分析过的）
         const withDocs = chains.filter(c => c.analyze);
         if (!withDocs.length) {
-            docsList.innerHTML = '<p class="history-empty">No analysis documents yet — analyze a creator first</p>';
+            docsList.innerHTML = `<p class="history-empty">${T('library.noDocs')}</p>`;
             return;
         }
         const blocks = await Promise.all(withDocs.map(async c => {
@@ -1933,26 +2086,26 @@ async function loadDocs() {
             files.sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
             const title = (c.author && c.author !== '该博主') ? c.author : c.url;
             const stageBadge = c.stage === 'done' ? ''
-                : `<span class="doc-stage">（${CHAIN_STAGE_LABELS[c.stage] || c.stage}）</span>`;
+                : `<span class="doc-stage">（${stageLabel(c.stage)}）</span>`;
             const items = files.map(f => {
                 const isTotal = f === '总分析.md';
                 const isRaw = f === '合并原文.md';
-                const label = isTotal ? 'Report' : isRaw ? 'Full transcript'
+                const label = isTotal ? T('creators.report') : isRaw ? T('creators.fullTranscript')
                     : f.replace(/^分析_\d+_/, '').replace(/\.md$/, '');
                 const cls = isTotal ? 'doc-total' : isRaw ? 'doc-raw' : '';
                 return `<button class="doc-item ${cls}"
-                    onclick="openDocView('${c.id}','${encodeURIComponent(f)}')">${label}</button>`;
+                    onclick="navigate('chain/${c.id}/doc/${encodeURIComponent(f)}')">${label}</button>`;
             }).join('');
             return `<div class="doc-group">
                 <div class="doc-group-title">${escapeHtml(title.slice(0, 70))} ${stageBadge}
-                    <span class="doc-count">${files.length} 篇</span></div>
+                    <span class="doc-count">${T('library.docCount', { n: files.length })}</span></div>
                 <div class="doc-items">${items}</div>
             </div>`;
         }));
         const html = blocks.filter(Boolean).join('');
-        docsList.innerHTML = html || '<p class="history-empty">No analysis documents yet</p>';
+        docsList.innerHTML = html || `<p class="history-empty">${T('library.noDocs')}</p>`;
     } catch (e) {
-        docsList.innerHTML = '<p class="history-empty">Failed to load</p>';
+        docsList.innerHTML = `<p class="history-empty">${T('library.failedToLoad')}</p>`;
     }
 }
 
@@ -1975,7 +2128,10 @@ async function openDocView(chainId, encName) {
         docView.classList.remove('hidden');
         window.scrollTo({ top: 0 });
     } catch {
-        showToast('Could not load document');
+        showToast(T('toast.couldNotLoadDoc'));
+        // 冷启动时 URL 里带着失效的链条/文档名会走到这——保底退回资料库，别留白屏。
+        _showMain();
+        navigate('tab/library', { replace: true });
     }
 }
 
@@ -1992,8 +2148,8 @@ function closeDocView() {
 
 // 换个角度看博主：拿现成证据卡跑一个镜头 → 后台生成 → 轮询 → 用 openDocView 展示
 async function runLens(chainId, lens) {
-    const open = () => openDocView(chainId, encodeURIComponent(`镜头_${lens}.md`));
-    showToast('Generating… (same cards, new lens)');
+    const open = () => navigate(`chain/${chainId}/doc/${encodeURIComponent(`镜头_${lens}.md`)}`);
+    showToast(T('toast.regenerating'));
     try {
         const r = await (await fetch(`/api/chain/${chainId}/lens`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -2003,24 +2159,25 @@ async function runLens(chainId, lens) {
         if (r.ready) { open(); return; }
         let n = 40;   // 最多轮询 ~2 分钟（大链条 map-reduce 要点时间）
         const poll = async () => {
-            if (n-- <= 0) { showToast('Still generating — check the doc list shortly'); return; }
+            if (n-- <= 0) { showToast(T('chainDetail.stillGenerating')); return; }
             try {
                 const g = await (await fetch(`/api/chain/${chainId}/lens/${lens}`)).json();
                 if (g.ready) { open(); return; }
-                if (g.error) { showToast('Generation failed: ' + g.error); return; }
+                if (g.error) { showToast(T('chainDetail.generationFailed', { message: g.error })); return; }
             } catch { /* 抖动忽略，继续轮 */ }
             setTimeout(poll, 3000);
         };
         setTimeout(poll, 3000);
-    } catch { showToast('Generation failed'); }
+    } catch { showToast(T('chainDetail.generationFailedGeneric')); }
 }
 
-if (docBackBtn) docBackBtn.addEventListener('click', closeDocView);
+if (docBackBtn) docBackBtn.addEventListener('click', () =>
+    navigate(docReturnTo === 'chainDetail' ? 'chain/' + currentDoc.chainId : 'tab/library'));
 if (docDownloadBtn) docDownloadBtn.addEventListener('click', () => {
     if (currentDoc.raw) {
         downloadFile(currentDoc.raw, currentDoc.name || 'document.md',
             'text/markdown;charset=utf-8');
-        showToast('Downloaded .md');
+        showToast(T('doc.downloaded'));
     }
 });
 
@@ -2125,30 +2282,18 @@ function renderMarkdown(md) {
     return out.join('\n');
 }
 
-// ========== 左下角个人数据展板 ==========
-const statsToggle = document.getElementById('stats-toggle');
-const statsPanel = document.getElementById('stats-panel');
-let statsLoaded = false;
-let statsTags = [];
-let statsTagLang = 'zh';   // 'zh' | 'en'
+// ========== Reflect：回顾这段时间在听什么 ==========
+const reflectBody = document.getElementById('reflect-body');
+const reflectRangeSel = document.getElementById('reflect-range');
+const reflectRefreshBtn = document.getElementById('reflect-refresh');
+let reflectData = null;
+let reflectMetric = 'count';      // 'count' | 'hours'
+let reflectRange = localStorage.getItem('getaudio_reflect_range') || '1m';
+let reflectReq = 0;               // 防止旧请求覆盖新结果
+let reflectPollTimer = null;      // 后台在重算时，隔几秒再拉一次
 
-// 关注领域横向条：按当前语言渲染，不重新拉数据
-function renderStatsTags() {
-    const el = document.getElementById('stats-tags');
-    if (!statsTags.length) {
-        el.innerHTML = '<div class="spark-empty">No tags yet — run “Auto-title”</div>';
-        return;
-    }
-    const max = statsTags[0].count || 1;
-    el.innerHTML = statsTags.map(t => {
-        const label = statsTagLang === 'en' ? (t.tag_en || t.tag) : t.tag;
-        return `<div class="stat-tag">
-            <span class="stat-tag-name" title="${escapeHtml(label)}">${escapeHtml(label)}</span>
-            <span class="stat-tag-bar"><i style="width:${Math.max(6, t.count / max * 100)}%"></i></span>
-            <span class="stat-tag-num">${t.count}</span>
-        </div>`;
-    }).join('');
-}
+// 主题分段条的色阶：深珊瑚 → 极浅，多出来的段落用最后一个
+const REFLECT_SHADES = ['#A9502B', '#B87355', '#C89078', '#D9AC98', '#E9D0C5', '#F2E3DB'];
 
 function fmtBig(n) {
     if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
@@ -2156,71 +2301,332 @@ function fmtBig(n) {
     return String(n);
 }
 
-// 自绘 SVG 折线（面积填充 + 端点强调），不依赖外部库
-function sparkline(values, w = 296, h = 84) {
-    if (!values || values.length < 2) {
-        return '<div class="spark-empty">Not enough data yet</div>';
+function reflectHour(h) {
+    if (h === null || h === undefined) return '—';
+    if (currentLang === 'zh') return `${h}:00`;
+    const ap = h < 12 ? 'AM' : 'PM';
+    const hh = h % 12 === 0 ? 12 : h % 12;
+    return `${hh} ${ap}`;
+}
+
+function reflectDate(iso) {
+    const [y, m, d] = iso.split('-').map(Number);
+    if (currentLang === 'zh') return `${y}年${m}月${d}日`;
+    const M = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return `${M[m - 1]} ${d} ${y}`;
+}
+
+// 单调三次插值（Fritsch–Carlson）：平滑但不会在 0 附近下冲出负值
+function monotonePath(xs, ys) {
+    const n = xs.length;
+    if (n < 2) return '';
+    const d = [], m = [];
+    for (let i = 0; i < n - 1; i++) d.push((ys[i + 1] - ys[i]) / (xs[i + 1] - xs[i]));
+    m[0] = d[0]; m[n - 1] = d[n - 2];
+    for (let i = 1; i < n - 1; i++) {
+        m[i] = (d[i - 1] * d[i] <= 0) ? 0 : (d[i - 1] + d[i]) / 2;
     }
-    const pad = 6;
-    const maxY = Math.max(...values, 1);
-    const X = i => pad + (i / (values.length - 1)) * (w - 2 * pad);
-    const Y = v => h - pad - (v / maxY) * (h - 2 * pad);
-    const pts = values.map((v, i) => `${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join(' ');
-    const area = `${X(0)},${h - pad} ${pts} ${X(values.length - 1)},${h - pad}`;
-    const last = values.length - 1;
-    return `<svg viewBox="0 0 ${w} ${h}" class="spark" preserveAspectRatio="none">
-        <defs><linearGradient id="sparkfill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0" stop-color="var(--coral)" stop-opacity="0.18"/>
-            <stop offset="1" stop-color="var(--coral)" stop-opacity="0"/>
+    for (let i = 0; i < n - 1; i++) {
+        if (d[i] === 0) { m[i] = 0; m[i + 1] = 0; continue; }
+        const a = m[i] / d[i], b = m[i + 1] / d[i], h = Math.hypot(a, b);
+        if (h > 3) { m[i] = 3 * a / h * d[i]; m[i + 1] = 3 * b / h * d[i]; }
+    }
+    let path = `M${xs[0].toFixed(1)},${ys[0].toFixed(1)}`;
+    for (let i = 0; i < n - 1; i++) {
+        const dx = (xs[i + 1] - xs[i]) / 3;
+        path += ` C${(xs[i] + dx).toFixed(1)},${(ys[i] + m[i] * dx).toFixed(1)} `
+              + `${(xs[i + 1] - dx).toFixed(1)},${(ys[i + 1] - m[i + 1] * dx).toFixed(1)} `
+              + `${xs[i + 1].toFixed(1)},${ys[i + 1].toFixed(1)}`;
+    }
+    return path;
+}
+
+// 整齐的 y 轴刻度上限：1,2,3,5,10,20,30,50…
+function niceCeil(v) {
+    if (v <= 0) return 1;
+    const p = Math.pow(10, Math.floor(Math.log10(v)));
+    for (const k of [1, 2, 3, 4, 5, 6, 8, 10]) if (k * p >= v) return k * p;
+    return 10 * p;
+}
+
+function reflectChart(series, prevSeries, metric) {
+    const W = 900, H = 270, L = 44, R = 12, T = 18, B = 34;
+    const val = p => metric === 'hours' ? p.minutes / 60 : p.count;
+    const cur = series.map(val);
+    const prev = prevSeries.map(val);
+    if (cur.length < 2) return `<div class="reflect-empty">${T('stats.notEnoughData')}</div>`;
+
+    const maxV = niceCeil(Math.max(...cur, ...prev, metric === 'hours' ? 0.5 : 1));
+    const X = i => L + i / (cur.length - 1) * (W - L - R);
+    const Y = v => H - B - v / maxV * (H - T - B);
+    const xs = cur.map((_, i) => X(i));
+    const prevXs = prev.map((_, i) => X(i + (cur.length - prev.length)));
+
+    // 两条虚线网格 + 底线
+    const ticks = [maxV, maxV * 0.6];
+    const fmtTick = v => metric === 'hours' ? (v >= 10 ? Math.round(v) : v.toFixed(1).replace(/\.0$/, '')) : Math.round(v);
+    const grid = ticks.map(v =>
+        `<line class="grid" x1="${L}" x2="${W - R}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}"/>
+         <text class="ylab" x="${L - 12}" y="${(Y(v) + 4).toFixed(1)}" text-anchor="end">${fmtTick(v)}</text>`).join('');
+    const base = `<line class="base" x1="${L}" x2="${W - R}" y1="${Y(0)}" y2="${Y(0)}"/>
+                  <text class="ylab" x="${L - 12}" y="${Y(0) + 4}" text-anchor="end">0</text>`;
+
+    // x 轴 4 个日期
+    const idxs = [0, Math.round((cur.length - 1) / 3), Math.round((cur.length - 1) * 2 / 3), cur.length - 1];
+    const xl = idxs.map((i, k) => {
+        const anchor = k === 0 ? 'start' : (k === 3 ? 'end' : 'middle');
+        return `<text class="xlab" x="${X(i).toFixed(1)}" y="${H - 8}" text-anchor="${anchor}">${reflectDate(series[i].date)}</text>`;
+    }).join('');
+
+    const prevPath = prev.length >= 2 ? `<path class="prev" d="${monotonePath(prevXs, prev.map(Y))}"/>` : '';
+    const curPath = `<path class="cur" d="${monotonePath(xs, cur.map(Y))}"/>`;
+    return `<svg class="reflect-chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${grid}${base}${xl}${prevPath}${curPath}</svg>`;
+}
+
+function renderReflect() {
+    const d = reflectData;
+    if (!d) return;
+    if (!d.totals.count) {
+        reflectBody.innerHTML = `<div class="reflect-empty">${T('reflect.empty')}</div>`;
+        return;
+    }
+    const topics = d.topics || [];
+    const bar = topics.map((t, i) =>
+        `<i style="flex:${t.percent};background:${REFLECT_SHADES[Math.min(i, REFLECT_SHADES.length - 1)]}"></i>`).join('');
+    const list = topics.map((t, i) => `
+        <div class="reflect-topic">
+            <span class="dot" style="background:${REFLECT_SHADES[Math.min(i, REFLECT_SHADES.length - 1)]}"></span>
+            <span class="name">${escapeHtml(t.name)}</span>
+            <span class="pct">${t.percent}%</span>
+            <div class="desc">${escapeHtml(t.desc || T('reflect.topicFallback', { n: t.count }))}</div>
+        </div>`).join('');
+
+    // 后台在重算：有旧的就先显示旧的并提示；一份都没有就显示"正在生成"
+    const updating = d.regenerating
+        ? `<div class="reflect-updating"><span class="reflect-updating-dot"></span>${T('reflect.updating')}</div>` : '';
+    const headline = (!d.generated && d.regenerating) ? T('reflect.generatingTitle') : d.headline;
+    const narrative = (!d.generated && d.regenerating) ? T('reflect.generatingBody') : d.narrative;
+    reflectBody.innerHTML = `
+        ${updating}
+        <div class="reflect-headline">${escapeHtml(headline)}</div>
+        <p class="reflect-narrative${d.generated ? '' : ' draft'}">${escapeHtml(narrative)}</p>
+        <div class="reflect-kpis">
+            <div class="reflect-kpi"><b class="text">${escapeHtml(d.most_active_weekday_label || '—')}</b><span>${T('reflect.mostActiveDay')}</span></div>
+            <div class="reflect-kpi"><b>${reflectHour(d.peak_hour)}</b><span>${T('reflect.peakHour')}</span></div>
+            <div class="reflect-kpi"><b>${d.totals.count}</b><span>${T('reflect.totalTranscripts')}</span></div>
+            <div class="reflect-kpi"><b>${d.totals.hours}</b><span>${T('reflect.hoursOfAudio')}</span></div>
+        </div>
+        <div class="reflect-sec">
+            <div class="reflect-sec-head">
+                <span class="reflect-sec-label">${T('reflect.yourTime')}</span>
+                <span class="reflect-seg">
+                    <button type="button" data-metric="count" class="${reflectMetric === 'count' ? 'active' : ''}">${T('reflect.metricCount')}</button>
+                    <button type="button" data-metric="hours" class="${reflectMetric === 'hours' ? 'active' : ''}">${T('reflect.metricHours')}</button>
+                </span>
+            </div>
+            <div id="reflect-chart-wrap">${reflectChart(d.series, d.prev_series || [], reflectMetric)}</div>
+            <div class="reflect-legend"><span><i></i>${T('reflect.thisPeriod')}</span><span><i class="prev"></i>${T('reflect.prevPeriod')}</span></div>
+        </div>
+        <div class="reflect-sec" style="margin-top:34px">
+            <div class="reflect-sec-head"><span class="reflect-sec-label">${T('reflect.spentOn')}</span></div>
+            <div class="reflect-bar">${bar}</div>
+            <div class="reflect-topics">${list}</div>
+        </div>`;
+
+    reflectBody.querySelectorAll('.reflect-seg button').forEach(b => b.addEventListener('click', () => {
+        reflectMetric = b.dataset.metric;
+        reflectBody.querySelectorAll('.reflect-seg button').forEach(x => x.classList.toggle('active', x === b));
+        document.getElementById('reflect-chart-wrap').innerHTML = reflectChart(d.series, d.prev_series || [], reflectMetric);
+    }));
+}
+
+async function loadReflect(refresh = false) {
+    const my = ++reflectReq;
+    clearTimeout(reflectPollTimer);
+    reflectRefreshBtn.classList.add('spinning');
+    if (!reflectData || refresh) {
+        reflectBody.innerHTML = `<div class="reflect-loading">${refresh ? T('reflect.regenerating') : T('reflect.loading')}</div>`;
+    }
+    try {
+        const url = `/api/reflect?range=${reflectRange}&lang=${currentLang}${refresh ? '&refresh=1' : ''}`;
+        const d = await (await fetch(url)).json();
+        if (my !== reflectReq) return;
+        reflectData = d;
+        renderReflect();
+        // 后台在重算：每 6 秒再拉一次，直到拿到新的（面板关了或切走就停）
+        if (d.regenerating) {
+            reflectPollTimer = setTimeout(() => {
+                if (!settingsOverlay.classList.contains('hidden') && activeSettingsPane === 'reflect') loadReflect();
+            }, 6000);
+        }
+    } catch {
+        if (my !== reflectReq) return;
+        reflectBody.innerHTML = `<div class="reflect-empty">${T('library.failedToLoad')}</div>`;
+    } finally {
+        if (my === reflectReq) reflectRefreshBtn.classList.remove('spinning');
+    }
+}
+
+document.getElementById('reflect-open').addEventListener('click', () => openSettings('reflect'));
+reflectRangeSel.addEventListener('change', () => {
+    reflectRange = reflectRangeSel.value;
+    localStorage.setItem('getaudio_reflect_range', reflectRange);
+    reflectData = null;
+    loadReflect();
+});
+reflectRefreshBtn.addEventListener('click', () => loadReflect(true));
+
+
+// ========== Library：资料库总量（复用 Reflect 的视觉）==========
+const libraryBody = document.getElementById('library-body');
+let libraryData = null;
+let libraryTagLang = 'zh';   // 关注领域标签：'zh' | 'en'
+
+function engineLabel(key) {
+    const k = 'engine.' + key;
+    const t = T(k);
+    if (t !== k) return t;
+    return { subtitle: currentLang === 'zh' ? '字幕直取' : 'Subtitles', unknown: currentLang === 'zh' ? '未知' : 'Unknown' }[key] || key;
+}
+
+// 累计小时折线：x 为自然日铺满，y 为累计小时
+function libraryChart(timeline) {
+    if (!timeline || timeline.length < 2) return `<div class="reflect-empty">${T('stats.notEnoughData')}</div>`;
+    // 按自然日铺满，没记录的日子累计值不变
+    const byDate = Object.fromEntries(timeline.map(p => [p.date, p.minutes]));
+    const first = new Date(timeline[0].date + 'T00:00:00');
+    const last = new Date(timeline[timeline.length - 1].date + 'T00:00:00');
+    const days = [];
+    let cum = 0;
+    for (let d = new Date(first); d <= last; d.setDate(d.getDate() + 1)) {
+        const k = d.toISOString().slice(0, 10);
+        cum += (byDate[k] || 0) / 60;
+        days.push({ date: k, v: cum });
+    }
+    const W = 900, H = 270, L = 48, R = 12, Tp = 18, B = 34;
+    const maxV = niceCeil(days[days.length - 1].v);
+    const X = i => L + i / (days.length - 1) * (W - L - R);
+    const Y = v => H - B - v / maxV * (H - Tp - B);
+    const ticks = [maxV, maxV * 0.6];
+    const fmtTick = v => v >= 10 ? Math.round(v) : v.toFixed(1).replace(/\.0$/, '');
+    const grid = ticks.map(v =>
+        `<line class="grid" x1="${L}" x2="${W - R}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}"/>
+         <text class="ylab" x="${L - 12}" y="${(Y(v) + 4).toFixed(1)}" text-anchor="end">${fmtTick(v)}</text>`).join('');
+    const base = `<line class="base" x1="${L}" x2="${W - R}" y1="${Y(0)}" y2="${Y(0)}"/>
+                  <text class="ylab" x="${L - 12}" y="${Y(0) + 4}" text-anchor="end">0</text>`;
+    const idxs = [0, Math.round((days.length - 1) / 3), Math.round((days.length - 1) * 2 / 3), days.length - 1];
+    const xl = idxs.map((i, k) => {
+        const anchor = k === 0 ? 'start' : (k === 3 ? 'end' : 'middle');
+        return `<text class="xlab" x="${X(i).toFixed(1)}" y="${H - 8}" text-anchor="${anchor}">${reflectDate(days[i].date)}</text>`;
+    }).join('');
+    const xs = days.map((_, i) => X(i)), ys = days.map(p => Y(p.v));
+    const area = `M${xs[0]},${Y(0)} L` + xs.map((x, i) => `${x.toFixed(1)},${ys[i].toFixed(1)}`).join(' ') + ` L${xs[xs.length - 1]},${Y(0)} Z`;
+    return `<svg class="reflect-chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+        <defs><linearGradient id="libfill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="#A9502B" stop-opacity="0.16"/><stop offset="1" stop-color="#A9502B" stop-opacity="0"/>
         </linearGradient></defs>
-        <polygon points="${area}" fill="url(#sparkfill)"/>
-        <polyline points="${pts}" fill="none" stroke="var(--coral)" stroke-width="2"
-            stroke-linejoin="round" stroke-linecap="round"/>
-        <circle cx="${X(last)}" cy="${Y(values[last])}" r="3" fill="var(--coral)"/>
+        ${grid}${base}${xl}
+        <path d="${area}" fill="url(#libfill)"/>
+        <path class="cur" d="${monotonePath(xs, ys)}"/>
+        <circle cx="${xs[xs.length - 1]}" cy="${ys[ys.length - 1]}" r="4" fill="#A9502B"/>
     </svg>`;
 }
 
-async function loadStats() {
-    try {
-        const s = await (await fetch('/api/stats')).json();
-        document.getElementById('stat-hours').textContent = s.totals.hours;
-        document.getElementById('stat-chars').textContent = fmtBig(s.totals.chars);
-        document.getElementById('stat-count').textContent = s.totals.transcripts;
-
-        // 累计小时折线
-        let cum = 0;
-        const cumHours = (s.timeline || []).map(p => { cum += p.minutes / 60; return cum; });
-        document.getElementById('stats-chart').innerHTML = sparkline(cumHours);
-
-        // 关注领域：横向条（中/EN 切换见 renderStatsTags）
-        statsTags = s.top_tags || [];
-        renderStatsTags();
-        statsLoaded = true;
-    } catch {
-        document.getElementById('stats-chart').innerHTML = '<div class="spark-empty">Failed to load</div>';
-    }
+function renderLibraryTags() {
+    const el = document.getElementById('library-tags');
+    if (!el) return;
+    const tags = libraryData.top_tags || [];
+    if (!tags.length) { el.innerHTML = `<div class="reflect-empty">${T('library.noTagsYet')}</div>`; return; }
+    const max = tags[0].count || 1;
+    el.innerHTML = tags.map(t => {
+        const label = libraryTagLang === 'en' ? (t.tag_en || t.tag) : t.tag;
+        return `<div class="lib-tag">
+            <span class="name" title="${escapeHtml(label)}">${escapeHtml(label)}</span>
+            <span class="bar"><i style="width:${Math.max(3, t.count / max * 100)}%"></i></span>
+            <span class="num">${t.count}</span>
+        </div>`;
+    }).join('');
 }
 
-statsToggle.addEventListener('click', (e) => {
-    e.stopPropagation();
-    const nowHidden = statsPanel.classList.toggle('hidden');
-    if (!nowHidden) loadStats();                   // 变为可见才刷新（一次）
-});
-// 标签语言切换：按钮上显示的是"点了会切到的语言"
-const statsLang = document.getElementById('stats-lang');
-statsLang.addEventListener('click', (e) => {
-    e.stopPropagation();
-    statsTagLang = statsTagLang === 'zh' ? 'en' : 'zh';
-    statsLang.textContent = statsTagLang === 'zh' ? 'EN' : '中';
-    renderStatsTags();
-});
-// 点面板外部关闭
-document.addEventListener('click', (e) => {
-    if (!statsPanel.classList.contains('hidden') &&
-        !document.getElementById('stats-fab').contains(e.target)) {
-        statsPanel.classList.add('hidden');
+// 各引擎速度表：精确计时的记录按「每小时音频几分钟 / 倍速 / 次数」；
+// 只有回填近似值（含排队）的引擎单独一行浅色，不和精确数据混
+function speedTable(speed) {
+    const rows = Object.entries(speed || {})
+        .filter(([, v]) => v && (v.n || (v.approx && v.approx.n)))
+        .sort((a, b) => (a[1].min_per_hour ?? 1e9) - (b[1].min_per_hour ?? 1e9));
+    if (!rows.length) return `<div class="reflect-empty">${T('library.speedEmpty')}</div>`;
+    const body = rows.map(([k, v]) => v.n
+        ? `<tr><td>${escapeHtml(engineLabel(k))}</td><td>${fmtMinutes(v.min_per_hour)} min</td>
+               <td>${v.speed_x ? v.speed_x + '×' : '—'}</td><td>${v.n}</td></tr>`
+        : `<tr class="approx"><td>${escapeHtml(engineLabel(k))}</td><td>≈ ${fmtMinutes(v.approx.min_per_hour)} min</td>
+               <td>—</td><td>${v.approx.n}<i>${T('library.speedApprox')}</i></td></tr>`).join('');
+    return `<table class="speed-table"><thead><tr><th></th><th>${T('library.speedPerHour')}</th>
+        <th>${T('library.speedX')}</th><th>${T('library.speedRuns')}</th></tr></thead><tbody>${body}</tbody></table>`;
+}
+
+function renderLibrary() {
+    const s = libraryData;
+    if (!s || !s.totals.transcripts) {
+        libraryBody.innerHTML = `<div class="reflect-empty">${T('library.statsEmpty')}</div>`;
+        return;
     }
-});
+    const engines = Object.entries(s.engines || {}).sort((a, b) => b[1] - a[1]);
+    const engTotal = engines.reduce((a, [, n]) => a + n, 0) || 1;
+    const bar = engines.map(([, n], i) =>
+        `<i style="flex:${n};background:${REFLECT_SHADES[Math.min(i, REFLECT_SHADES.length - 1)]}"></i>`).join('');
+    const list = engines.map(([k, n], i) => `
+        <div class="reflect-topic">
+            <span class="dot" style="background:${REFLECT_SHADES[Math.min(i, REFLECT_SHADES.length - 1)]}"></span>
+            <span class="name">${escapeHtml(engineLabel(k))}</span>
+            <span class="pct">${Math.round(n / engTotal * 100)}%</span>
+            <div class="desc">${T('library.engineCount', { n })}</div>
+        </div>`).join('');
+
+    libraryBody.innerHTML = `
+        <div class="reflect-kpis" style="padding-top:8px">
+            <div class="reflect-kpi"><b>${s.totals.hours}</b><span>${T('stats.hoursTranscribed')}</span></div>
+            <div class="reflect-kpi"><b>${fmtBig(s.totals.chars)}</b><span>${T('stats.characters')}</span></div>
+            <div class="reflect-kpi"><b>${s.totals.transcripts}</b><span>${T('stats.transcripts')}</span></div>
+            <div class="reflect-kpi"><b>${fmtBig(s.totals.segments || 0)}</b><span>${T('library.segments')}</span></div>
+        </div>
+        <div class="reflect-sec">
+            <div class="reflect-sec-head"><span class="reflect-sec-label">${T('stats.cumulativeHours')}</span></div>
+            ${libraryChart(s.timeline)}
+        </div>
+        <div class="reflect-sec" style="margin-top:34px">
+            <div class="reflect-sec-head">
+                <span class="reflect-sec-label">${T('stats.fieldsYouFollow')}</span>
+                <button id="library-tag-lang" class="stats-lang" type="button" title="${T('stats.toggleTagLang')}">${libraryTagLang === 'zh' ? 'EN' : '中'}</button>
+            </div>
+            <div id="library-tags" class="lib-tags"></div>
+        </div>
+        <div class="reflect-sec" style="margin-top:34px">
+            <div class="reflect-sec-head"><span class="reflect-sec-label">${T('library.byEngine')}</span></div>
+            <div class="reflect-bar">${bar}</div>
+            <div class="reflect-topics">${list}</div>
+        </div>
+        <div class="reflect-sec" style="margin-top:34px">
+            <div class="reflect-sec-head"><span class="reflect-sec-label">${T('library.speedByEngine')}</span></div>
+            ${speedTable(s.speed)}
+        </div>`;
+    renderLibraryTags();
+    document.getElementById('library-tag-lang').addEventListener('click', (e) => {
+        libraryTagLang = libraryTagLang === 'zh' ? 'en' : 'zh';
+        e.currentTarget.textContent = libraryTagLang === 'zh' ? 'EN' : '中';
+        renderLibraryTags();
+    });
+}
+
+async function loadLibrary(force = false) {
+    if (libraryData && !force) { renderLibrary(); return; }
+    libraryBody.innerHTML = `<div class="reflect-loading">${T('reflect.loading')}</div>`;
+    try {
+        libraryData = await (await fetch('/api/stats')).json();
+        renderLibrary();
+    } catch {
+        libraryBody.innerHTML = `<div class="reflect-empty">${T('library.failedToLoad')}</div>`;
+    }
+}
 
 
 // ===== Settings modal =====
@@ -2231,7 +2637,11 @@ const setDashKey = document.getElementById('set-dashscope-key');
 const setOpenrouterKey = document.getElementById('set-openrouter-key');
 const settingsMsg = document.getElementById('settings-msg');
 
-async function openSettings() {
+let activeSettingsPane = 'reflect';
+
+async function openSettings(pane) {
+    if (pane) showSettingsPane(pane);
+    settingsOverlay.classList.remove('hidden');
     // 拉当前状态：填回 base URL、用占位符提示 key 是否已存在
     try {
         const s = await (await fetch('/api/settings')).json();
@@ -2240,11 +2650,11 @@ async function openSettings() {
         setDashKey.value = '';
         setOpenrouterKey.value = '';
         setGeminiKey.placeholder = s.gemini.set
-            ? `saved ${s.gemini.hint} · leave blank to keep` : 'paste key…';
+            ? T('settings.savedKeyHint', { hint: s.gemini.hint }) : T('settings.pasteKey');
         setDashKey.placeholder = s.dashscope.set
-            ? `saved ${s.dashscope.hint} · leave blank to keep` : 'paste key…';
+            ? T('settings.savedKeyHint', { hint: s.dashscope.hint }) : T('settings.pasteKey');
         setOpenrouterKey.placeholder = (s.openrouter && s.openrouter.set)
-            ? `saved ${s.openrouter.hint} · leave blank to keep` : 'paste key…';
+            ? T('settings.savedKeyHint', { hint: s.openrouter.hint }) : T('settings.pasteKey');
         // Models（空 = 默认）
         document.getElementById('set-whisper-model').value = s.whisper_model || '';
         document.getElementById('set-gemini-transcribe').value = s.gemini_transcribe_model || '';
@@ -2255,18 +2665,37 @@ async function openSettings() {
     document.getElementById('test-dashscope-res').textContent = '';
     document.getElementById('test-openrouter-res').textContent = '';
     settingsMsg.textContent = '';
-    settingsOverlay.classList.remove('hidden');
 }
 function closeSettings() { settingsOverlay.classList.add('hidden'); }
 
 // 左侧导航切换面板
 function showSettingsPane(name) {
+    activeSettingsPane = name;
     document.querySelectorAll('.settings-nav-item').forEach(b =>
         b.classList.toggle('active', b.dataset.pane === name));
     document.querySelectorAll('.settings-pane').forEach(p =>
         p.classList.toggle('active', p.dataset.pane === name));
+    // 数据栏目没有"保存"，藏掉页脚
+    document.getElementById('settings-foot').classList.toggle('hidden', name === 'reflect' || name === 'library');
+    document.querySelector('.settings-panes').scrollTop = 0;
     if (name === 'storage') loadStorage();
+    if (name === 'reflect') { reflectRangeSel.value = reflectRange; loadReflect(); }
+    if (name === 'library') loadLibrary();
 }
+
+// 左侧导航搜索：按栏目名过滤
+const settingsSearch = document.getElementById('settings-search');
+settingsSearch.addEventListener('input', () => {
+    const q = settingsSearch.value.trim().toLowerCase();
+    let shown = 0;
+    document.querySelectorAll('.settings-nav-item').forEach(b => {
+        const hit = !q || b.textContent.toLowerCase().includes(q);
+        b.classList.toggle('hidden', !hit);
+        if (hit) shown++;
+    });
+    document.querySelectorAll('.settings-nav-group').forEach(g => g.classList.toggle('hidden', !!q));
+    document.querySelector('.settings-nav-empty').classList.toggle('hidden', shown > 0);
+});
 
 function fmtBytes(n) {
     if (n >= 1e9) return (n / 1e9).toFixed(1) + ' GB';
@@ -2304,20 +2733,20 @@ async function pollCompress() {
         const s = await (await fetch('/api/compress_status')).json();
         if (s.running) {
             res.className = 'test-res testing';
-            res.textContent = `Compressing ${s.done}/${s.total}… saved ${fmtBytes(s.saved)}`;
+            res.textContent = T('settings.compressing', { done: s.done, total: s.total, saved: fmtBytes(s.saved) });
             if (!document.hidden) compressPollTimer = setTimeout(pollCompress, 2000);
         } else {
             btn.disabled = false;
             if (s.total > 0) {
                 res.className = 'test-res ok';
-                res.textContent = `Done — reclaimed ${fmtBytes(s.saved)}`
-                    + (s.errors ? ` (${s.errors} errors)` : '');
+                res.textContent = T('settings.compressDone', { saved: fmtBytes(s.saved) })
+                    + (s.errors ? ` (${T('settings.compressErrors', { n: s.errors })})` : '');
                 loadStorage();
             }
         }
     } catch {
         res.className = 'test-res bad';
-        res.textContent = 'Status check failed';
+        res.textContent = T('settings.statusCheckFailed');
         btn.disabled = false;
     }
 }
@@ -2326,17 +2755,17 @@ document.getElementById('compress-all').addEventListener('click', async () => {
     const res = document.getElementById('compress-res');
     const btn = document.getElementById('compress-all');
     res.className = 'test-res testing';
-    res.textContent = 'Starting…';
+    res.textContent = T('settings.starting');
     try {
         const r = await (await fetch('/api/compress_all', { method: 'POST' })).json();
         if (!r.ok) {
             res.className = 'test-res bad';
-            res.textContent = r.error || 'Could not start';
+            res.textContent = r.error || T('settings.couldNotStart');
             return;
         }
     } catch {
         res.className = 'test-res bad';
-        res.textContent = 'Could not start';
+        res.textContent = T('settings.couldNotStart');
         return;
     }
     btn.disabled = true;
@@ -2345,10 +2774,7 @@ document.getElementById('compress-all').addEventListener('click', async () => {
 document.querySelectorAll('.settings-nav-item').forEach(b =>
     b.addEventListener('click', () => showSettingsPane(b.dataset.pane)));
 
-document.getElementById('settings-open').addEventListener('click', () => {
-    showSettingsPane('gemini');       // 每次打开回到第一栏
-    openSettings();
-});
+document.getElementById('settings-open').addEventListener('click', () => openSettings('gemini'));
 document.getElementById('settings-close').addEventListener('click', closeSettings);
 settingsOverlay.addEventListener('click', (e) => {
     if (e.target === settingsOverlay) closeSettings();      // 点遮罩关闭
@@ -2359,7 +2785,7 @@ document.addEventListener('keydown', (e) => {
 
 async function testEngine(engine, resEl, payload) {
     resEl.className = 'test-res testing';
-    resEl.textContent = 'Testing…';
+    resEl.textContent = T('settings.testing');
     try {
         const r = await (await fetch('/api/settings/test', {
             method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -2369,7 +2795,7 @@ async function testEngine(engine, resEl, payload) {
         resEl.textContent = (r.ok ? '✓ ' : '✗ ') + (r.reason || '');
     } catch {
         resEl.className = 'test-res bad';
-        resEl.textContent = '✗ Request failed';
+        resEl.textContent = '✗ ' + T('settings.requestFailed');
     }
 }
 
@@ -2402,7 +2828,7 @@ document.getElementById('settings-save').addEventListener('click', async () => {
     if (setDashKey.value.trim()) body.dashscope_key = setDashKey.value.trim();
     if (setOpenrouterKey.value.trim()) body.openrouter_key = setOpenrouterKey.value.trim();
     settingsMsg.className = 'settings-msg';
-    settingsMsg.textContent = 'Saving…';
+    settingsMsg.textContent = T('settings.saving');
     try {
         const r = await (await fetch('/api/settings', {
             method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -2410,15 +2836,98 @@ document.getElementById('settings-save').addEventListener('click', async () => {
         })).json();
         if (r.ok) {
             settingsMsg.className = 'settings-msg ok';
-            settingsMsg.textContent = 'Saved ✓';
+            settingsMsg.textContent = T('settings.saved');
             openSettings();                    // 刷新占位符、清空已输入的 key
-            settingsMsg.textContent = 'Saved ✓';
+            settingsMsg.textContent = T('settings.saved');
         } else {
             settingsMsg.className = 'settings-msg bad';
-            settingsMsg.textContent = r.error || 'Save failed';
+            settingsMsg.textContent = r.error || T('settings.saveFailed');
         }
     } catch {
         settingsMsg.className = 'settings-msg bad';
-        settingsMsg.textContent = 'Save failed';
+        settingsMsg.textContent = T('settings.saveFailed');
     }
 });
+
+// ========== Routing（URL hash 跟随导航）==========
+// 用 hash（#/...）而不是 History API + 服务端路由：hash 从不发到服务器，
+// 刷新一个带 hash 的 URL 照样命中 Flask 唯一的 GET / 路由，index.html 正常渲染，
+// 剩下的状态恢复全在这一段客户端代码里完成，app.py 完全不用改。
+//
+// 设计：openDetailView/openChainDetail/openDocView/switchTab/switchLib 这些函数本身
+// 不动——它们本来就是「传个 ID 进去，现查现渲染」，路由层只是在原来直接调用它们的地方
+// 换成 navigate(hash)，由 hashchange → applyRoute() 统一分发，单一入口，不会重复渲染。
+function navigate(hash, { replace = false } = {}) {
+    if (replace) { history.replaceState(null, '', '#/' + hash); applyRoute(); }
+    else location.hash = '/' + hash;   // 触发 'hashchange' → applyRoute
+}
+
+// 回到主 Tab 视图前，把三个可能叠在上面的顶层视图统一隐藏——
+// closeDetailView/closeChainDetail/closeDocView 各自也有类似逻辑，这里是路由层的统一入口。
+function _showMain() {
+    mainView.classList.remove('hidden');
+    detailView.classList.add('hidden');
+    if (chainDetailView) { chainDetailView.classList.add('hidden'); clearTimeout(chainDetailTimer); }
+    if (docView) docView.classList.add('hidden');
+}
+
+function applyRoute() {
+    const parts = (location.hash.replace(/^#\/?/, '') || 'tab/transcribe').split('/').map(decodeURIComponent);
+    if (parts[0] === 'tab') {
+        _showMain();
+        switchTab(parts[1] || 'transcribe');
+        if (parts[1] === 'library') switchLib(parts[2] || 'transcripts');
+    } else if (parts[0] === 'detail' && parts[1]) {
+        openDetailView(parts[1]);
+    } else if (parts[0] === 'chain' && parts[1] && parts[2] === 'doc' && parts[3]) {
+        openDocView(parts[1], encodeURIComponent(parts[3]));
+    } else if (parts[0] === 'chain' && parts[1]) {
+        openChainDetail(parts[1]);
+    } else if (parts[0] === 'xhs-report') {
+        openXhsReport();
+    } else {
+        navigate('tab/transcribe', { replace: true });
+    }
+}
+window.addEventListener('hashchange', applyRoute);
+applyRoute();   // 恢复页面首次加载/刷新时应该显示的视图
+
+// 切换界面语言：nav/按钮等静态文案由 setLang() 里的 applyStaticI18n() 处理；
+// 这里补上"已经在屏幕上的动态内容"——按当前路由重新渲染一遍（复用现成的 fetch+渲染逻辑，
+// 不是重新发明），外加不受路由管的统计弹窗（如果正开着）。
+const uiLangToggle = document.getElementById('ui-lang-toggle');
+if (uiLangToggle) {
+    uiLangToggle.textContent = currentLang === 'zh' ? 'EN' : '中';
+    uiLangToggle.addEventListener('click', () => {
+        setLang(currentLang === 'zh' ? 'en' : 'zh');
+        uiLangToggle.textContent = currentLang === 'zh' ? 'EN' : '中';
+    });
+}
+document.addEventListener('langchange', () => {
+    applyRoute();
+    if (!settingsOverlay.classList.contains('hidden')) {
+        if (activeSettingsPane === 'reflect') { reflectData = null; loadReflect(); }
+        if (activeSettingsPane === 'library') renderLibrary();
+    }
+});
+
+
+// ===== 字幕偏好（记住上次选择）+ 引擎速度提示 =====
+(function initSubsAndSpeed() {
+    const subsSel = document.getElementById('url-subs');
+    if (subsSel) {
+        try { const v = localStorage.getItem('verbatim.subs'); if (v) subsSel.value = v; } catch { /* 无痕模式等 */ }
+        subsSel.addEventListener('change', () => {
+            try { localStorage.setItem('verbatim.subs', subsSel.value); } catch { /* ignore */ }
+        });
+    }
+    const chainSel = document.getElementById('chain-sub-lang');
+    if (chainSel) {
+        try { const v = localStorage.getItem('verbatim.chainSubLang'); if (v) chainSel.value = v; } catch { /* ignore */ }
+        chainSel.addEventListener('change', () => {
+            try { localStorage.setItem('verbatim.chainSubLang', chainSel.value); } catch { /* ignore */ }
+        });
+    }
+    loadEngineSpeed();
+    document.addEventListener('langchange', loadEngineSpeed);
+})();

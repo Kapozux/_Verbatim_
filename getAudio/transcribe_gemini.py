@@ -8,11 +8,18 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_EXCEPTION
 from google import genai
 from google.genai import types
 from config import GEMINI_API_KEY, GEMINI_MODEL, GEMINI_INLINE_LIMIT, make_gemini_client
 import config
+
+# 全局在飞请求闸：不管有多少个任务、每个任务拆了多少块，同时打向 Gemini 的
+# 转写请求总数封顶在 ENGINE_CONCURRENCY['gemini']。app.py 的引擎信号量按"任务"
+# 限流，这里按"请求"限流——分块并行之后没有这层，12 个任务 × 4 块 = 48 路会直接 429。
+_inflight = threading.Semaphore(config.ENGINE_CONCURRENCY.get('gemini', 12))
 
 TRANSCRIPTION_PROMPT = """请对这段音频进行精确的逐字转录。
 
@@ -115,28 +122,40 @@ def transcribe_audio(filepath, progress_callback=None):
                 # If splitting fails for any reason, keep single-pass transcription.
                 chunk_files, temp_dir = [(filepath, 0)], None
 
-        merged_text_parts = []
         total_chunks = len(chunk_files)
+        merged_text_parts = [None] * total_chunks
+        done_count = [0]
+        done_lock = threading.Lock()
 
-        for idx, (chunk_path, start_offset_seconds) in enumerate(chunk_files):
-            chunk_start_pct = 5 + int((idx / total_chunks) * 90)
-            chunk_end_pct = 5 + int(((idx + 1) / total_chunks) * 90)
+        def _one(idx):
+            chunk_path, start_offset_seconds = chunk_files[idx]
+            text = _transcribe_single_file(client=client, filepath=chunk_path)
+            merged_text_parts[idx] = shift_timestamps(text, start_offset_seconds).strip()
+            if progress_callback:
+                with done_lock:
+                    done_count[0] += 1
+                    n = done_count[0]
+                progress_callback(min(99, 5 + int(90 * n / total_chunks)))
 
-            def chunk_progress(local_pct):
-                if not progress_callback:
-                    return
-                mapped = chunk_start_pct + int(
-                    (chunk_end_pct - chunk_start_pct) * (local_pct / 100.0)
-                )
-                progress_callback(min(99, mapped))
-
-            chunk_text = _transcribe_single_file(
-                client=client,
-                filepath=chunk_path,
-                progress_callback=chunk_progress if progress_callback else None,
+        if total_chunks == 1:
+            # 单块：把进度回调直接透传，上传/生成各阶段照常有百分比
+            text = _transcribe_single_file(
+                client=client, filepath=chunk_files[0][0],
+                progress_callback=progress_callback,
             )
-            shifted_text = shift_timestamps(chunk_text, start_offset_seconds)
-            merged_text_parts.append(shifted_text.strip())
+            merged_text_parts[0] = shift_timestamps(text, chunk_files[0][1]).strip()
+        else:
+            # 各块互相独立，并行转写；保序靠索引回填。
+            # 任一块失败（含内容拦截）→ 取消还没开跑的块，抛出让整条任务按原逻辑失败/兜底。
+            width = max(1, min(config.GEMINI_CHUNK_CONCURRENCY, total_chunks))
+            with ThreadPoolExecutor(max_workers=width) as pool:
+                futures = [pool.submit(_one, i) for i in range(total_chunks)]
+                wait(futures, return_when=FIRST_EXCEPTION)
+                failed = next((f for f in futures if f.done() and f.exception()), None)
+                if failed is not None:
+                    for f in futures:
+                        f.cancel()
+                    raise failed.exception()
 
         full_text = "\n".join(part for part in merged_text_parts if part)
         if progress_callback:
@@ -153,7 +172,13 @@ def _transcribe_single_file(client, filepath, progress_callback=None):
 
     使用非流式 generate_content：比流式更抗代理/网络抖动。
     对瞬时失败做自动重试（指数退避），重试时文件不需要重新上传。
+    整个过程（上传 + 生成 + 重试）占一个全局在飞名额，见 _inflight。
     """
+    with _inflight:
+        return _transcribe_single_file_inner(client, filepath, progress_callback)
+
+
+def _transcribe_single_file_inner(client, filepath, progress_callback=None):
     file_size = os.path.getsize(filepath)
 
     # Determine MIME type from extension
@@ -164,6 +189,7 @@ def _transcribe_single_file(client, filepath, progress_callback=None):
         '.flac': 'audio/flac',
         '.m4a': 'audio/mp4',
         '.ogg': 'audio/ogg',
+        '.opus': 'audio/ogg',
         '.webm': 'audio/webm',
     }
     mime_type = mime_map.get(ext, 'audio/mpeg')
@@ -293,7 +319,10 @@ def split_audio_file(filepath, chunk_duration_seconds):
         if remaining <= chunk_duration_seconds + 30:
             this_len = remaining + 1        # 最后一块，吃掉全部剩余
         ffmpeg_bin = config.FFMPEG_BIN
-        chunk_path = os.path.join(temp_dir, f"chunk_{index:04d}.wav")
+        # 块输出 Opus 单声道 16k（ogg 容器），不再是 WAV：15 分钟 ≈ 5MB，
+        # 低于 GEMINI_INLINE_LIMIT，直接内联字节送模型，省掉 File API 上传 + 轮询。
+        # -ss 放在 -i 前面：按关键帧快速定位，不用从头解码到切点。
+        chunk_path = os.path.join(temp_dir, f"chunk_{index:04d}.ogg")
         ffmpeg_cmd = [
             ffmpeg_bin,
             "-y",
@@ -305,10 +334,17 @@ def split_audio_file(filepath, chunk_duration_seconds):
             str(this_len),
             "-i",
             filepath,
+            "-vn",
             "-ac",
             "1",
             "-ar",
             "16000",
+            "-c:a",
+            "libopus",
+            "-b:a",
+            config.CLOUD_AUDIO_BITRATE,
+            "-f",
+            "ogg",
             chunk_path,
         ]
         subprocess.run(ffmpeg_cmd, check=True, capture_output=True, text=True, timeout=600)

@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import threading
 import time
+import statistics
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 
@@ -101,6 +102,22 @@ _task_progress = {}
 # 设置后：首次访问带 ?token=xxx 或 Authorization: Bearer xxx，之后走 cookie。
 
 _AUTH_COOKIE = 'getaudio_token'
+
+
+# ===== 演示工作区（给外界看的只读实例）=====
+# VERBATIM_DEMO=1 + GETAUDIO_DATA_DIR 指向 seed_demo.py 生成的目录 + 另一个端口。
+# 顶栏挂「演示」标识，删除记录 / 改设置一律 403——展示用的数据别被误删、key 别被改。
+DEMO_MODE = os.environ.get('VERBATIM_DEMO') == '1'
+
+
+@app.before_request
+def _demo_readonly_guard():
+    if not DEMO_MODE:
+        return None
+    path = request.path or ''
+    if request.method == 'DELETE' or (request.method == 'POST' and path.startswith('/api/settings')):
+        return jsonify({'error': 'demo workspace is read-only'}), 403
+    return None
 
 
 @app.before_request
@@ -218,7 +235,10 @@ def probe_audio_duration_seconds(filepath):
         return None
 
 
-def extract_audio_from_video(video_path, output_path):
+def extract_audio_from_video(video_path, output_path, compressed=False):
+    """从视频抽音轨。compressed=False → 16k 单声道 WAV（本地 Whisper 用，无损）；
+    compressed=True → Opus 单声道 16k（云引擎用：一小时 115MB 的 WAV 变成 ~21MB，
+    上传快，Gemini 15 分钟一块也能走内联）。output_path 的后缀由调用方按此给 .wav/.ogg。"""
     ffmpeg_bin = resolve_ffmpeg_binary()
     if not os.path.exists(ffmpeg_bin):
         raise RuntimeError('未检测到 ffmpeg，无法从视频中提取音频')
@@ -237,10 +257,14 @@ def extract_audio_from_video(video_path, output_path):
         except subprocess.TimeoutExpired:
             pass
 
+    if compressed:
+        codec = ['-c:a', 'libopus', '-b:a', config.CLOUD_AUDIO_BITRATE, '-f', 'ogg']
+    else:
+        codec = ['-c:a', 'pcm_s16le']
     cmd = [
         ffmpeg_bin, '-y', '-v', 'error',
         '-i', video_path,
-        '-vn', '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le',
+        '-vn', '-ac', '1', '-ar', '16000', *codec,
         output_path,
     ]
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
@@ -250,6 +274,88 @@ def extract_audio_from_video(video_path, output_path):
         reason = ' / '.join(lines[-3:])[:300] if lines else f'exit code {r.returncode}'
         raise RuntimeError(f'ffmpeg 提取音频失败：{reason}')
     return output_path
+
+
+# ===== 转写速度：按引擎统计历史耗时，给预估和统计面板用 =====
+_speed_cache = {'stamp': 0.0, 'table': {}}
+_SPEED_SAMPLE = 50        # 每个引擎只看最近这么多条：引擎/并发调过之后，老数据别拖累预估
+_SPEED_TTL = 60           # 秒；扫 results/ 一遍约 0.1s，没必要每次请求都扫
+
+
+def _speed_table():
+    """{engine: {'n', 'ratio', 'proc_ratio', 'min_per_hour', 'speed_x', 'approx': {...}}}
+
+    ratio = 转写本体秒 ÷ 音频秒（中位数）；proc_ratio 同理但用不含排队的全处理时间（预估用）。
+    approx = 只有 taskdb 时间差、含排队的老记录（backfill_timing.py 回填的），单独给出、不混入。
+    兜底 Whisper 的记录（timing.fallback_from）耗时里混着云端失败的那段，不计入任何引擎。
+    """
+    now = time.time()
+    if now - _speed_cache['stamp'] < _SPEED_TTL and _speed_cache['table']:
+        return _speed_cache['table']
+    exact, approx = {}, {}
+    root = config.RESULTS_FOLDER
+    try:
+        names = os.listdir(root)
+    except OSError:
+        names = []
+    for name in names:
+        if name.startswith('_'):
+            continue
+        try:
+            with open(os.path.join(root, name, 'meta.json'), 'r', encoding='utf-8') as f:
+                m = json.load(f)
+        except Exception:  # noqa: BLE001
+            continue
+        t = m.get('timing') or {}
+        dur = m.get('duration_seconds') or t.get('audio_s')
+        eng = m.get('engine') or ''
+        if not t or not dur or dur < 30 or not eng or eng == 'subtitle':
+            continue
+        date = m.get('date') or ''
+        if t.get('approx'):
+            if t.get('wall_s'):
+                approx.setdefault(eng, []).append((date, t['wall_s'] / dur))
+            continue
+        if t.get('fallback_from') or not t.get('transcribe_s'):
+            continue
+        proc = t.get('processing_s') or t['transcribe_s']
+        exact.setdefault(eng, []).append((date, t['transcribe_s'] / dur, proc / dur))
+    table = {}
+    for eng, rows in exact.items():
+        rows.sort(reverse=True)
+        rows = rows[:_SPEED_SAMPLE]
+        ratio = statistics.median(r[1] for r in rows)
+        proc = statistics.median(r[2] for r in rows)
+        table[eng] = {
+            'n': len(rows),
+            'ratio': round(ratio, 4),
+            'proc_ratio': round(proc, 4),
+            'min_per_hour': round(proc * 60, 1),        # 「1 小时音频 ≈ X 分钟」按全处理时间算
+            'speed_x': round(1 / ratio, 1) if ratio else None,
+        }
+    for eng, rows in approx.items():
+        rows.sort(reverse=True)
+        rows = rows[:_SPEED_SAMPLE * 4]
+        med = statistics.median(r[1] for r in rows)
+        table.setdefault(eng, {})['approx'] = {'n': len(rows), 'min_per_hour': round(med * 60, 1)}
+    _speed_cache.update(stamp=now, table=table)
+    return table
+
+
+def _estimate_seconds(engine, audio_seconds):
+    """预计处理秒数；样本不足 3 条就不猜（返回 None，前端只显示已用时长）。"""
+    if not audio_seconds:
+        return None
+    row = _speed_table().get(engine) or {}
+    if (row.get('n') or 0) < 3 or not row.get('proc_ratio'):
+        return None
+    return int(row['proc_ratio'] * audio_seconds)
+
+
+@app.route('/api/speed')
+def api_speed():
+    """按引擎的转写速度（给引擎选择处的提示 + 统计面板）。"""
+    return jsonify(_speed_table())
 
 
 def _run_summary(full_text, q, use_qwen=False):
@@ -304,8 +410,11 @@ def _maybe_sanitize(segments, audio_path, duration=None):
 
 
 def _save_results(task_id, original_filename, engine, audio_source_path,
-                  segments, summary, model_review=False):
+                  segments, summary, model_review=False, extra_meta=None):
     """Persist transcription results to results/<task_id>/。
+
+    extra_meta：额外并进 meta.json 的字段（如 source_url / video_id，
+    来自链接的转写才有）——资料库靠它们做「贴链接找转录」。
 
     model_review=True：规则清洗之后，再送模型体检一遍（模型只标垃圾、代码删），
     捞规则漏掉的循环/复读/碎片。单文件转写路径开、链条走白嫖不在这开。
@@ -347,6 +456,9 @@ def _save_results(task_id, original_filename, engine, audio_source_path,
     }
     if san_report:
         meta['sanitized'] = san_report
+    for k, v in (extra_meta or {}).items():
+        if v:
+            meta[k] = v
     with open(os.path.join(task_dir, 'meta.json'), 'w', encoding='utf-8') as f:
         json.dump(meta, f, ensure_ascii=False, indent=2)
 
@@ -377,7 +489,8 @@ def _is_content_block(err):
 
 def run_transcription(task_id, filepath, engine, original_filename, q,
                       speaker_count=None, fallback_whisper=False,
-                      model_review=False, offset_sec=0):
+                      model_review=False, offset_sec=0, extra_meta=None,
+                      timing=None):
     """Background worker: runs transcription, saves results, pushes events.
 
     每个引擎有独立信号量限流。任务提交后可能先排队（quota 已满），
@@ -395,11 +508,19 @@ def run_transcription(task_id, filepath, engine, original_filename, q,
     cleanup_paths = [filepath]
     input_path = filepath
 
+    # 分阶段计时（秒）：queued / extract / transcribe / summary / save / enrich，
+    # 外加调用方可能先填好的 download / subs_check。最后并进 meta.json 的 timing 字段，
+    # 供详情页显示、统计面板按引擎算速度、以及给后来的任务估「还要多久」。
+    timing = dict(timing or {})
+    t_enq = time.monotonic()
+
     # 排队等待本引擎的并发额度
     sem = _engine_semaphores.get(engine)
     q.put(json.dumps({'type': 'queued', 'message': 'Queued...'}))
     if sem is not None:
         sem.acquire()
+    timing['queued_s'] = round(time.monotonic() - t_enq, 1)
+    t_tx = time.monotonic()           # 抽音频前就开始算；下面抽完会重置
 
     try:
         taskdb.set_status(task_id, 'running')
@@ -414,34 +535,74 @@ def run_transcription(task_id, filepath, engine, original_filename, q,
                 'percent': 2,
                 'message': 'Extracting audio from video...',
             }))
+            # 本地 Whisper 要无损 WAV；云引擎走压缩 Opus（上传体积小、Gemini 能内联）
+            compressed = engine != 'whisper'
             audio_path = os.path.join(
                 app.config['UPLOAD_FOLDER'],
-                f"{task_id}_audio.wav",
+                f"{task_id}_audio.{'ogg' if compressed else 'wav'}",
             )
-            input_path = extract_audio_from_video(filepath, audio_path)
+            t0 = time.monotonic()
+            input_path = extract_audio_from_video(filepath, audio_path,
+                                                  compressed=compressed)
+            timing['extract_s'] = round(time.monotonic() - t0, 1)
             cleanup_paths.append(input_path)
+
+        # 预估耗时：同引擎最近的历史速度 × 这条音频的时长，推给前端显示「还要多久」
+        audio_dur = probe_audio_duration_seconds(input_path)
+        if audio_dur:
+            timing['audio_s'] = round(audio_dur, 1)
+        q.put(json.dumps({'type': 'eta', 'duration_seconds': audio_dur,
+                          'expected_s': _estimate_seconds(engine, audio_dur)}))
+        t_tx = time.monotonic()
 
         segments = []
         summary_data = None
+
+        def _summary(full_text, use_qwen=False):
+            """转写本体到这里为止计时，再单独计总结的时间。"""
+            timing.setdefault('transcribe_s', round(time.monotonic() - t_tx, 1))
+            t0 = time.monotonic()
+            try:
+                return _run_summary(full_text, q, use_qwen=use_qwen)
+            finally:
+                timing['summary_s'] = round(time.monotonic() - t0, 1)
 
         def _finish_ok(segs, summary, engine_used):
             """成功收尾：落盘 + enrich + 标记 done + 压缩音频（主路径/兜底路径共用）。"""
             # 片段截取（如只转 10:00–25:00）：把 0 起的时间戳整体加偏移，
             # 落盘 + done 事件都带真实位置。放这里是所有引擎/兜底路径的唯一收口。
             segs = _offset_segments(segs, offset_sec)
+            t0 = time.monotonic()
             _save_results(task_id, original_filename, engine_used, input_path,
-                          segs, summary, model_review=model_review)
+                          segs, summary, model_review=model_review,
+                          extra_meta=extra_meta)
+            timing['save_s'] = round(time.monotonic() - t0, 1)
+            t0 = time.monotonic()
             try:
                 from enrich import enrich_task
                 enrich_task(os.path.join(config.RESULTS_FOLDER, task_id))
             except Exception:
                 pass
+            timing['enrich_s'] = round(time.monotonic() - t0, 1)
+            # 汇总：wall = 排队 + 处理（含下载/字幕探测这些前置阶段）；processing 不含排队；
+            # speed_x = 音频时长 ÷ 转写本体，「16×」就是 16 倍实时
+            timing['wall_s'] = round(time.monotonic() - t_enq
+                                     + timing.get('download_s', 0)
+                                     + timing.get('subs_check_s', 0), 1)
+            timing['processing_s'] = round(timing['wall_s'] - timing.get('queued_s', 0), 1)
+            if timing.get('audio_s') and timing.get('transcribe_s'):
+                timing['speed_x'] = round(timing['audio_s'] / timing['transcribe_s'], 1)
+            _update_meta(os.path.join(config.RESULTS_FOLDER, task_id, 'meta.json'),
+                         {'timing': timing})
+            _speed_cache['stamp'] = 0.0            # 有新样本，速度表下次重算
+            _reflect_touch()
             taskdb.set_status(task_id, 'done')
             q.put(json.dumps({
                 'type': 'done',
                 'task_id': task_id,
                 'segments': segs,
                 'summary': summary,
+                'timing': timing,
             }))
             try:
                 from audioutil import compress_task
@@ -473,7 +634,7 @@ def run_transcription(task_id, filepath, engine, original_filename, q,
 
         if engine == 'whisper':
             segments, full_text = _whisper_transcribe()
-            summary_data = _run_summary(full_text, q)
+            summary_data = _summary(full_text)
 
         elif engine == 'gemini':
             from transcribe_gemini import transcribe_audio
@@ -491,7 +652,7 @@ def run_transcription(task_id, filepath, engine, original_filename, q,
             for seg in segments:
                 q.put(json.dumps({'type': 'segment', **seg}))
 
-            summary_data = _run_summary(full_text, q)
+            summary_data = _summary(full_text)
 
         elif engine in ('qwenasr', 'dashscope'):
             # 阿里云 ASR。两个 key 都走这条链路：qwenasr 是现用引擎，dashscope 是
@@ -514,7 +675,7 @@ def run_transcription(task_id, filepath, engine, original_filename, q,
             full_text = "\n".join(
                 f"[{s['timestamp']}] {s['text']}" for s in segments
             )
-            summary_data = _run_summary(full_text, q, use_qwen=True)
+            summary_data = _summary(full_text, use_qwen=True)
 
         elif engine == 'precise':
             # 精准模式：Gemini 转写(文字) + 阿里云分离(说话人) 并行跑，最后 Gemini 合并
@@ -597,7 +758,31 @@ def run_transcription(task_id, filepath, engine, original_filename, q,
             for seg in segments:
                 q.put(json.dumps({'type': 'segment', **seg}))
 
-            summary_data = _run_summary(full_text, q)
+            summary_data = _summary(full_text)
+
+        elif engine == 'gemini35':
+            # Gemini 3.5 Transcribe：专用 ASR 模型，原生说话人分离 + 词级时间戳，
+            # 一次调用出结果——不用像精准模式那样两个引擎分别转、再合并。
+            from transcribe_gemini35 import transcribe_audio as _gemini35_tx
+
+            q.put(json.dumps({
+                'type': 'progress',
+                'percent': 0,
+                'message': '正在上传文件到 Gemini 3.5 Transcribe...',
+            }))
+
+            segments = _gemini35_tx(
+                input_path, progress_callback=progress_cb,
+                speaker_count=speaker_count,
+            )
+
+            for seg in segments:
+                q.put(json.dumps({'type': 'segment', **seg}))
+
+            full_text = "\n".join(
+                f"[{s['timestamp']}] {s['text']}" for s in segments
+            )
+            summary_data = _summary(full_text)
 
         else:
             taskdb.set_status(task_id, 'failed', error=f'Unknown engine: {engine}')
@@ -631,8 +816,10 @@ def run_transcription(task_id, filepath, engine, original_filename, q,
                 sem = _engine_semaphores.get('whisper')
                 if sem is not None:
                     sem.acquire()
+                timing['fallback_from'] = engine
+                timing.pop('transcribe_s', None)      # 重新计：含云端失败 + Whisper 两段
                 segments, full_text = _whisper_transcribe()
-                summary_data = _run_summary(full_text, q)
+                summary_data = _summary(full_text)
                 _finish_ok(segments, summary_data, 'whisper')
                 fell_back = True
             except Exception as e2:  # noqa: BLE001
@@ -663,9 +850,24 @@ def run_transcription(task_id, filepath, engine, original_filename, q,
 
 # ========== Pages ==========
 
+def _static_version():
+    """静态资源版本号：取 app.js/style.css 里最新的修改时间戳。
+
+    /static/app.js 直接按文件名引用、没有 hash/查询参数，浏览器缓存了旧版本
+    后不会主动去问有没有更新——改完前端代码用户刷新页面照样看到旧行为
+    （下载按钮明明改了还是老样子，就是这个）。用 mtime 当查询参数：
+    文件一变这串数字就变，浏览器才会当成新资源重新拉取。
+    """
+    try:
+        paths = [os.path.join(app.static_folder, name) for name in ('app.js', 'style.css')]
+        return str(int(max(os.path.getmtime(p) for p in paths if os.path.isfile(p))))
+    except (ValueError, OSError):
+        return '0'
+
+
 @app.route('/')
 def index():
-    return render_template('index.html')
+    return render_template('index.html', static_version=_static_version(), demo=DEMO_MODE)
 
 
 # ========== Upload & Stream ==========
@@ -860,18 +1062,61 @@ def api_transcribe_local():
     return jsonify({'task_id': task_id})
 
 
-def _download_then_transcribe(task_id, url, engine, q, section=None, offset_sec=0):
+_SUB_MODE_RE = re.compile(r'^[a-z]{2,3}$')
+
+
+def _clean_sub_mode(raw):
+    """前端传来的字幕偏好：auto / off / 两三位语言码（zh、en、ja…）。别的一律按 auto。"""
+    v = (raw or 'auto').strip().lower()
+    if v in ('auto', 'off') or _SUB_MODE_RE.match(v):
+        return v
+    return 'auto'
+
+
+def _download_then_transcribe(task_id, url, engine, q, section=None, offset_sec=0,
+                              sub_mode='auto'):
     """单个视频链接：先下音频，再走正常转写任务（进 Library，和上传的稿一样）。
 
     section/offset_sec：只转某时间段（如 10:00–25:00）时，section 传给 yt-dlp
     只切那一段，offset_sec 把字幕时间戳还原成原视频真实位置。
+
+    先自动探测有没有现成字幕（YouTube/B站官方或 AI 自动字幕）——有就直接拿来用，
+    完全跳过下载音频和转写，省时间也省 API 调用；没有才落回原来的下载+转写。
+    只在「转整段」时探测：切片(section)是原视频里的一段，字幕时间戳对不上切片
+    起点，硬套上去时间轴是错的，这种情况直接走转写。
     """
-    from downloader import download_one
+    from downloader import download_one, fetch_subtitle, parse_srt
     dl_dir = os.path.join(config.UPLOAD_FOLDER, f'url_{task_id}')
+    timing = {}                       # 下载/字幕探测阶段的耗时，交给 run_transcription 一起落 meta
     try:
+        # sub_mode：'auto' = 只用视频原语言的字幕；'off' = 从不用字幕、一律转写；
+        # 'zh'/'en'/… = 只用这种语言的字幕。找不到想要的语言就转写，绝不换一种语言凑合。
+        if not section and (sub_mode or 'auto') != 'off':
+            q.put(json.dumps({'type': 'progress', 'percent': 1, 'message': 'Checking for existing subtitles…'}))
+            t0 = time.monotonic()
+            sub_path, sub_kind, sub_meta = fetch_subtitle({'video_url': url, 'video_id': ''}, dl_dir,
+                                                          lang=sub_mode or 'auto')
+            timing['subs_check_s'] = round(time.monotonic() - t0, 1)
+            sub_segs = parse_srt(sub_path) if sub_path else None
+            if sub_segs:
+                target = {'video_url': url, 'title': (sub_meta or {}).get('title') or url,
+                         'video_id': (sub_meta or {}).get('video_id', '')}
+                sub_lang = (sub_meta or {}).get('sub_lang')
+                q.put(json.dumps({'type': 'progress', 'percent': 90,
+                                  'message': f'Found existing {sub_kind} subtitles ({sub_lang}) — skipping download & transcription'}))
+                _save_subtitle_task(task_id, target, sub_segs, sub_kind, lang=sub_lang,
+                                    timing={'subs_check_s': timing['subs_check_s'],
+                                            'wall_s': timing['subs_check_s']})
+                q.put(json.dumps({'type': 'done', 'task_id': task_id,
+                                  'segments': sub_segs, 'summary': None,
+                                  'subtitle_lang': sub_lang}))
+                return
+
         msg = 'Downloading clip…' if section else 'Downloading audio…'
         q.put(json.dumps({'type': 'progress', 'percent': 1, 'message': msg}))
+        t0 = time.monotonic()
         item = download_one({'video_url': url}, dl_dir, section=section)
+        timing['download_s'] = round(time.monotonic() - t0, 1)
         if not item or not item.get('path') or not os.path.isfile(item['path']):
             taskdb.set_status(task_id, 'failed',
                               error='Download failed — bad link, private/removed video, or geo-blocked.')
@@ -880,12 +1125,22 @@ def _download_then_transcribe(task_id, url, engine, q, section=None, offset_sec=
         title = item.get('title') or url
         # 复用正常转写链路：落 results/、taskdb done、SSE 推进度，全和上传一致
         run_transcription(task_id, item['path'], engine, title, q,
-                          None, False, engine != 'whisper', offset_sec=offset_sec)
+                          None, False, engine != 'whisper', offset_sec=offset_sec,
+                          extra_meta={'source_url': url,
+                                      'video_id': item.get('video_id') or _video_id_from_url(url),
+                                      'creator': item.get('uploader')},
+                          timing=timing)
     except Exception as e:  # noqa: BLE001
         taskdb.set_status(task_id, 'failed', error=str(e)[:300])
         q.put(json.dumps({'type': 'error', 'message': str(e)[:200]}))
     finally:
         shutil.rmtree(dl_dir, ignore_errors=True)
+        # 字幕命中的快速路径不经过 run_transcription，它自己的 finally 里那份
+        # tasks.pop 不会跑到——不清这里，任务会永远卡在「进行中」，
+        # /api/history DELETE 那边 `if task_id in tasks` 的判断会一直挡着删不掉。
+        # 正常路径这里重复 pop 一次是安全的（键已经被清过，pop(..., None) 不报错）。
+        tasks.pop(task_id, None)
+        _task_progress.pop(task_id, None)
 
 
 def _parse_url_section(line):
@@ -929,6 +1184,7 @@ def api_transcribe_urls():
     """
     body = request.get_json(silent=True) or {}
     engine = body.get('engine', 'whisper')
+    sub_mode = _clean_sub_mode(body.get('subs'))
     try:
         max_videos = max(1, min(300, int(body.get('max_videos') or 20)))
     except (TypeError, ValueError):
@@ -966,7 +1222,7 @@ def api_transcribe_urls():
         q = queue.Queue()
         tasks[task_id] = q
         executor.submit(_download_then_transcribe, task_id, url, engine, q,
-                        section, offset_sec)
+                        section, offset_sec, sub_mode)
         out.append({'url': url, 'title': title, 'task_id': task_id})
     return jsonify({'tasks': out, 'errors': errors})
 
@@ -1188,6 +1444,11 @@ def api_history_detail(task_id):
         with open(summary_path, 'r', encoding='utf-8') as f:
             summary = json.load(f)
 
+    # 老记录 meta 里没存博主名：链条任务从 chain.json 反查，给下载文件名用
+    if not meta.get('creator'):
+        author = _chain_author_for(task_id, meta.get('filename'))
+        if author:
+            meta['creator'] = author
     return jsonify({**meta, 'segments': segments, 'summary': summary})
 
 
@@ -1214,7 +1475,8 @@ def api_history_audio(task_id):
 
     mime_map = {
         '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.flac': 'audio/flac',
-        '.m4a': 'audio/mp4', '.ogg': 'audio/ogg', '.webm': 'audio/webm',
+        '.m4a': 'audio/mp4', '.ogg': 'audio/ogg', '.opus': 'audio/ogg',
+        '.webm': 'audio/webm',
     }
     resp = send_file(
         audio_path,
@@ -1307,8 +1569,14 @@ def api_enrich_status():
 
 @app.route('/api/search')
 def api_search():
-    """全文搜索：文件名 / AI标题 / 标签 / 转写正文，返回带命中片段的条目列表。"""
-    query = (request.args.get('q') or '').strip().lower()
+    """全文搜索：文件名 / AI标题 / 标签 / 转写正文，返回带命中片段的条目列表。
+
+    贴一条视频链接（YouTube / B站 / b23 短链 / 抖音）也能搜：抠出视频 id，
+    去对每条记录的 video_id / 文件名里的 [id] / 记下来的 source_url，
+    带一堆 ?spm_id_from=… 之类跟踪参数也照样命中。
+    """
+    raw_query = (request.args.get('q') or '').strip()
+    query = raw_query.lower()
     if not query:
         return jsonify([])
 
@@ -1316,6 +1584,14 @@ def api_search():
     hits = []
     if not os.path.isdir(results_dir):
         return jsonify(hits)
+
+    link_mode = _looks_like_url(raw_query)
+    link_vid = _video_id_from_url(raw_query, resolve_short=True).lower() if link_mode else ''
+    # 没抠出 id 的链接（未知平台）：退化成整串子串匹配（只去掉协议/www/末尾斜杠，
+    # query 必须保留——YouTube 的 id 就在 ?v= 里，砍掉就成了 youtube.com/watch 匹配一切）
+    link_plain = ''
+    if link_mode and not link_vid:
+        link_plain = re.sub(r'^https?://(www\.)?', '', query).rstrip('/')
 
     for name in os.listdir(results_dir):
         task_dir = os.path.join(results_dir, name)
@@ -1328,13 +1604,29 @@ def api_search():
         except Exception:
             continue
 
+        snippet = ''
+        if link_mode:
+            src = (meta.get('source_url') or '')
+            matched = bool(
+                (link_vid and link_vid in _link_ids(meta))
+                or (link_plain and link_plain in src.lower())
+            )
+            if matched:
+                snippet = '🔗 ' + (src or meta.get('video_id') or raw_query)
+                author = _chain_author_for(meta.get('id') or name, meta.get('filename'))
+                hits.append({**meta, 'snippet': snippet,
+                             'source': 'pipeline' if author else 'mine',
+                             **({'creator': author} if author else {})})
+            continue
+
         haystacks = [
             meta.get('filename', ''),
             meta.get('ai_title', ''),
             meta.get('ai_one_line', ''),
             ' '.join(meta.get('ai_tags', []) or []),
+            meta.get('video_id', '') or '',
+            meta.get('source_url', '') or '',
         ]
-        snippet = ''
         matched = any(query in h.lower() for h in haystacks if h)
 
         if not matched:
@@ -1418,6 +1710,15 @@ def _chain_dir(chain_id):
     return os.path.join(CHAINS_DIR, chain_id)
 
 
+def _reflect_touch():
+    """转写完成后通知回顾模块：防抖后后台重算，用户打开面板时已经是新的。"""
+    try:
+        import reflect
+        reflect.touch(config.RESULTS_FOLDER)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _update_meta(meta_path, updates):
     """读最新 meta → 合并 → 原子写。避免和 enrich/compress 并发写丢字段（如 stats 覆盖 ai_title）。"""
     try:
@@ -1447,6 +1748,152 @@ def _save_chain(state):
 
 _VID_IN_NAME = re.compile(r'\[([A-Za-z0-9_-]{6,20})\]')
 
+# 从各平台链接里抠视频 id 的规则（按顺序试，先中先得）
+_URL_ID_PATTERNS = (
+    re.compile(r'[?&]v=([A-Za-z0-9_-]{11})(?![A-Za-z0-9_-])'),      # youtube.com/watch?v=
+    re.compile(r'youtu\.be/([A-Za-z0-9_-]{11})(?![A-Za-z0-9_-])'),  # youtu.be/
+    re.compile(r'youtube\.com/(?:shorts|embed|live|v)/([A-Za-z0-9_-]{11})(?![A-Za-z0-9_-])'),
+    re.compile(r'(BV[0-9A-Za-z]{10})'),                             # B站 BV 号
+    re.compile(r'bilibili\.com/video/(av\d+)'),                     # B站 av 号
+    re.compile(r'bilibili\.com/bangumi/play/((?:ep|ss)\d+)'),       # B站番剧
+    re.compile(r'douyin\.com/video/(\d{15,})'),
+)
+_SHORT_LINK_HOSTS = ('b23.tv/', 'youtu.be/')      # youtu.be 本身就带 id，不用解析；b23.tv 要跟跳转
+
+
+def _looks_like_url(text):
+    t = (text or '').strip().lower()
+    return t.startswith(('http://', 'https://', 'www.')) or any(
+        h in t for h in ('bilibili.com/', 'youtube.com/', 'youtu.be/', 'b23.tv/', 'douyin.com/'))
+
+
+def _resolve_short_link(url, timeout=5):
+    """b23.tv 这类短链：跟一次 302 拿真实地址（只读响应头，不下正文）。失败原样返回。"""
+    try:
+        import urllib.request
+        req = urllib.request.Request(url, method='HEAD',
+                                     headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=timeout) as r:   # noqa: S310
+            return r.geturl() or url
+    except Exception:  # noqa: BLE001
+        return url
+
+
+def _video_id_from_url(url, resolve_short=False):
+    """链接 → 平台视频 id（YouTube 11 位 / BV 号 / av / ep / 抖音数字），认不出返回 ''。
+
+    resolve_short=True 时 b23.tv 短链会先跟一次跳转（走网络，搜索时才开；
+    回填旧记录时不开，避免启动期间卡在网络上）。
+    """
+    u = (url or '').strip()
+    if not u:
+        return ''
+    if resolve_short and 'b23.tv/' in u.lower():
+        u = _resolve_short_link(u)
+    for pat in _URL_ID_PATTERNS:
+        m = pat.search(u)
+        if m:
+            return m.group(1)
+    return ''
+
+
+def _url_for_video_id(vid):
+    """只有 id 没存链接的旧记录：按 id 形态拼一个能打开的地址（和 _video_target 同一套规则）。"""
+    vid = (vid or '').strip()
+    if not vid:
+        return ''
+    if vid.startswith('BV') or vid.startswith('av'):
+        return f'https://www.bilibili.com/video/{vid}'
+    if vid.startswith(('ep', 'ss')) and vid[2:].isdigit():
+        return f'https://www.bilibili.com/bangumi/play/{vid}'
+    if len(vid) == 11:
+        return f'https://www.youtube.com/watch?v={vid}'
+    if vid.isdigit() and len(vid) >= 15:
+        return f'https://www.douyin.com/video/{vid}'
+    return ''
+
+
+def _link_ids(meta):
+    """一条记录能被哪些视频 id 找到：meta.video_id + 文件名里的 [id] + source_url 里抠出来的 id。全小写。"""
+    ids = set()
+    if meta.get('video_id'):
+        ids.add(str(meta['video_id']).lower())
+    m = _VID_IN_NAME.search(meta.get('filename') or '')
+    if m:
+        ids.add(m.group(1).lower())
+    v = _video_id_from_url(meta.get('source_url') or '')
+    if v:
+        ids.add(v.lower())
+    return ids
+
+
+def _backfill_source_links():
+    """给老记录补 source_url / video_id（一次性，之后每次启动只是空扫）。
+
+    三个来源，按可信度：chain.json 里这条 task 的 video_id/video_url；
+    taskdb 里 filename 就是链接的（单链接转写早期只把 url 存在这）；
+    文件名里的 [id]。有 id 没链接就按 id 拼一个。只在真有新字段时才写盘。
+    """
+    rd = config.RESULTS_FOLDER
+    if not os.path.isdir(rd):
+        return
+    by_task = {}
+    try:
+        for n in os.listdir(CHAINS_DIR):
+            cpath = os.path.join(CHAINS_DIR, n, 'chain.json')
+            if not os.path.isfile(cpath):
+                continue
+            try:
+                with open(cpath, 'r', encoding='utf-8') as f:
+                    c = json.load(f)
+            except Exception:  # noqa: BLE001
+                continue
+            for v in (c.get('videos') or []):
+                if v.get('task_id'):
+                    by_task.setdefault(v['task_id'], v)
+    except OSError:
+        pass
+
+    fixed = 0
+    for name in os.listdir(rd):
+        if name.startswith('_') or not _is_valid_task_id(name):
+            continue
+        meta_path = os.path.join(rd, name, 'meta.json')
+        if not os.path.isfile(meta_path):
+            continue
+        try:
+            with open(meta_path, 'r', encoding='utf-8') as f:
+                meta = json.load(f)
+        except Exception:  # noqa: BLE001
+            continue
+        if meta.get('source_url') and meta.get('video_id'):
+            continue
+        vid = meta.get('video_id') or ''
+        url = meta.get('source_url') or ''
+        cv = by_task.get(name) or {}
+        vid = vid or cv.get('video_id') or ''
+        url = url or cv.get('video_url') or ''
+        if not url:
+            row = taskdb.get(name)
+            fn = (row or {}).get('filename') or ''
+            if fn.startswith(('http://', 'https://')):
+                url = fn
+        if not vid:
+            m = _VID_IN_NAME.search(meta.get('filename') or '')
+            vid = (m.group(1) if m else '') or _video_id_from_url(url)
+        if not url:
+            url = _url_for_video_id(vid)
+        updates = {}
+        if vid and not meta.get('video_id'):
+            updates['video_id'] = vid
+        if url and not meta.get('source_url'):
+            updates['source_url'] = url
+        if updates:
+            _update_meta(meta_path, updates)
+            fixed += 1
+    if fixed:
+        print(f'[backfill] source links filled for {fixed} transcripts')
+
 
 def _video_id_index():
     """{video_id: task_id}：扫所有已完成转写，从 meta.filename 里的 [id] 回填。
@@ -1468,13 +1915,15 @@ def _video_id_index():
                 meta = json.load(f)
         except Exception:
             continue
+        if meta.get('video_id'):
+            idx.setdefault(meta['video_id'], name)
         m = _VID_IN_NAME.search(meta.get('filename', '') or '')
         if m:
             idx.setdefault(m.group(1), name)
     return idx
 
 
-def _save_subtitle_task(task_id, target, segments, source):
+def _save_subtitle_task(task_id, target, segments, source, lang=None, timing=None):
     """把抓来的字幕当作转写结果落盘（无音频），并在 taskdb 里标记 done。
 
     这样它和普通转写任务一样进历史、进分析，只是引擎标为 subtitle、没有音频回放。
@@ -1494,6 +1943,14 @@ def _save_subtitle_task(task_id, target, segments, source):
         'has_summary': False,
         'subtitle_source': source,            # manual / auto
     }
+    if lang:
+        meta['subtitle_lang'] = lang          # 实际用的字幕轨语言码（zh-Hans / en-orig / ai-zh…）
+    if timing:
+        meta['timing'] = timing
+    if target.get('video_url'):
+        meta['source_url'] = target['video_url']
+    if target.get('video_id'):
+        meta['video_id'] = target['video_id']
     with open(os.path.join(task_dir, 'meta.json'), 'w', encoding='utf-8') as f:
         json.dump(meta, f, ensure_ascii=False, indent=2)
     with open(os.path.join(task_dir, 'transcript.json'), 'w', encoding='utf-8') as f:
@@ -1505,6 +1962,7 @@ def _save_subtitle_task(task_id, target, segments, source):
         enrich_task(task_dir)
     except Exception:
         pass
+    _reflect_touch()
 
 
 def _engine_used(task_id):
@@ -1785,7 +2243,8 @@ def run_chain(state):
                     state['current'] = v['title']
                 # 勾了"优先字幕"：先抓已有字幕；有就完全跳过下载+转写
                 if state.get('prefer_subs'):
-                    sp, sub_source = fetch_subtitle(target, dl_dir)
+                    sp, sub_source, _sub_meta = fetch_subtitle(
+                        target, dl_dir, lang=state.get('sub_lang') or 'auto')
                     if sp:
                         sub_segs = parse_srt(sp) or None
                 item = None if sub_segs else download_one(target, dl_dir)
@@ -1795,7 +2254,8 @@ def run_chain(state):
             # 有字幕 → 直接落转写结果，跳过音频转写（省下载/转写/API）
             if sub_segs:
                 task_id = str(uuid.uuid4())
-                _save_subtitle_task(task_id, target, sub_segs, sub_source)
+                _save_subtitle_task(task_id, target, sub_segs, sub_source,
+                                    lang=(_sub_meta or {}).get('sub_lang'))
                 v['task_id'] = task_id
                 v['title'] = target.get('title') or v['title']
                 v['status'] = 'done'
@@ -1812,7 +2272,7 @@ def run_chain(state):
             ext = os.path.splitext(item['path'])[1].lstrip('.') or 'mp3'
             upload_path = os.path.join(config.UPLOAD_FOLDER, f"{task_id}.{ext}")
             shutil.move(item['path'], upload_path)
-            display_name = f"{item['title']} [{item['video_id']}].mp3"
+            display_name = f"{item['title']} [{item['video_id']}].{ext}"
             taskdb.create(task_id, display_name, state['engine'], None, upload_path)
             q = queue.Queue()
             tasks[task_id] = q
@@ -1820,6 +2280,9 @@ def run_chain(state):
                 run_transcription, task_id, upload_path, state['engine'],
                 display_name, q, None,
                 fallback_whisper=state.get('fallback_whisper', False),
+                extra_meta={'source_url': target.get('video_url'),
+                            'video_id': item.get('video_id'),
+                            'creator': state.get('author') or item.get('uploader')},
             )
             v['task_id'] = task_id
             v['title'] = item['title']
@@ -2072,6 +2535,7 @@ def api_chain_create():
         'max_videos': max_videos,
         'analyze': bool(data.get('analyze', True)),
         'prefer_subs': bool(data.get('prefer_subs', False)),
+        'sub_lang': _clean_sub_mode(data.get('sub_lang')),   # 字幕语言：auto / zh / en …
         'fallback_whisper': bool(data.get('fallback_whisper', False)),
         'verify': bool(data.get('verify', False)),
         'self_verify': bool(data.get('self_verify', False)),
@@ -2360,12 +2824,15 @@ def _retranscribe_video(chain_id, index, target, engine):
         ext = os.path.splitext(item['path'])[1].lstrip('.') or 'mp3'
         upload_path = os.path.join(config.UPLOAD_FOLDER, f"{task_id}.{ext}")
         shutil.move(item['path'], upload_path)
-        display_name = f"{item['title']} [{item['video_id']}].mp3"
+        display_name = f"{item['title']} [{item['video_id']}].{ext}"
         taskdb.create(task_id, display_name, engine, None, upload_path)
         q = queue.Queue()
         tasks[task_id] = q
         executor.submit(run_transcription, task_id, upload_path, engine,
-                        display_name, q, None)
+                        display_name, q, None,
+                        extra_meta={'source_url': target.get('video_url'),
+                                    'video_id': item.get('video_id'),
+                                    'creator': item.get('uploader')})
         _update_video(chain_id, index, {
             'task_id': task_id, 'title': item['title'],
             'video_id': item['video_id'], 'status': 'transcribing',
@@ -2604,11 +3071,24 @@ def api_stats():
             'chars': total_chars,
             'segments': total_segments,
         },
+        'speed': _speed_table(),
         'engines': dict(engines),
         'top_tags': [{'tag': t, 'tag_en': tmap.get(t, t), 'count': c}
                      for t, c in top_tags],
         'timeline': timeline,
     })
+
+
+@app.route('/api/reflect')
+def api_reflect():
+    """回顾面板：这段时间在听什么。?range=1m|3m|6m|12m &lang=zh|en &refresh=1 强制重写叙事。"""
+    import reflect
+    rng = request.args.get('range', '1m')
+    if rng not in reflect.RANGES:
+        rng = '1m'
+    lang = request.args.get('lang', 'zh')
+    refresh = request.args.get('refresh') in ('1', 'true')
+    return jsonify(reflect.build(config.RESULTS_FOLDER, rng, lang, refresh))
 
 
 # ========== Settings API ==========
@@ -3034,6 +3514,12 @@ if __name__ == '__main__':
     if not debug or os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
         recover_unfinished_tasks()
         recover_unfinished_chains()
+        threading.Thread(target=_backfill_source_links, daemon=True).start()
+        try:
+            import reflect
+            reflect.start_scheduler(config.RESULTS_FOLDER)   # 回顾提前算好，打开不用等
+        except Exception:  # noqa: BLE001
+            pass
     # HOST 默认 127.0.0.1（本地只对自己开）；Docker 里设 HOST=0.0.0.0 对外暴露。
     app.run(debug=debug, threaded=True, host=_host,
             port=int(os.environ.get('PORT', 5001)))

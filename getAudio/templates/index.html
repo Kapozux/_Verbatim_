@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Verbatim</title>
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/style.css?v={{ static_version }}">
 </head>
 <body>
     <div class="container">
@@ -13,29 +13,31 @@
         <div id="main-view">
             <header>
                 <div class="topbar">
-                    <div class="brand"><span class="dot"></span>Verbatim</div>
+                    <div class="brand"><span class="dot"></span>Verbatim{% if demo %}<span class="demo-pill" data-i18n="nav.demo">Demo · sample library</span>{% endif %}</div>
                     <div class="topbar-right">
                         <button id="global-tasks" class="global-tasks hidden" type="button"
-                                title="Active tasks">
+                                data-i18n-title="nav.activeTasks">
                             <span class="gt-spin">⟳</span><span id="global-tasks-count"></span>
                         </button>
-                        <div class="tagline">Audio → transcript → insight · local</div>
+                        <button id="ui-lang-toggle" class="stats-lang ui-lang-toggle" type="button"
+                                data-i18n-title="nav.langToggle">中</button>
+                        <div class="tagline" data-i18n="nav.tagline">Audio → transcript → insight · local</div>
                         <div id="global-tasks-pop" class="global-tasks-pop hidden"></div>
                     </div>
                 </div>
                 <nav class="main-nav">
-                    <button class="nav-tab active" data-tab="transcribe">Transcribe</button>
-                    <button class="nav-tab" data-tab="xhs">Xiaohongshu</button>
-                    <button class="nav-tab" data-tab="creators">Creators</button>
-                    <button class="nav-tab" data-tab="library">Library</button>
+                    <button class="nav-tab active" data-tab="transcribe" data-i18n="nav.transcribe">Transcribe</button>
+                    <button class="nav-tab" data-tab="xhs" data-i18n="nav.xhs">Xiaohongshu</button>
+                    <button class="nav-tab" data-tab="creators" data-i18n="nav.creators">Creators</button>
+                    <button class="nav-tab" data-tab="library" data-i18n="nav.library">Library</button>
                 </nav>
             </header>
 
             <!-- ===== Tab: Transcribe ===== -->
             <section id="tab-transcribe" class="tab-panel active">
                 <div class="hero">
-                    <h1>Transcribe<span class="accent">.</span></h1>
-                    <p>Drop audio or video files — Verbatim extracts the audio and turns it into timestamped text.</p>
+                    <h1 data-i18n="transcribe.title">Transcribe<span class="accent">.</span></h1>
+                    <p data-i18n="transcribe.subtitle">Drop audio or video files — Verbatim extracts the audio and turns it into timestamped text.</p>
                 </div>
 
                 <form id="upload-form" enctype="multipart/form-data">
@@ -43,15 +45,16 @@
                         <div id="drop-zone" class="drop-zone">
                             <label for="audio-file" class="file-label">
                                 <span class="file-icon">📁</span>
-                                <span id="file-label-text">Choose or drop audio / video files (multiple ok)</span>
+                                <span id="file-label-text" data-i18n="transcribe.dropLabel">Choose or drop audio / video files (multiple ok)</span>
                                 <span id="file-info" class="file-info"></span>
                             </label>
                         </div>
                         <input type="file" id="audio-file" name="audio" multiple
                                accept=".mp3,.wav,.flac,.m4a,.ogg,.webm,.mp4,.mov,.mkv,.avi,.m4v">
                         <textarea id="mixed-input" class="url-box" rows="2"
+                            data-i18n-placeholder="transcribe.mixedPlaceholder"
                             placeholder="Or paste video links / local file paths — one per line, mix freely&#10;https://www.bilibili.com/video/BV...      /Users/you/Documents/lecture.mp4"></textarea>
-                        <p class="local-hint">Links download &amp; transcribe (YouTube, Bilibili &amp; other yt-dlp
+                        <p class="local-hint" data-i18n-html="transcribe.localHint">Links download &amp; transcribe (YouTube, Bilibili &amp; other yt-dlp
                             sites — for a whole channel use Creators). Local paths are read in place, nothing
                             uploaded — note: macOS blocks reading from Downloads/Desktop, keep files in
                             Documents or another folder.<br>
@@ -61,36 +64,61 @@
                             real video position.<br>
                             A collection / playlist link (e.g. a Bilibili 合集, a YouTube playlist) is expanded
                             into its videos and each one is transcribed — transcripts only, no analysis.</p>
-                        <label class="collection-cap">Videos per collection
+                        <label class="collection-cap"><span data-i18n="transcribe.videosPerCollection">Videos per collection</span>
                             <input type="number" id="url-max-videos" class="search-input chain-small"
                                    min="1" max="300" value="20"
+                                   data-i18n-title="transcribe.videosPerCollectionTitle"
                                    title="When a link is a collection/playlist, transcribe at most this many of its videos.">
+                        </label>
+                        <label class="collection-cap subs-cap" data-i18n-title="transcribe.subsTitle"
+                               title="When a link already has captions, use them instead of transcribing. Auto = only the video's own language (never a machine translation). Pick a language to require that one; if it isn't available the audio is transcribed instead. Off = always transcribe.">
+                            <span data-i18n="transcribe.subs">Existing subtitles</span>
+                            <select id="url-subs" class="search-input chain-small">
+                                <option value="auto" data-i18n="subs.auto">Auto — the video's own language</option>
+                                <option value="off" data-i18n="subs.off">Off — always transcribe the audio</option>
+                                <option value="zh">中文</option>
+                                <option value="en">English</option>
+                                <option value="ja">日本語</option>
+                                <option value="ko">한국어</option>
+                                <option value="es">Español</option>
+                                <option value="fr">Français</option>
+                                <option value="de">Deutsch</option>
+                                <option value="ru">Русский</option>
+                            </select>
                         </label>
                         <div id="intake-list" class="intake-list"></div>
                     </div>
 
                     <div class="form-group">
-                        <label class="group-label">Engine</label>
+                        <label class="group-label" data-i18n="transcribe.engine">Engine</label>
                         <div class="radio-group">
                             <label class="radio-option">
                                 <input type="radio" name="engine" value="whisper" checked>
                                 <span class="radio-custom"></span>
                                 <span class="radio-label">
-                                    <strong>Whisper</strong>
-                                    <small>Local · free · offline</small>
+                                    <strong data-i18n="engine.whisper">Whisper</strong>
+                                    <small data-i18n="transcribe.whisperDesc">Local · free · offline</small>
                                 </span>
                             </label>
                             <label class="radio-option">
                                 <input type="radio" name="engine" value="gemini">
                                 <span class="radio-custom"></span>
                                 <span class="radio-label">
-                                    <strong>Gemini</strong>
-                                    <small>Cloud · needs API key</small>
+                                    <strong data-i18n="engine.gemini">Gemini</strong>
+                                    <small data-i18n="transcribe.geminiDesc">Cloud · needs API key</small>
+                                </span>
+                            </label>
+                            <label class="radio-option">
+                                <input type="radio" name="engine" value="gemini35">
+                                <span class="radio-custom"></span>
+                                <span class="radio-label">
+                                    <strong data-i18n="engine.gemini35">Gemini 3.5 Transcribe</strong>
+                                    <small data-i18n="transcribe.gemini35Desc">Cloud · new · built-in speaker labels ✨</small>
                                 </span>
                             </label>
                         </div>
 
-                        <button type="button" id="show-mainland" class="reveal-link">
+                        <button type="button" id="show-mainland" class="reveal-link" data-i18n="transcribe.showMainland">
                             Show mainland-cloud engines ▾
                         </button>
                         <div class="radio-group hidden" id="mainland-engines">
@@ -98,16 +126,16 @@
                                 <input type="radio" name="engine" value="qwenasr">
                                 <span class="radio-custom"></span>
                                 <span class="radio-label">
-                                    <strong>Qwen-ASR</strong>
-                                    <small>Alibaba Cloud · strong zh · ⚠ moderates content</small>
+                                    <strong data-i18n="engine.qwenasr">Qwen-ASR</strong>
+                                    <small data-i18n="transcribe.qwenasrDesc">Alibaba Cloud · strong zh · ⚠ moderates content</small>
                                 </span>
                             </label>
                             <label class="radio-option">
                                 <input type="radio" name="engine" value="precise">
                                 <span class="radio-custom"></span>
                                 <span class="radio-label">
-                                    <strong>Precise</strong>
-                                    <small>Gemini text + Alibaba diarization · ⚠ moderates content</small>
+                                    <strong data-i18n="engine.precise">Precise</strong>
+                                    <small data-i18n="transcribe.preciseDesc">Gemini text + Alibaba diarization · ⚠ moderates content</small>
                                 </span>
                             </label>
                         </div>
@@ -115,21 +143,22 @@
 
                     <div class="form-group hidden" id="speaker-count-group">
                         <label class="group-label" for="speaker-count">
-                            Expected speakers <small class="hint">(optional — improves accuracy; leave blank to auto-detect)</small>
+                            <span data-i18n="transcribe.speakers">Expected speakers</span> <small class="hint" data-i18n="transcribe.speakersHint">(optional — improves accuracy; leave blank to auto-detect)</small>
                         </label>
                         <input type="number" id="speaker-count" name="speaker_count"
-                               min="1" max="20" step="1" placeholder="blank = auto"
+                               min="1" max="20" step="1"
+                               data-i18n-placeholder="transcribe.speakersPlaceholder" placeholder="blank = auto"
                                class="number-input">
                     </div>
 
-                    <button type="submit" id="submit-btn" class="btn-primary">
+                    <button type="submit" id="submit-btn" class="btn-primary" data-i18n="transcribe.submit">
                         Transcribe
                     </button>
                 </form>
 
                 <div id="batch-section" class="hidden">
                     <div class="batch-header">
-                        <h2>Queue</h2>
+                        <h2 data-i18n="transcribe.queue">Queue</h2>
                         <span id="batch-progress" class="batch-progress"></span>
                     </div>
                     <div id="batch-list" class="batch-list"></div>
@@ -148,23 +177,24 @@
             <!-- ===== Tab: 小红书采集 ===== -->
             <section id="tab-xhs" class="tab-panel">
                 <div class="hero">
-                    <h1>Xiaohongshu<span class="accent">.</span></h1>
-                    <p>Enter keywords and how many notes — Verbatim drives a real browser to search, download full-res images, and pull top-level comments into a dataset. <b>First run pops a browser asking for a QR login</b> (remembered afterwards).</p>
+                    <h1 data-i18n="xhs.title">Xiaohongshu<span class="accent">.</span></h1>
+                    <p data-i18n-html="xhs.subtitle">Enter keywords and how many notes — Verbatim drives a real browser to search, download full-res images, and pull top-level comments into a dataset. <b>First run pops a browser asking for a QR login</b> (remembered afterwards).</p>
                 </div>
                 <form class="chain-form-shell" onsubmit="return false">
                     <div class="chain-form">
                         <textarea id="xhs-keywords" class="search-input" rows="4"
+                            data-i18n-placeholder="xhs.keywordsPlaceholder"
                             placeholder="One keyword per line — searched separately, de-duplicated, merged:&#10;uiuc cs admissions&#10;college essay tips&#10;对象出轨"></textarea>
                         <div class="chain-form-row">
-                            <label class="xhs-num"><span>Notes to scrape</span>
+                            <label class="xhs-num"><span data-i18n="xhs.notesToScrape">Notes to scrape</span>
                             <input type="number" id="xhs-max-notes" class="search-input chain-small"
                                    min="1" max="300" value="20"></label>
-                            <label class="xhs-num"><span>Comments cap / note</span>
+                            <label class="xhs-num"><span data-i18n="xhs.commentsCap">Comments cap / note</span>
                             <input type="number" id="xhs-max-comments" class="search-input chain-small"
                                    min="50" max="2000" value="400"></label>
-                            <button id="xhs-start" type="button" class="btn-primary chain-btn">Start scraping</button>
+                            <button id="xhs-start" type="button" class="btn-primary chain-btn" data-i18n="xhs.startScraping">Start scraping</button>
                         </div>
-                        <p class="chain-hint">Scraping and analysis are decoupled; every note is saved as it lands (safe to interrupt). Anti-bot warning: 70+ notes in one run risks rate-limiting — go in small batches. Data lands in <code>xhs_dataset/</code>.</p>
+                        <p class="chain-hint" data-i18n-html="xhs.hint">Scraping and analysis are decoupled; every note is saved as it lands (safe to interrupt). Anti-bot warning: 70+ notes in one run risks rate-limiting — go in small batches. Data lands in <code>xhs_dataset/</code>.</p>
                     </div>
                 </form>
                 <div id="xhs-progress" class="xhs-progress hidden"></div>
@@ -172,15 +202,15 @@
                 <div class="xhs-analyze-card">
                     <div class="xhs-an-head">
                         <div>
-                            <b>Analyze the notes from the keywords above → research report</b>
-                            <span class="ci-hint">Scoped to notes scraped by those exact keywords (topics never mix). Reads images + comments per note, then aggregates. Empty keywords = whole dataset. Uses Gemini multimodal; costs scale with note count.</span>
+                            <b data-i18n="xhs.analyzeHead">Analyze the notes from the keywords above → research report</b>
+                            <span class="ci-hint" data-i18n="xhs.analyzeHint">Scoped to notes scraped by those exact keywords (topics never mix). Reads images + comments per note, then aggregates. Empty keywords = whole dataset. Uses Gemini multimodal; costs scale with note count.</span>
                             <select id="xhs-lang" class="search-input chain-small" style="margin-top:8px">
-                                <option value="auto" selected>Report: Auto (follow content)</option>
-                                <option value="en">Report: English</option>
-                                <option value="zh">Report: 中文</option>
+                                <option value="auto" selected data-i18n="xhs.reportAuto">Report: Auto (follow content)</option>
+                                <option value="en" data-i18n="xhs.reportEn">Report: English</option>
+                                <option value="zh" data-i18n="xhs.reportZh">Report: 中文</option>
                             </select>
                         </div>
-                        <button id="xhs-analyze-btn" type="button" class="btn-primary chain-btn">Analyze this batch</button>
+                        <button id="xhs-analyze-btn" type="button" class="btn-primary chain-btn" data-i18n="xhs.analyzeBtn">Analyze this batch</button>
                     </div>
                     <div id="xhs-analyze-progress" class="hidden"></div>
                 </div>
@@ -189,92 +219,112 @@
             <!-- ===== Tab: 博主库 (Creators) ===== -->
             <section id="tab-creators" class="tab-panel">
                 <div class="hero">
-                    <h1>Creators<span class="accent">.</span></h1>
-                    <p>Paste a channel, playlist, or video — Verbatim downloads and transcribes every episode, then writes a portrait. Open a card for the portrait, then re-read it through a lens — 🔥 Roast / ✍️ Craft / 😂 Watchability / 💬 Quotes / 🖼 Worldview.</p>
+                    <h1 data-i18n="creators.title">Creators<span class="accent">.</span></h1>
+                    <p data-i18n="creators.subtitle">Paste a channel, playlist, or video — Verbatim downloads and transcribes every episode, then writes a portrait. Open a card for the portrait, then re-read it through a lens — 🔥 Roast / ✍️ Craft / 😂 Watchability / 💬 Quotes / 🖼 Worldview.</p>
                 </div>
 
                 <form class="chain-form-shell">
                     <div class="chain-form">
                         <input type="url" id="chain-url" class="search-input"
+                               data-i18n-placeholder="creators.urlPlaceholder"
                                placeholder="https://www.youtube.com/@creator  ·  a channel / homepage (for one video, use Transcribe)">
                         <!-- 主行：每次都要决定的（URL 在上；这里是 谁/用什么脑/要不要分析）-->
                         <div class="chain-form-row">
                             <input type="text" id="chain-author" class="search-input chain-small"
+                                   data-i18n-placeholder="creators.authorPlaceholder"
                                    placeholder="Author (optional)">
                             <select id="chain-engine" class="search-input chain-small"
+                                    data-i18n-title="creators.engineTitle"
                                     title="Transcription engine.">
-                                <option value="gemini">Gemini (recommended)</option>
-                                <option value="whisper">Whisper (local)</option>
-                                <option value="qwenasr">Alibaba Qwen-ASR (zh ASR · no Gemini filter)</option>
+                                <option value="gemini" data-i18n="creators.engineGemini">Gemini (recommended)</option>
+                                <option value="whisper" data-i18n="creators.engineWhisper">Whisper (local)</option>
+                                <option value="qwenasr" data-i18n="creators.engineQwenasr">Alibaba Qwen-ASR (zh ASR · no Gemini filter)</option>
                             </select>
                             <select id="chain-provider" class="search-input chain-small"
+                                    data-i18n-title="creators.providerTitle"
                                     title="Which model does the analysis. Aliyun (DeepSeek/Kimi/GLM/Qwen) reuses your DashScope key and dodges the Gemini quota — but it moderates content, so use it only for non-sensitive creators.">
-                                <option value="gemini" selected>Analyze: Gemini</option>
-                                <option value="opus5">Analyze: Claude Opus 5  (OpenRouter · thinking)</option>
-                                <option value="opus46">Analyze: Claude Opus 4.6  (OpenRouter · thinking)</option>
-                                <option value="deepseek">Analyze: DeepSeek  (Alibaba)</option>
-                                <option value="kimi">Analyze: Kimi  (Alibaba)</option>
-                                <option value="glm">Analyze: GLM  (Alibaba)</option>
-                                <option value="qwen">Analyze: Qwen  (Alibaba)</option>
+                                <option value="gemini" selected data-i18n="creators.providerGemini">Analyze: Gemini</option>
+                                <option value="opus5" data-i18n="creators.providerOpus5">Analyze: Claude Opus 5  (OpenRouter · thinking)</option>
+                                <option value="opus46" data-i18n="creators.providerOpus46">Analyze: Claude Opus 4.6  (OpenRouter · thinking)</option>
+                                <option value="deepseek" data-i18n="creators.providerDeepseek">Analyze: DeepSeek  (Alibaba)</option>
+                                <option value="kimi" data-i18n="creators.providerKimi">Analyze: Kimi  (Alibaba)</option>
+                                <option value="glm" data-i18n="creators.providerGlm">Analyze: GLM  (Alibaba)</option>
+                                <option value="qwen" data-i18n="creators.providerQwen">Analyze: Qwen  (Alibaba)</option>
                             </select>
-                            <button id="chain-start" type="button" class="btn-primary chain-btn">Analyze</button>
+                            <button id="chain-start" type="button" class="btn-primary chain-btn" data-i18n="creators.analyze">Analyze</button>
                         </div>
                         <!-- 折叠：默认设置 + 专家旋钮，多数人不动 -->
                         <details class="chain-advanced">
-                            <summary>⚙ More options</summary>
+                            <summary data-i18n="creators.moreOptions">⚙ More options</summary>
                             <div class="chain-form-row chain-adv-row">
                                 <input type="number" id="chain-max" class="search-input chain-small"
-                                       min="1" max="300" placeholder="Max videos">
+                                       min="1" max="300" data-i18n-placeholder="creators.maxVideos" placeholder="Max videos">
                                 <select id="chain-lang" class="search-input chain-small"
+                                        data-i18n-title="creators.langTitle"
                                         title="Language of the analysis documents (portrait, per-episode notes, lenses). Auto = follow the content's language. Verbatim quotes always stay original.">
-                                    <option value="auto" selected>Output: Auto (follow content)</option>
-                                    <option value="en">Output: English</option>
-                                    <option value="zh">Output: 中文</option>
+                                    <option value="auto" selected data-i18n="creators.langAuto">Output: Auto (follow content)</option>
+                                    <option value="en" data-i18n="creators.langEn">Output: English</option>
+                                    <option value="zh" data-i18n="creators.langZh">Output: 中文</option>
                                 </select>
                                 <select id="chain-critique" class="search-input chain-small"
+                                        data-i18n-title="creators.critiqueTitle"
                                         title="How sharp the persona portrait's judgment is. Evidence tagging is enforced at every level — only the tone changes.">
-                                    <option value="descriptive">Descriptive</option>
-                                    <option value="analytical" selected>Analytical</option>
-                                    <option value="sharp">Sharp</option>
+                                    <option value="descriptive" data-i18n="creators.critiqueDescriptive">Descriptive</option>
+                                    <option value="analytical" selected data-i18n="creators.critiqueAnalytical">Analytical</option>
+                                    <option value="sharp" data-i18n="creators.critiqueSharp">Sharp</option>
                                 </select>
-                                <label class="chain-check" title="If a video already has captions, use them instead of downloading + transcribing the audio (much faster, no API cost). Manual subs preferred; falls back to the video's auto-captions, then to audio.">
+                                <label class="chain-check" data-i18n-title="creators.preferSubsTitle" title="If a video already has captions, use them instead of downloading + transcribing the audio (much faster, no API cost). Manual subs preferred; falls back to the video's auto-captions, then to audio.">
                                     <input type="checkbox" id="chain-prefer-subs">
-                                    Prefer subtitles
+                                    <span data-i18n="creators.preferSubs">Prefer subtitles</span>
                                 </label>
-                                <label class="chain-check" title="Let the analysis model verify papers, models, data, and mangled entity names with live Google Search before judging them. Fixes 'confidently calls real recent things fake' — but slower and uses search quota. Worth it for time-sensitive / technical content.">
+                                <select id="chain-sub-lang" class="search-input chain-small chain-sub-lang"
+                                        data-i18n-title="creators.subLangTitle"
+                                        title="Which subtitle language counts. Auto = the video's own language only; a specific language is required exactly — otherwise the audio is transcribed.">
+                                    <option value="auto" data-i18n="subs.auto">Auto — the video's own language</option>
+                                    <option value="off" data-i18n="subs.off">Off — always transcribe the audio</option>
+                                    <option value="zh">中文</option>
+                                    <option value="en">English</option>
+                                    <option value="ja">日本語</option>
+                                    <option value="ko">한국어</option>
+                                    <option value="es">Español</option>
+                                    <option value="fr">Français</option>
+                                    <option value="de">Deutsch</option>
+                                    <option value="ru">Русский</option>
+                                </select>
+                                <label class="chain-check" data-i18n-title="creators.verifyTitle" title="Let the analysis model verify papers, models, data, and mangled entity names with live Google Search before judging them. Fixes 'confidently calls real recent things fake' — but slower and uses search quota. Worth it for time-sensitive / technical content.">
                                     <input type="checkbox" id="chain-verify" checked>
-                                    Verify facts (web)
+                                    <span data-i18n="creators.verify">Verify facts (web)</span>
                                 </label>
-                                <label class="chain-check" title="If the cloud engine fails (e.g. quota), fall back to local Whisper for that video instead of leaving it failed. Off by default — otherwise it just fails and you re-run on the same engine (e.g. once your quota is back).">
+                                <label class="chain-check" data-i18n-title="creators.fallbackWhisperTitle" title="If the cloud engine fails (e.g. quota), fall back to local Whisper for that video instead of leaving it failed. Off by default — otherwise it just fails and you re-run on the same engine (e.g. once your quota is back).">
                                     <input type="checkbox" id="chain-fallback-whisper">
-                                    Whisper fallback
+                                    <span data-i18n="creators.fallbackWhisper">Whisper fallback</span>
                                 </label>
-                                <label class="chain-check" title="After building the portrait, run a self-critique pass: pull out every evaluative claim, send a skeptic per claim to refute it against the evidence cards, then cut the unsupported ones and soften the overstated ones (with a 证伪留痕 appendix). Costs extra calls; on for high-stakes reads.">
+                                <label class="chain-check" data-i18n-title="creators.selfVerifyTitle" title="After building the portrait, run a self-critique pass: pull out every evaluative claim, send a skeptic per claim to refute it against the evidence cards, then cut the unsupported ones and soften the overstated ones (with a 证伪留痕 appendix). Costs extra calls; on for high-stakes reads.">
                                     <input type="checkbox" id="chain-self-verify" checked>
-                                    Self-verify
+                                    <span data-i18n="creators.selfVerify">Self-verify</span>
                                 </label>
                             </div>
                         </details>
                     </div>
-                    <p class="chain-hint">YouTube tip: use <code>channel/videos</code>. Bilibili &amp; other
+                    <p class="chain-hint" data-i18n-html="creators.hint">YouTube tip: use <code>channel/videos</code>. Bilibili &amp; other
                        yt-dlp sites work too. <b>Prefer subtitles</b> skips download + transcription when a
                        video already has captions.</p>
                 </form>
 
                 <div id="creators-grid" class="creators-grid"></div>
-                <p id="creators-empty" class="history-empty hidden">No creators yet — paste a link above to analyze one.</p>
+                <p id="creators-empty" class="history-empty hidden" data-i18n="creators.empty">No creators yet — paste a link above to analyze one.</p>
             </section>
 
             <!-- ===== Tab: Library ===== -->
             <section id="tab-library" class="tab-panel">
                 <div class="hero">
-                    <h1>Library<span class="accent">.</span></h1>
-                    <p>Every transcript and analysis document, searchable in one place.</p>
+                    <h1 data-i18n="library.title">Library<span class="accent">.</span></h1>
+                    <p data-i18n="library.subtitle">Every transcript and analysis document, searchable in one place.</p>
                 </div>
 
                 <div class="lib-subnav">
-                    <button class="sub-tab active" data-lib="transcripts">Transcripts</button>
-                    <button class="sub-tab" data-lib="docs">Analyses</button>
+                    <button class="sub-tab active" data-lib="transcripts" data-i18n="library.transcripts">Transcripts</button>
+                    <button class="sub-tab" data-lib="docs" data-i18n="library.analyses">Analyses</button>
                 </div>
 
                 <!-- Transcripts -->
@@ -282,35 +332,37 @@
                     <div id="history-section">
                         <div class="history-card">
                             <div class="history-header">
-                                <h2>History <span id="history-count" class="history-count"></span></h2>
+                                <h2><span data-i18n="library.history">History</span> <span id="history-count" class="history-count"></span></h2>
                                 <div class="history-header-actions">
-                                    <button id="enrich-btn" class="btn-secondary" title="Use AI to add titles &amp; tags to untitled records">
-                                        Auto-title
+                                    <button id="enrich-btn" class="btn-secondary" data-i18n-title="library.autoTitleTitle" title="Use AI to add titles &amp; tags to untitled records">
+                                        <span data-i18n="library.autoTitle">Auto-title</span>
                                     </button>
-                                    <button id="clear-history-btn" class="btn-secondary btn-danger" title="Clear all history">
-                                        Clear
+                                    <button id="clear-history-btn" class="btn-secondary btn-danger" data-i18n-title="library.clearTitle" title="Clear all history">
+                                        <span data-i18n="library.clear">Clear</span>
                                     </button>
                                 </div>
                             </div>
                             <div class="history-toolbar">
                                 <input type="search" id="search-input" class="search-input"
-                                       placeholder="Search titles, filenames, or transcript text…">
+                                       data-i18n-placeholder="library.searchPlaceholder"
+                                       placeholder="Search titles, filenames, transcript text — or paste a video link…">
                                 <div id="source-filters" class="filter-chips">
-                                    <button class="chip active" data-source="">All sources</button>
-                                    <button class="chip" data-source="mine">🙋 Mine</button>
-                                    <button class="chip" data-source="pipeline">🎬 From Creators</button>
+                                    <button class="chip active" data-source="" data-i18n="library.allSources">All sources</button>
+                                    <button class="chip" data-source="mine" data-i18n="library.mine">🙋 Mine</button>
+                                    <button class="chip" data-source="pipeline" data-i18n="library.fromCreators">🎬 From Creators</button>
                                 </div>
                                 <div id="engine-filters" class="filter-chips">
-                                    <button class="chip active" data-engine="">All</button>
-                                    <button class="chip" data-engine="gemini">Gemini</button>
-                                    <button class="chip" data-engine="qwenasr">Qwen-ASR</button>
-                                    <button class="chip" data-engine="dashscope">DashScope</button>
-                                    <button class="chip" data-engine="precise">Precise</button>
-                                    <button class="chip" data-engine="whisper">Whisper</button>
+                                    <button class="chip active" data-engine="" data-i18n="library.allEngines">All</button>
+                                    <button class="chip" data-engine="gemini" data-i18n="engine.gemini">Gemini</button>
+                                    <button class="chip" data-engine="gemini35" data-i18n="engine.gemini35">Gemini 3.5 Transcribe</button>
+                                    <button class="chip" data-engine="qwenasr" data-i18n="engine.qwenasr">Qwen-ASR</button>
+                                    <button class="chip" data-engine="dashscope" data-i18n="engine.dashscope">DashScope</button>
+                                    <button class="chip" data-engine="precise" data-i18n="engine.precise">Precise</button>
+                                    <button class="chip" data-engine="whisper" data-i18n="engine.whisper">Whisper</button>
                                 </div>
                             </div>
                             <div id="history-list" class="history-list">
-                                <p class="history-empty">No transcripts yet</p>
+                                <p class="history-empty" data-i18n="library.noTranscripts">No transcripts yet</p>
                             </div>
                         </div>
                     </div>
@@ -320,12 +372,12 @@
                 <div id="lib-docs" class="lib-panel">
                     <div class="history-card">
                         <div class="history-header">
-                            <h2>Analyses</h2>
-                            <button id="docs-refresh" class="btn-secondary" title="Refresh">Refresh</button>
+                            <h2 data-i18n="library.analyses">Analyses</h2>
+                            <button id="docs-refresh" class="btn-secondary" data-i18n-title="library.refreshTitle" data-i18n="library.refresh" title="Refresh">Refresh</button>
                         </div>
-                        <p class="chain-hint">Documents produced by creator analyses. Click to read — no download needed.</p>
+                        <p class="chain-hint" data-i18n="library.docsHint">Documents produced by creator analyses. Click to read — no download needed.</p>
                         <div id="docs-list" class="docs-list">
-                            <p class="history-empty">No analysis documents yet — analyze a creator first</p>
+                            <p class="history-empty" data-i18n="library.noDocs">No analysis documents yet — analyze a creator first</p>
                         </div>
                     </div>
                 </div>
@@ -335,7 +387,7 @@
         <!-- ===== Transcript Detail View ===== -->
         <div id="detail-view" class="hidden">
             <div class="detail-top-bar">
-                <button id="detail-back-btn" class="btn-secondary">← Back</button>
+                <button id="detail-back-btn" class="btn-secondary" data-i18n="common.back">← Back</button>
                 <span id="detail-title" class="detail-title"></span>
             </div>
 
@@ -349,7 +401,7 @@
 
             <div id="detail-summary-section" class="hidden">
                 <div class="summary-card">
-                    <h2>Summary</h2>
+                    <h2 data-i18n="detail.summary">Summary</h2>
                     <div id="detail-summary-overview" class="summary-overview"></div>
                     <div id="detail-summary-sections" class="summary-sections"></div>
                 </div>
@@ -357,11 +409,11 @@
 
             <div id="detail-results-section">
                 <div class="results-header">
-                    <h2>Transcript</h2>
+                    <h2 data-i18n="detail.transcript">Transcript</h2>
                     <div class="results-actions">
-                        <button id="detail-copy-btn" class="btn-secondary" title="Copy text">Copy</button>
-                        <button id="detail-download-btn" class="btn-secondary" title="Download as TXT">TXT</button>
-                        <button id="detail-srt-btn" class="btn-secondary" title="Download subtitles">SRT</button>
+                        <button id="detail-copy-btn" class="btn-secondary" data-i18n-title="detail.copyTitle" title="Copy text"><span data-i18n="detail.copy">Copy</span></button>
+                        <button id="detail-download-btn" class="btn-secondary" data-i18n-title="detail.downloadTitle" title="Download as TXT"><span data-i18n="detail.download">TXT</span></button>
+                        <button id="detail-srt-btn" class="btn-secondary" data-i18n-title="detail.srtTitle" title="Download subtitles"><span data-i18n="detail.srt">SRT</span></button>
                     </div>
                 </div>
                 <div id="detail-segments-container" class="segments-container"></div>
@@ -371,13 +423,13 @@
         <!-- ===== Chain Detail View (info panel + collapsible episode grid) ===== -->
         <div id="chain-detail-view" class="hidden">
             <div class="detail-top-bar">
-                <button id="chain-detail-back" class="btn-secondary">← Back</button>
+                <button id="chain-detail-back" class="btn-secondary" data-i18n="common.back">← Back</button>
                 <span id="chain-detail-title" class="detail-title"></span>
             </div>
             <div id="chain-detail-meta" class="detail-meta"></div>
             <div id="chain-detail-info"></div>
             <button id="chain-episodes-toggle" class="episodes-toggle" type="button">
-                Episodes <span id="chain-episodes-count"></span> ▸
+                <span data-i18n="chainDetail.episodes">Episodes</span> <span id="chain-episodes-count"></span> ▸
             </button>
             <div id="chain-detail-grid" class="video-grid hidden"></div>
         </div>
@@ -385,9 +437,9 @@
         <!-- ===== Analysis Doc Reading View ===== -->
         <div id="doc-view" class="hidden">
             <div class="detail-top-bar">
-                <button id="doc-back-btn" class="btn-secondary">← Back</button>
+                <button id="doc-back-btn" class="btn-secondary" data-i18n="common.back">← Back</button>
                 <span id="doc-title" class="detail-title"></span>
-                <button id="doc-download-btn" class="btn-secondary" title="Download the Markdown file">Download .md</button>
+                <button id="doc-download-btn" class="btn-secondary" data-i18n-title="doc.downloadTitle" title="Download the Markdown file"><span data-i18n="doc.download">Download .md</span></button>
             </div>
             <div id="doc-content" class="md-body"></div>
         </div>
@@ -397,213 +449,247 @@
     <!-- ===== Settings modal (two-pane, Claude-style) ===== -->
     <div id="settings-overlay" class="settings-overlay hidden">
         <div class="settings-modal">
-            <button id="settings-close" class="settings-x" aria-label="Close">×</button>
+            <button id="settings-close" class="settings-x" data-i18n-aria-label="common.close" aria-label="Close">×</button>
 
             <nav class="settings-nav">
-                <div class="settings-nav-title">Settings</div>
-                <button class="settings-nav-item active" data-pane="gemini">Gemini</button>
-                <button class="settings-nav-item" data-pane="dashscope">DashScope</button>
-                <button class="settings-nav-item" data-pane="openrouter">OpenRouter</button>
-                <button class="settings-nav-item" data-pane="models">Models</button>
-                <button class="settings-nav-item" data-pane="storage">Storage</button>
-                <button class="settings-nav-item" data-pane="about">About</button>
+                <label class="settings-search">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+                    <input type="search" id="settings-search" data-i18n-placeholder="settings.search" placeholder="Search" autocomplete="off">
+                </label>
+                <div class="settings-nav-group" data-i18n="settings.groupYou">You</div>
+                <button class="settings-nav-item active" data-pane="reflect"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 9 9"/><path d="M12 7v5l3 2"/><path d="M17 3h4v4"/><path d="M21 3l-5 5"/></svg><span data-i18n="reflect.open">Reflect</span></button>
+                <button class="settings-nav-item" data-pane="library"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10"/><path d="M10 20V4"/><path d="M16 20v-7"/><path d="M22 20V8"/><path d="M2 20h20"/></svg><span data-i18n="library.navTitle">Library</span></button>
+                <div class="settings-nav-group" data-i18n="settings.title">Settings</div>
+                <button class="settings-nav-item" data-pane="gemini"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/></svg><span data-i18n="settings.paneGemini">Gemini</span></button>
+                <button class="settings-nav-item" data-pane="dashscope"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M4 12h16"/><path d="M12 4c3 3 3 13 0 16"/></svg><span data-i18n="settings.paneDashscope">DashScope</span></button>
+                <button class="settings-nav-item" data-pane="openrouter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h10l4 5-4 5H4"/><path d="M14 7l6 5-6 5"/></svg><span data-i18n="settings.paneOpenrouter">OpenRouter</span></button>
+                <button class="settings-nav-item" data-pane="models"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 9h6v6H9z"/></svg><span data-i18n="settings.paneModels">Models</span></button>
+                <button class="settings-nav-item" data-pane="storage"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16v4H4z"/><path d="M4 14h16v4H4z"/><path d="M7 8h.01M7 16h.01"/></svg><span data-i18n="settings.paneStorage">Storage</span></button>
+                <div class="settings-nav-group" data-i18n="settings.groupPlatform">Platform</div>
+                <button class="settings-nav-item" data-pane="about"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 8h.01"/></svg><span data-i18n="settings.paneAbout">About</span></button>
+                <div class="settings-nav-empty hidden" data-i18n="settings.searchEmpty">No match</div>
             </nav>
 
             <div class="settings-main">
                 <div class="settings-panes">
+                    <!-- Reflect：回顾这段时间在听什么 -->
+                    <section class="settings-pane active reflect-pane" data-pane="reflect">
+                    <div class="reflect-top">
+                        <div>
+                            <div class="reflect-title" data-i18n="reflect.title">Your reflection</div>
+                            <div class="reflect-sub" data-i18n="reflect.subtitle">Based on your transcripts in Verbatim.</div>
+                        </div>
+                        <div class="reflect-ctl">
+                            <label class="reflect-range">
+                                <select id="reflect-range">
+                                    <option value="1m" data-i18n="reflect.past1m">Past month</option>
+                                    <option value="3m" data-i18n="reflect.past3m">Past 3 months</option>
+                                    <option value="6m" data-i18n="reflect.past6m">Past 6 months</option>
+                                    <option value="12m" data-i18n="reflect.past12m">Past year</option>
+                                </select>
+                                <span class="reflect-range-caret">⌄</span>
+                            </label>
+                            <button id="reflect-refresh" class="reflect-refresh" type="button"
+                                    data-i18n-title="reflect.refresh" title="Regenerate">
+                                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v5h-5"/></svg>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div id="reflect-body" class="reflect-body">
+                        <div class="reflect-loading" data-i18n="reflect.loading">Reading your library…</div>
+                    </div>
+
+                    </section>
+
+                    <!-- Library：资料库总量 -->
+                    <section class="settings-pane reflect-pane" data-pane="library">
+                        <div class="reflect-top">
+                            <div>
+                                <div class="reflect-title" data-i18n="library.navTitle">Library</div>
+                                <div class="reflect-sub" data-i18n="library.statsSub">Everything you have transcribed, all time.</div>
+                            </div>
+                        </div>
+                        <div id="library-body" class="reflect-body">
+                            <div class="reflect-loading" data-i18n="reflect.loading">Reading your library…</div>
+                        </div>
+                    </section>
+
                     <!-- Gemini -->
-                    <section class="settings-pane active" data-pane="gemini">
-                        <h3>Gemini</h3>
-                        <p class="settings-desc">
+                    <section class="settings-pane" data-pane="gemini">
+                        <h3 data-i18n="settings.paneGemini">Gemini</h3>
+                        <p class="settings-desc" data-i18n="settings.geminiDesc">
                             Powers cloud transcription, summaries, and the pipeline analysis.
                             Everything stays on this machine except the calls to Google.
                         </p>
                         <label class="settings-field">
-                            <span class="settings-label">API key
-                                <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">get one ↗</a>
+                            <span class="settings-label"><span data-i18n="settings.apiKey">API key</span>
+                                <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener" data-i18n="settings.getOne">get one ↗</a>
                             </span>
                             <input type="password" id="set-gemini-key" class="search-input"
-                                   placeholder="paste key…" autocomplete="off">
+                                   data-i18n-placeholder="settings.pasteKey" placeholder="paste key…" autocomplete="off">
                         </label>
                         <label class="settings-field">
-                            <span class="settings-label">Base URL
-                                <span class="settings-opt">optional · proxy / mainland China</span>
+                            <span class="settings-label"><span data-i18n="settings.baseUrl">Base URL</span>
+                                <span class="settings-opt" data-i18n="settings.baseUrlOpt">optional · proxy / mainland China</span>
                             </span>
                             <input type="text" id="set-gemini-base" class="search-input"
+                                   data-i18n-placeholder="settings.geminiBasePlaceholder"
                                    placeholder="https://your-proxy.example   (blank = official endpoint)"
                                    autocomplete="off">
                         </label>
                         <div class="settings-test-row">
-                            <button type="button" id="test-gemini" class="btn-secondary">Test connection</button>
+                            <button type="button" id="test-gemini" class="btn-secondary" data-i18n="settings.testConnection">Test connection</button>
                             <span id="test-gemini-res" class="test-res"></span>
                         </div>
                     </section>
 
                     <!-- DashScope -->
                     <section class="settings-pane" data-pane="dashscope">
-                        <h3>DashScope</h3>
-                        <p class="settings-desc">
+                        <h3 data-i18n="settings.paneDashscope">DashScope</h3>
+                        <p class="settings-desc" data-i18n-html="settings.dashscopeDesc">
                             Alibaba Cloud key — powers the <strong>Qwen-ASR</strong> engine, the speaker
                             diarization half of <strong>Precise</strong>, and the Alibaba analysis models.
                             <strong>⚠ It moderates content</strong> — don't use it for politically
                             sensitive audio; prefer local Whisper or Gemini for that.
                         </p>
                         <label class="settings-field">
-                            <span class="settings-label">API key
-                                <a href="https://bailian.console.aliyun.com/" target="_blank" rel="noopener">get one ↗</a>
+                            <span class="settings-label"><span data-i18n="settings.apiKey">API key</span>
+                                <a href="https://bailian.console.aliyun.com/" target="_blank" rel="noopener" data-i18n="settings.getOne">get one ↗</a>
                             </span>
                             <input type="password" id="set-dashscope-key" class="search-input"
-                                   placeholder="paste key…" autocomplete="off">
+                                   data-i18n-placeholder="settings.pasteKey" placeholder="paste key…" autocomplete="off">
                         </label>
                         <div class="settings-test-row">
-                            <button type="button" id="test-dashscope" class="btn-secondary">Test connection</button>
+                            <button type="button" id="test-dashscope" class="btn-secondary" data-i18n="settings.testConnection">Test connection</button>
                             <span id="test-dashscope-res" class="test-res"></span>
                         </div>
                     </section>
 
                     <!-- OpenRouter -->
                     <section class="settings-pane" data-pane="openrouter">
-                        <h3>OpenRouter</h3>
-                        <p class="settings-desc">
+                        <h3 data-i18n="settings.paneOpenrouter">OpenRouter</h3>
+                        <p class="settings-desc" data-i18n-html="settings.openrouterDesc">
                             One key for Claude and other frontier models — powers the
                             <strong>Claude Opus</strong> analysis options in Creators (with thinking enabled).
                             No content moderation. Note: Opus is premium-priced and the pipeline
                             analyzes every episode, so cost scales with episode count.
                         </p>
                         <label class="settings-field">
-                            <span class="settings-label">API key
-                                <a href="https://openrouter.ai/settings/keys" target="_blank" rel="noopener">get one ↗</a>
+                            <span class="settings-label"><span data-i18n="settings.apiKey">API key</span>
+                                <a href="https://openrouter.ai/settings/keys" target="_blank" rel="noopener" data-i18n="settings.getOne">get one ↗</a>
                             </span>
                             <input type="password" id="set-openrouter-key" class="search-input"
-                                   placeholder="paste key…" autocomplete="off">
+                                   data-i18n-placeholder="settings.pasteKey" placeholder="paste key…" autocomplete="off">
                         </label>
                         <div class="settings-test-row">
-                            <button type="button" id="test-openrouter" class="btn-secondary">Test connection</button>
+                            <button type="button" id="test-openrouter" class="btn-secondary" data-i18n="settings.testConnection">Test connection</button>
                             <span id="test-openrouter-res" class="test-res"></span>
                         </div>
                     </section>
 
                     <!-- Models -->
                     <section class="settings-pane" data-pane="models">
-                        <h3>Models</h3>
-                        <p class="settings-desc">
+                        <h3 data-i18n="settings.paneModels">Models</h3>
+                        <p class="settings-desc" data-i18n="settings.modelsDesc">
                             Saved instantly — the next task picks them up, no restart. Leave a field
                             blank to use the default.
                         </p>
                         <label class="settings-field">
-                            <span class="settings-label">Whisper model
-                                <span class="settings-opt">local transcription · bigger = better zh accuracy, slower first load</span>
+                            <span class="settings-label"><span data-i18n="settings.whisperModel">Whisper model</span>
+                                <span class="settings-opt" data-i18n="settings.whisperModelOpt">local transcription · bigger = better zh accuracy, slower first load</span>
                             </span>
                             <select id="set-whisper-model" class="search-input">
-                                <option value="">small (default)</option>
-                                <option value="tiny">tiny — fastest, rough</option>
-                                <option value="base">base</option>
-                                <option value="small">small</option>
-                                <option value="medium">medium</option>
-                                <option value="large-v3">large-v3 — best (needs ~4GB RAM, fine on 48GB)</option>
+                                <option value="" data-i18n="settings.wmSmallDefault">small (default)</option>
+                                <option value="tiny" data-i18n="settings.wmTiny">tiny — fastest, rough</option>
+                                <option value="base" data-i18n="settings.wmBase">base</option>
+                                <option value="small" data-i18n="settings.wmSmall">small</option>
+                                <option value="medium" data-i18n="settings.wmMedium">medium</option>
+                                <option value="large-v3" data-i18n="settings.wmLarge">large-v3 — best (needs ~4GB RAM, fine on 48GB)</option>
                             </select>
                         </label>
                         <label class="settings-field">
-                            <span class="settings-label">Gemini · transcription model
-                                <span class="settings-opt">default gemini-2.5-flash</span>
+                            <span class="settings-label"><span data-i18n="settings.geminiTranscribeModel">Gemini · transcription model</span>
+                                <span class="settings-opt" data-i18n="settings.geminiTranscribeOpt">default gemini-2.5-flash</span>
                             </span>
                             <input type="text" id="set-gemini-transcribe" class="search-input"
                                    placeholder="gemini-2.5-flash (default) · e.g. gemini-2.5-pro" autocomplete="off">
                         </label>
                         <label class="settings-field">
-                            <span class="settings-label">Gemini · analysis (synthesis) model
-                                <span class="settings-opt">default gemini-2.5-pro</span>
+                            <span class="settings-label"><span data-i18n="settings.geminiAnalysisModel">Gemini · analysis (synthesis) model</span>
+                                <span class="settings-opt" data-i18n="settings.geminiAnalysisOpt">default gemini-2.5-pro</span>
                             </span>
                             <input type="text" id="set-gemini-analysis" class="search-input"
                                    placeholder="gemini-2.5-pro (default) · e.g. gemini-3.1-pro-preview" autocomplete="off">
                         </label>
                         <label class="settings-field">
-                            <span class="settings-label">Gemini · extraction model
-                                <span class="settings-opt">default gemini-2.5-flash · cheap mechanical step</span>
+                            <span class="settings-label"><span data-i18n="settings.geminiExtractModel">Gemini · extraction model</span>
+                                <span class="settings-opt" data-i18n="settings.geminiExtractOpt">default gemini-2.5-flash · cheap mechanical step</span>
                             </span>
                             <input type="text" id="set-gemini-extract" class="search-input"
                                    placeholder="gemini-2.5-flash (default)" autocomplete="off">
                         </label>
-                        <p class="settings-opt">DeepSeek / Kimi / GLM / Qwen model names are per-analysis presets (pick the model in the Creators form).</p>
+                        <p class="settings-opt" data-i18n="settings.modelsFooter">DeepSeek / Kimi / GLM / Qwen model names are per-analysis presets (pick the model in the Creators form).</p>
                     </section>
 
                     <!-- Storage -->
                     <section class="settings-pane" data-pane="storage">
-                        <h3>Storage</h3>
-                        <p class="settings-desc">
+                        <h3 data-i18n="settings.paneStorage">Storage</h3>
+                        <p class="settings-desc" data-i18n="settings.storageDesc">
                             After a recording is transcribed, its audio is only kept for playback.
                             Compressing it to Opus (24 kbps mono) keeps speech clear while shrinking
                             the library by roughly 70%. New transcriptions are compressed automatically.
                         </p>
                         <div class="storage-stat">
-                            <div><b id="storage-size">—</b><span>audio on disk</span></div>
-                            <div><b id="storage-done">—</b><span>already compressed</span></div>
+                            <div><b id="storage-size">—</b><span data-i18n="settings.audioOnDisk">audio on disk</span></div>
+                            <div><b id="storage-done">—</b><span data-i18n="settings.alreadyCompressed">already compressed</span></div>
                         </div>
                         <div class="settings-test-row">
-                            <button type="button" id="compress-all" class="btn-secondary">Compress existing library</button>
+                            <button type="button" id="compress-all" class="btn-secondary" data-i18n="settings.compressAll">Compress existing library</button>
                             <span id="compress-res" class="test-res"></span>
                         </div>
-                        <p class="settings-opt">Lossy and irreversible — fine for playback, but you can't re-transcribe at original quality afterward. Chrome/Firefox play Opus natively.</p>
+                        <p class="settings-opt" data-i18n="settings.storageFooter">Lossy and irreversible — fine for playback, but you can't re-transcribe at original quality afterward. Chrome/Firefox play Opus natively.</p>
                     </section>
 
                     <!-- About -->
                     <section class="settings-pane" data-pane="about">
-                        <h3>About</h3>
-                        <p class="settings-desc">
+                        <h3 data-i18n="settings.paneAbout">About</h3>
+                        <p class="settings-desc" data-i18n-html="settings.aboutDesc1">
                             <strong>Verbatim</strong> — a local, self-hosted tool that turns audio and video
                             into transcripts, then into cross-episode research.
                         </p>
-                        <p class="settings-desc">
+                        <p class="settings-desc" data-i18n-html="settings.aboutDesc2">
                             Keys you enter here are stored only in <code>settings.local.json</code> on this
                             machine and are never sent anywhere except to the provider they belong to. Leave a
                             key field blank to keep the current one.
                         </p>
                         <p class="settings-desc">
-                            <a href="https://github.com/xyzxinlu-max/getAudio" target="_blank" rel="noopener">Source on GitHub ↗</a>
+                            <a href="https://github.com/xyzxinlu-max/getAudio" target="_blank" rel="noopener" data-i18n="settings.sourceLink">Source on GitHub ↗</a>
                         </p>
                     </section>
                 </div>
 
-                <div class="settings-foot">
+                <div id="settings-foot" class="settings-foot">
                     <span id="settings-msg" class="settings-msg"></span>
-                    <button type="button" id="settings-save" class="btn-primary">Save</button>
+                    <button type="button" id="settings-save" class="btn-primary" data-i18n="settings.save">Save</button>
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- ===== 左下角个人数据展板 ===== -->
+    <!-- ===== 左下角按钮行 ===== -->
     <div id="stats-fab" class="stats-fab">
-        <div id="stats-panel" class="stats-panel hidden">
-            <div class="stats-head">Your library</div>
-            <div class="stats-nums">
-                <div class="stat-num"><b id="stat-hours">—</b><span>hours transcribed</span></div>
-                <div class="stat-num"><b id="stat-chars">—</b><span>characters</span></div>
-                <div class="stat-num"><b id="stat-count">—</b><span>transcripts</span></div>
-            </div>
-            <div class="stats-block">
-                <div class="stats-label">Cumulative hours</div>
-                <div id="stats-chart"></div>
-            </div>
-            <div class="stats-block">
-                <div class="stats-label stats-label-row">
-                    <span>Fields you follow</span>
-                    <button id="stats-lang" class="stats-lang" type="button"
-                            title="Toggle tag language">EN</button>
-                </div>
-                <div id="stats-tags"></div>
-            </div>
-        </div>
         <div class="fab-row">
-            <button id="stats-toggle" class="stats-toggle" title="Your stats">
-                <span class="stats-dot"></span><span>Your stats</span>
+            <button id="reflect-open" class="stats-toggle" data-i18n-title="reflect.open" title="Reflect">
+                <span class="stats-dot"></span><span data-i18n="reflect.open">Reflect</span>
             </button>
-            <button id="settings-open" class="stats-toggle" title="Settings">
-                <span class="fab-gear">⚙</span><span>Settings</span>
+            <button id="settings-open" class="stats-toggle" data-i18n-title="settings.title" title="Settings">
+                <span class="fab-gear">⚙</span><span data-i18n="settings.title">Settings</span>
             </button>
         </div>
     </div>
 
-    <script src="/static/app.js"></script>
+    <script src="/static/i18n.js?v={{ static_version }}"></script>
+    <script src="/static/app.js?v={{ static_version }}"></script>
 </body>
 </html>

@@ -18,7 +18,8 @@ from datetime import datetime
 
 from config import (GEMINI_API_KEY, GEMINI_ANALYSIS_MODEL,
                     GEMINI_EXTRACT_MODEL, GEMINI_FALLBACK_MODELS,
-                    DASHSCOPE_API_KEY, ALIYUN_COMPAT_BASE, resolve_analysis,
+                    DASHSCOPE_API_KEY, ALIYUN_COMPAT_BASE,
+                    OPENROUTER_COMPAT_BASE, resolve_analysis,
                     make_gemini_client)
 from harness import fanout, agent
 
@@ -288,12 +289,15 @@ def _call_gemini(prompt, grounded=False, model=None):
     raise RuntimeError(f'Gemini 调用失败（已试模型 {ladder}）: {last_err}')
 
 
-def _call_openai_compat(prompt, model, base_url, api_key):
-    """OpenAI 兼容端点（阿里云百炼：DeepSeek/Qwen/Kimi/GLM）。带重试，返回文本或抛异常。"""
+def _call_openai_compat(prompt, model, base_url, api_key, extra_payload=None,
+                        label='模型'):
+    """OpenAI 兼容端点（阿里云百炼 / OpenRouter）。带重试，返回文本或抛异常。"""
     import requests
     url = base_url.rstrip('/') + '/chat/completions'
     headers = {'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'}
     payload = {'model': model, 'messages': [{'role': 'user', 'content': prompt}]}
+    if extra_payload:
+        payload.update(extra_payload)
     last_err = None
     for attempt in range(1, _MAX_ATTEMPTS + 1):
         try:
@@ -312,16 +316,25 @@ def _call_openai_compat(prompt, model, base_url, api_key):
             last_err = e
         if attempt < _MAX_ATTEMPTS:
             time.sleep(5 * attempt)
-    raise RuntimeError(f'阿里云({model}) 调用失败: {last_err}')
+    raise RuntimeError(f'{label}({model}) 调用失败: {last_err}')
 
 
 def _llm(prompt, provider, model, grounded=False):
-    """按 provider 分发：gemini 走 google-genai，aliyun 走百炼 OpenAI 兼容。"""
+    """按 provider 分发：gemini 走 google-genai，aliyun 走百炼，openrouter 走 OpenRouter。"""
     if provider == 'aliyun':
         key = DASHSCOPE_API_KEY or os.environ.get('DASHSCOPE_API_KEY', '')
         if not key:
             raise RuntimeError('DASHSCOPE_API_KEY 未设置（阿里云分析需要）')
-        return _call_openai_compat(prompt, model, ALIYUN_COMPAT_BASE, key)
+        return _call_openai_compat(prompt, model, ALIYUN_COMPAT_BASE, key,
+                                   label='阿里云')
+    if provider == 'openrouter':
+        key = os.environ.get('OPENROUTER_API_KEY', '')
+        if not key:
+            raise RuntimeError('OPENROUTER_API_KEY 未设置 — 在 Settings → OpenRouter 里填 key')
+        # reasoning: OpenRouter 的统一思考开关；对 Claude 4.6+/5 映射为 adaptive thinking
+        return _call_openai_compat(prompt, model, OPENROUTER_COMPAT_BASE, key,
+                                   extra_payload={'reasoning': {'enabled': True}},
+                                   label='OpenRouter')
     return _call_gemini(prompt, grounded=grounded, model=model)
 
 

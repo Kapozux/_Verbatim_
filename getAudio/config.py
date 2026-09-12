@@ -59,7 +59,7 @@ RESULTS_FOLDER = os.path.join(DATA_DIR, 'results')
 # 默认 4GB，可用 MAX_UPLOAD_MB 环境变量调。本地单用户，放宽无碍。
 MAX_UPLOAD_MB = int(os.environ.get('MAX_UPLOAD_MB', '4096'))
 MAX_CONTENT_LENGTH = MAX_UPLOAD_MB * 1024 * 1024
-AUDIO_EXTENSIONS = {'mp3', 'wav', 'flac', 'm4a', 'ogg', 'webm'}
+AUDIO_EXTENSIONS = {'mp3', 'wav', 'flac', 'm4a', 'ogg', 'opus', 'webm'}
 VIDEO_EXTENSIONS = {'mp4', 'mov', 'mkv', 'avi', 'm4v'}
 ALLOWED_EXTENSIONS = AUDIO_EXTENSIONS | VIDEO_EXTENSIONS
 
@@ -78,6 +78,9 @@ ENGINE_CONCURRENCY = {
     # 精准模式：单个任务内部会并发跑 Gemini 转写 + 阿里云说话人分离，最后再 Gemini 合并。
     # 一个任务实际打 2~3 次 Gemini + 1 次阿里云，所以并发压低到 4，避免叠加把两边都打爆。
     'precise': 4,
+    # Gemini 3.5 Transcribe：2026-08 才公开预览的新端点，配额/稳定性还没摸透，
+    # 先保守给 6（后面观察没问题再跟 gemini 引擎的 12 看齐）。
+    'gemini35': 6,
 }
 
 # 链条（URL→下载→转写→分析）的全局限流：所有链条共享，不按每条链条算。
@@ -164,6 +167,19 @@ def resolve_analysis(preset):
 # 卡片元数据（标题/标签）生成用 Flash：快、便宜，质量足够
 GEMINI_ENRICH_MODEL = 'gemini-2.5-flash'
 GEMINI_INLINE_LIMIT = 19 * 1024 * 1024  # 19 MB, use File API above this
+
+# 送云引擎的音频一律先压成 Opus 单声道 16k（ogg 容器）。
+# 下载下来的本来就是压缩过的 opus/m4a，之前先解成 WAV 再上传等于把体积放大
+# 三到八倍：15 分钟 WAV 29MB 超过上面的内联上限，每块都得走 File API 上传+轮询。
+# Opus 48k 一小时 ≈ 21MB、15 分钟一块 ≈ 5MB，直接内联字节送过去，省掉上传和等待。
+# Gemini 收到后内部统一降到 16kbps 处理，阿里云 ASR 也收 ogg/opus，精度不受影响。
+# 本地 Whisper 不走这条（无损 WAV 对它没有上传成本，也没必要多一次有损编码）。
+CLOUD_AUDIO_BITRATE = os.environ.get('CLOUD_AUDIO_BITRATE') or '48k'
+
+# Gemini 长音频按 15 分钟切块后，单个任务内同时在飞的块数（之前是一块一块串行）。
+# 全局总在飞请求数仍由 ENGINE_CONCURRENCY['gemini'] 封顶（transcribe_gemini 里有全局闸），
+# 所以这里只决定单个长文件能把自己拆多宽，不会叠加突破配额。
+GEMINI_CHUNK_CONCURRENCY = int(os.environ.get('GEMINI_CHUNK_CONCURRENCY') or 4)
 
 # DashScope (阿里云百炼)
 DASHSCOPE_API_KEY = os.environ.get('DASHSCOPE_API_KEY', '')
