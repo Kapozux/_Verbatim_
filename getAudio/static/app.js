@@ -2143,6 +2143,38 @@ async function loadDocs() {
     }
 }
 
+// 文档阅读页右栏「本页目录」：从渲染出的 h2/h3 生成；正文一变就重建（三处渲染入口共用）
+const docToc = document.getElementById('doc-toc');
+function buildDocToc() {
+    if (!docToc || !docContent) return;
+    const heads = [...docContent.querySelectorAll('h2, h3')];
+    if (heads.length < 2) { docToc.classList.add('hidden'); docToc.innerHTML = ''; return; }
+    docToc.innerHTML = `<div class="doc-toc-title">${T('doc.toc')}</div>`;
+    heads.forEach((h, i) => {
+        if (!h.id) h.id = 'sec-' + i;
+        const a = document.createElement('a');
+        a.href = '#' + h.id; a.textContent = h.textContent.trim().slice(0, 80);
+        a.className = h.tagName === 'H3' ? 'h3' : '';
+        a.addEventListener('click', e => { e.preventDefault(); h.scrollIntoView({ behavior: 'smooth', block: 'start' }); });
+        docToc.appendChild(a);
+    });
+    docToc.classList.remove('hidden');
+}
+if (docContent) new MutationObserver(buildDocToc).observe(docContent, { childList: true });
+
+// 列表按视窗高度定可见量：把每个滚动容器到页面顶部的距离量出来写进 --list-top，
+// CSS 用 100vh − 它 − 角落按钮行 算 max-height。布局一变（切页、换行、窗口缩放）就重量。
+function fitListsToViewport() {
+    document.querySelectorAll('.history-list, #docs-list, .batch-list, .segments-container').forEach(el => {
+        if (!el.offsetParent) return;                       // 藏着的页面量不到，跳过
+        const top = Math.round(el.getBoundingClientRect().top + window.scrollY);
+        el.style.setProperty('--list-top', top + 'px');
+    });
+}
+window.addEventListener('load', fitListsToViewport);
+window.addEventListener('resize', fitListsToViewport);
+new ResizeObserver(() => requestAnimationFrame(fitListsToViewport)).observe(document.body);
+
 let docReturnTo = 'main';   // 打开文档前在哪：'main' | 'chainDetail'
 
 async function openDocView(chainId, encName) {

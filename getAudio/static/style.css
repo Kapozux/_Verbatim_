@@ -19,6 +19,15 @@
   --sans:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC","Hiragino Sans GB","Segoe UI",sans-serif;
   --serif:"Hoefler Text","Iowan Old Style","Palatino Linotype",Palatino,"Songti SC",Georgia,serif;
   --mono:ui-monospace,"SF Mono","Menlo","Consolas",monospace;
+
+  /* ===== 布局：全站一套边距 + 一个宽度上限；多栏按比例；两个断点（1080 / 700）===== */
+  --gutter: clamp(16px, 4vw, 96px);      /* 顶栏、正文、页脚、角落按钮共用，左右边缘对齐 */
+  --shell-w: 1800px;                      /* 唯一的宽度上限 */
+  --col-gap: clamp(24px, 3vw, 56px);      /* 多栏栏间距 */
+  --fab-h: 64px;                          /* 左下角按钮行占用的高度，页脚给它让位 */
+  --footer-h: 104px;                      /* 页脚总高（含给角落按钮让出的底部空间）*/
+  /* 视窗高度决定列表可见量：100vh − 列表顶部到页面顶部的距离（运行时量，写在元素的 --list-top 上）− 角落按钮行 */
+  --list-top-fallback: 470px;
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -642,8 +651,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 }
 
 /* === Responsive === */
-@media (max-width: 640px) {
-  .container { padding: 0 16px 48px; }
+@media (max-width: 700px) {
+  :root { --gutter: 16px; }
   .hero h1 { font-size: 36px; }
   form { padding: 20px; }
   .radio-option { min-width: 100%; }
@@ -928,3 +937,111 @@ html[lang="zh-CN"] .reflect-topic .desc { font-family: var(--sans); font-size: 1
 /* Storage：带复选框的设置行 */
 .settings-check { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
 .settings-check input { margin-top: 3px; accent-color: var(--coral); }
+
+
+/* ============================================================
+   响应式外壳（覆盖上面的旧尺寸规则）
+   规则：一套 --gutter、一个 --shell-w；多栏 minmax+fr；列表按 100vh 定高；
+   ≥1080 才开双栏，≤700 只改 --gutter；页脚钉底，给角落按钮让位。
+   ============================================================ */
+body { display: flex; flex-direction: column; }
+.container {
+  width: 100%; max-width: var(--shell-w); margin: 0 auto; padding: 0 var(--gutter);
+  flex: 1; display: flex; flex-direction: column; min-width: 0;
+}
+#main-view, #detail-view, #chain-detail-view, #doc-view { flex: 1; min-width: 0; }
+#main-view { display: flex; flex-direction: column; }
+.tab-panel.active { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.tab-panel > * { min-width: 0; }
+.hero { margin: 0; }
+
+/* 页脚：钉底，底部留出角落按钮的高度 */
+.site-footer {
+  margin-top: auto; padding: 14px 0 calc(var(--fab-h) + 8px); min-height: var(--footer-h);
+  border-top: 1px solid var(--line); font-size: 12px; color: var(--muted);
+  display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+}
+.site-footer a { color: var(--ink-soft); text-decoration: none; }
+.site-footer a:hover { color: var(--ink); }
+
+/* 角落按钮：左边缘 = 正文左边缘（外壳窄于视窗时按外壳算）*/
+.stats-fab {
+  left: max(var(--gutter), calc((100vw - var(--shell-w)) / 2 + var(--gutter)));
+  bottom: 16px;
+}
+
+/* 列表：按视窗高度定可见量，装不下在容器内滚 */
+/* 首屏填满：列表高度 = 视窗 − 列表顶部 − 页脚（页脚自身已含角落按钮的位置）− 卡片底边 */
+.history-list, #docs-list, .batch-list, .segments-container {
+  max-height: max(260px, calc(100vh - var(--list-top, var(--list-top-fallback)) - var(--footer-h) - 24px));
+  overflow: auto;
+}
+
+/* 卡片网格：多宽排几列，手机自然一列 */
+.creators-grid { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: clamp(14px, 1.5vw, 24px); }
+.creators-grid > * { min-width: 0; }
+
+/* 文档阅读：正文 + 右侧目录，不再是居中的窄柱子 */
+#doc-view { max-width: none; margin: 0; }
+.doc-toc { display: none; }
+
+/* ---------- ≥1080：多栏按 3:2 比例 ---------- */
+@media (min-width: 1080px) {
+  /* 转写：表单 | 队列（有队列时才分栏，队列贴顶跟随）*/
+  #tab-transcribe.active:has(#batch-section:not(.hidden)) {
+    display: grid; grid-template-columns: minmax(0, 3fr) minmax(320px, 2fr);
+    column-gap: var(--col-gap); align-items: start; align-content: start;
+  }
+  #tab-transcribe.active:has(#batch-section:not(.hidden)) > .hero { grid-column: 1 / -1; }
+  #tab-transcribe.active:has(#batch-section:not(.hidden)) > #upload-form,
+  #tab-transcribe.active:has(#batch-section:not(.hidden)) > #error-section { grid-column: 1; }
+  #tab-transcribe.active:has(#batch-section:not(.hidden)) > #batch-section {
+    grid-column: 2; grid-row: 2 / span 2; position: sticky; top: 16px;
+  }
+
+  /* 小红书：采集表单 | 分析卡 */
+  #tab-xhs.active {
+    display: grid; grid-template-columns: minmax(0, 3fr) minmax(320px, 2fr);
+    column-gap: var(--col-gap); align-items: start; align-content: start;
+  }
+  #tab-xhs.active > .hero { grid-column: 1 / -1; }
+  #tab-xhs.active > form, #tab-xhs.active > #xhs-progress { grid-column: 1; }
+  #tab-xhs.active > .xhs-analyze-card { grid-column: 2; grid-row: 2 / span 2; position: sticky; top: 16px; }
+
+  /* 转写详情：正文 | 摘要（有摘要时）*/
+  #detail-view:has(#detail-summary-section:not(.hidden)) {
+    display: grid; grid-template-columns: minmax(0, 3fr) minmax(320px, 2fr);
+    column-gap: var(--col-gap); align-items: start; align-content: start;
+  }
+  #detail-view:has(#detail-summary-section:not(.hidden)) > .detail-top-bar,
+  #detail-view:has(#detail-summary-section:not(.hidden)) > .detail-meta { grid-column: 1 / -1; }
+  #detail-view:has(#detail-summary-section:not(.hidden)) > #detail-player-section,
+  #detail-view:has(#detail-summary-section:not(.hidden)) > #detail-results-section { grid-column: 1; }
+  #detail-view:has(#detail-summary-section:not(.hidden)) > #detail-summary-section {
+    grid-column: 2; grid-row: 3 / span 2; position: sticky; top: 16px;
+    max-height: calc(100vh - 32px); overflow: auto;
+  }
+
+  /* 文档阅读：正文 | 本页目录 */
+  #doc-view:has(.doc-toc:not(.hidden)) {
+    display: grid; grid-template-columns: minmax(0, 3fr) minmax(320px, 2fr);
+    column-gap: var(--col-gap); align-items: start; align-content: start;
+  }
+  #doc-view:has(.doc-toc:not(.hidden)) > .detail-top-bar { grid-column: 1 / -1; }
+  #doc-view:has(.doc-toc:not(.hidden)) > .md-body { grid-column: 1; }
+  #doc-view .doc-toc:not(.hidden) {
+    display: block; grid-column: 2; position: sticky; top: 16px;
+    max-height: calc(100vh - 32px); overflow: auto; margin-top: 8px;
+    font-size: 13px; line-height: 1.5;
+  }
+  .doc-toc-title { font-size: 11.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-bottom: 10px; }
+  .doc-toc a { display: block; color: var(--ink-soft); text-decoration: none; padding: 4px 0 4px 10px; border-left: 2px solid var(--line); }
+  .doc-toc a.h3 { padding-left: 22px; color: var(--muted); }
+  .doc-toc a:hover { color: var(--coral-deep); border-left-color: var(--coral); }
+}
+
+/* 长文件名 / 无空格串不能把行撑破：允许任意位置断行，子元素不按内容最小宽度撑开 */
+.history-item-info > * { min-width: 0; }
+.history-item-meta, .history-item-oneline, .history-item-name, .creator-name, .detail-title, .doc-item { overflow-wrap: anywhere; }
+.history-item-info { align-self: stretch; }
+.history-item-title-row { flex-wrap: wrap; row-gap: 4px; }
