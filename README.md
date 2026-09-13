@@ -1,3 +1,5 @@
+<img src="docs/logo-512.png" width="72" alt="">
+
 # Verbatim
 
 Transfer audio and video to text with time-stamps, and then organize tens of videos of a Youtuber into a referenced source document. Runs locally, Flask, open localhost:5001 and you can use it.
