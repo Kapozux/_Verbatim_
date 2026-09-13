@@ -1112,18 +1112,30 @@ def _download_then_transcribe(task_id, url, engine, q, section=None, offset_sec=
             timing['subs_check_s'] = round(time.monotonic() - t0, 1)
             sub_segs = parse_srt(sub_path) if sub_path else None
             if sub_segs:
+                # 残缺字幕（中途断掉 / 下载被截断）不算数：回落到下载 + 转写
+                from downloader import subtitle_usable
+                usable, why = subtitle_usable(sub_segs, (sub_meta or {}).get('duration'))
+                if not usable:
+                    q.put(json.dumps({'type': 'progress', 'percent': 1,
+                                      'message': f'Subtitles found but {why} — transcribing the audio instead'}))
+                    sub_segs = None
+            if sub_segs:
                 target = {'video_url': url, 'title': (sub_meta or {}).get('title') or url,
                          'video_id': (sub_meta or {}).get('video_id', '')}
                 sub_lang = (sub_meta or {}).get('sub_lang')
                 q.put(json.dumps({'type': 'progress', 'percent': 90,
                                   'message': f'Found existing {sub_kind} subtitles ({sub_lang}) — skipping download & transcription'}))
-                _save_subtitle_task(task_id, target, sub_segs, sub_kind, lang=sub_lang,
-                                    timing={'subs_check_s': timing['subs_check_s'],
-                                            'wall_s': timing['subs_check_s']})
-                q.put(json.dumps({'type': 'done', 'task_id': task_id,
-                                  'segments': sub_segs, 'summary': None,
-                                  'subtitle_lang': sub_lang}))
-                return
+                try:
+                    _save_subtitle_task(task_id, target, sub_segs, sub_kind, lang=sub_lang,
+                                        timing={'subs_check_s': timing['subs_check_s'],
+                                                'wall_s': timing['subs_check_s']})
+                    q.put(json.dumps({'type': 'done', 'task_id': task_id,
+                                      'segments': sub_segs, 'summary': None,
+                                      'subtitle_lang': sub_lang}))
+                    return
+                except Exception as e:  # noqa: BLE001  存字幕失败也别让任务死：转写兜底
+                    q.put(json.dumps({'type': 'progress', 'percent': 1,
+                                      'message': f'Could not save subtitles ({str(e)[:60]}) — transcribing the audio instead'}))
 
         msg = 'Downloading clip…' if section else 'Downloading audio…'
         q.put(json.dumps({'type': 'progress', 'percent': 1, 'message': msg}))
@@ -2279,7 +2291,10 @@ def run_chain(state):
                     sp, sub_source, _sub_meta = fetch_subtitle(
                         target, dl_dir, lang=state.get('sub_lang') or 'auto')
                     if sp:
-                        sub_segs = parse_srt(sp) or None
+                        from downloader import subtitle_usable
+                        cand = parse_srt(sp) or None
+                        usable, _why = subtitle_usable(cand, (_sub_meta or {}).get('duration')) if cand else (False, '')
+                        sub_segs = cand if usable else None      # 残缺字幕 → 当没有，下载转写
                 item = None if sub_segs else download_one(target, dl_dir)
             with lock:
                 state['download_done'] = state.get('download_done', 0) + 1

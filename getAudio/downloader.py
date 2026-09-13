@@ -470,7 +470,8 @@ def fetch_subtitle(target, dest_dir, lang='auto'):
     except Exception:
         return None, None, None
 
-    meta = {'title': info.get('title'), 'video_id': info.get('id') or target.get('video_id', '')}
+    meta = {'title': info.get('title'), 'video_id': info.get('id') or target.get('video_id', ''),
+            'duration': info.get('duration')}       # 秒；给字幕覆盖率门槛用
     manual = info.get('subtitles') or {}
     autos = info.get('automatic_captions') or {}
 
@@ -522,6 +523,35 @@ def _ts_to_sec(ts):
     for x in parts:
         sec = sec * 60 + x
     return sec
+
+
+_TAG_ONLY = re.compile(r'^[\s\[\(（【]*[^\]\)）】]{0,20}[\]\)）】][\s♪]*$')   # [Music] / [Applause] / （音乐）
+
+
+def subtitle_usable(segs, duration):
+    """字幕够不够格替代转写。返回 (是否可用, 原因字符串)。
+
+    踩过的坑：自动字幕中途断掉、或下载被限流截断，只拿到开头一小段；之前只判断
+    "有没有"，残缺字幕就被当成完整转写存了（昆明火车站那条 1087 字、长沙饭店那条
+    7550 字对应完整转写 34363 字）。门槛：
+      - 覆盖率：最后一条 cue 的结束时间 ≥ 视频时长的 80%（时长未知则跳过这条）；
+      - 密度：每分钟 ≥ 40 字（时长未知则总字数 ≥ 200）；[Music] 这类纯标签不算字。
+    """
+    if not segs:
+        return False, 'no cues'
+    text = ''.join(s.get('text', '') for s in segs if not _TAG_ONLY.match(s.get('text', '') or ''))
+    chars = len(re.sub(r'\s+', '', text))
+    last_end = max(_ts_to_sec(s.get('end') or s.get('timestamp')) for s in segs)
+    if duration and duration > 0:
+        cover = last_end / float(duration)
+        if cover < 0.8:
+            return False, f'covers only {int(cover * 100)}% of the video'
+        if chars / (float(duration) / 60.0) < 40:
+            return False, f'too sparse ({chars} chars for {int(duration // 60)} min)'
+        return True, f'covers {int(cover * 100)}%'
+    if chars < 200:
+        return False, f'too short ({chars} chars)'
+    return True, 'ok'
 
 
 def merge_caption_cues(segs, max_chars=200, max_span=15):
