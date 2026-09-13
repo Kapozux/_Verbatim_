@@ -579,6 +579,7 @@ function connectBatchSSE(taskId, row) {
                 source.close();
                 onTaskFinished();
                 renderHistory();
+                renderRecent();
                 loadEngineSpeed();          // 多了一个样本，引擎旁的速度提示跟着更新
                 break;
 
@@ -917,6 +918,28 @@ function transcriptDownloadName(record, ext) {
 let activeEngineFilter = '';
 let activeSourceFilter = '';    // '' | 'mine' | 'pipeline'
 let searchTimer = null;
+
+// 转写页右栏「最近转写」：最新 12 条，复用资料库的卡片，整卡可点进详情
+const RECENT_N = 12;
+async function renderRecent() {
+    const box = document.getElementById('recent-list');
+    if (!box) return;
+    try {
+        const entries = await (await fetch('/api/history')).json();
+        const top = (Array.isArray(entries) ? entries : []).slice(0, RECENT_N);
+        box.innerHTML = '';
+        if (!top.length) { box.innerHTML = `<p class="history-empty">${T('library.noTranscripts')}</p>`; return; }
+        top.forEach(entry => {
+            const card = buildHistoryCard(entry);
+            card.addEventListener('click', e => {
+                if (e.target.closest('a, button')) return;
+                navigate('detail/' + entry.id);
+            });
+            box.appendChild(card);
+        });
+        fitListsToViewport();
+    } catch { box.innerHTML = `<p class="history-empty">${T('library.failedToLoad')}</p>`; }
+}
 
 async function renderHistory() {
     const query = (searchInput.value || '').trim();
@@ -1840,6 +1863,7 @@ function switchTab(name) {
         if (el) el.classList.toggle('active', k === name);
     });
     if (name === 'library') { renderHistory(); }
+    if (name === 'transcribe') { renderRecent(); }
     if (name === 'creators') { loadChains(); }
     if (name === 'xhs') { pollXhs(); pollXhsAnalyze(); }
 }

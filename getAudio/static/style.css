@@ -987,17 +987,15 @@ body { display: flex; flex-direction: column; }
 
 /* ---------- ≥1080：多栏按 3:2 比例 ---------- */
 @media (min-width: 1080px) {
-  /* 转写：表单 | 队列（有队列时才分栏，队列贴顶跟随）*/
-  #tab-transcribe.active:has(#batch-section:not(.hidden)) {
+  /* 转写：表单 | 队列 + 最近转写。右栏始终有内容，表单不再独占整行 */
+  #tab-transcribe.active {
     display: grid; grid-template-columns: minmax(0, 3fr) minmax(320px, 2fr);
     column-gap: var(--col-gap); align-items: start; align-content: start;
   }
-  #tab-transcribe.active:has(#batch-section:not(.hidden)) > .hero { grid-column: 1 / -1; }
-  #tab-transcribe.active:has(#batch-section:not(.hidden)) > #upload-form,
-  #tab-transcribe.active:has(#batch-section:not(.hidden)) > #error-section { grid-column: 1; }
-  #tab-transcribe.active:has(#batch-section:not(.hidden)) > #batch-section {
-    grid-column: 2; grid-row: 2 / span 2; position: sticky; top: 16px;
-  }
+  #tab-transcribe.active > .hero { grid-column: 1 / -1; }
+  #tab-transcribe.active > #upload-form,
+  #tab-transcribe.active > #error-section { grid-column: 1; }
+  #tab-transcribe.active > .transcribe-side { grid-column: 2; grid-row: 2 / span 2; position: sticky; top: 16px; }
 
   /* 小红书：采集表单 | 分析卡 */
   #tab-xhs.active {
@@ -1045,3 +1043,13 @@ body { display: flex; flex-direction: column; }
 .history-item-meta, .history-item-oneline, .history-item-name, .creator-name, .detail-title, .doc-item { overflow-wrap: anywhere; }
 .history-item-info { align-self: stretch; }
 .history-item-title-row { flex-wrap: wrap; row-gap: 4px; }
+
+/* 转写页右栏：队列（有任务时）+ 最近转写 */
+.transcribe-side { display: flex; flex-direction: column; gap: 0; min-width: 0; }
+.transcribe-side .card-shell { margin-bottom: 18px; }
+.recent-all { font-size: 12.5px; color: var(--muted); text-decoration: none; }
+.recent-all:hover { color: var(--coral-deep); }
+.recent-list .history-item { padding: 12px 14px; cursor: pointer; }
+.recent-list .history-item-actions { display: none; }
+.recent-list .history-item-name { font-size: 14px; }
+.recent-list .history-item-oneline { -webkit-line-clamp: 1; }

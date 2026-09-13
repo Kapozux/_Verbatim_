@@ -161,13 +161,22 @@
                     </button>
                 </form>
 
-                <div id="batch-section" class="hidden">
-                    <div class="batch-header">
-                        <h2 data-i18n="transcribe.queue">Queue</h2>
-                        <span id="batch-progress" class="batch-progress"></span>
+                <aside id="transcribe-side" class="transcribe-side">
+                    <div id="batch-section" class="card-shell hidden">
+                        <div class="batch-header">
+                            <h2 data-i18n="transcribe.queue">Queue</h2>
+                            <span id="batch-progress" class="batch-progress"></span>
+                        </div>
+                        <div id="batch-list" class="batch-list"></div>
                     </div>
-                    <div id="batch-list" class="batch-list"></div>
-                </div>
+                    <div id="recent-section" class="card-shell recent-card">
+                        <div class="batch-header">
+                            <h2 data-i18n="transcribe.recent">Recent</h2>
+                            <a href="#/tab/library" class="recent-all" data-i18n="transcribe.recentAll">All transcripts →</a>
+                        </div>
+                        <div id="recent-list" class="history-list recent-list"></div>
+                    </div>
+                </aside>
 
                 <div id="error-section" class="hidden">
                     <div class="error-box">
