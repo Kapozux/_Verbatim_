@@ -1102,3 +1102,13 @@ body { display: flex; flex-direction: column; }
 @media (max-width: 700px) {
   .sb-nav { flex-wrap: wrap; overflow: visible; }
 }
+
+/* Storage：备份卡 */
+.backup-card { border: 1px solid var(--line); border-radius: var(--r-lg); padding: 16px 18px; margin-bottom: 22px; background: var(--card); }
+.backup-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.backup-head b { font-size: 14.5px; color: var(--ink); }
+.backup-state { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; padding: 3px 9px; border-radius: 999px; background: var(--line); color: var(--muted); }
+.backup-state.ok { background: var(--ok-bg); color: var(--ok); }
+.backup-state.bad { background: var(--bad-bg); color: var(--bad); }
+.backup-state.run { background: var(--run-bg); color: var(--run); }
+.backup-error { font-size: 12.5px; color: var(--bad); background: var(--bad-bg); border-radius: var(--r-sm); padding: 8px 12px; margin-bottom: 12px; }

@@ -2751,6 +2751,7 @@ async function openSettings(pane) {
         document.getElementById('set-gemini-analysis').value = s.gemini_analysis_model || '';
         document.getElementById('set-gemini-extract').value = s.gemini_extract_model || '';
         document.getElementById('set-keep-audio').checked = s.keep_audio === '1';
+        document.getElementById('set-backup-dir').value = s.backup_dir || '';
     } catch { /* 打开即可，拉取失败不阻塞 */ }
     document.getElementById('test-gemini-res').textContent = '';
     document.getElementById('test-dashscope-res').textContent = '';
@@ -2769,7 +2770,7 @@ function showSettingsPane(name) {
     // 数据栏目没有"保存"，藏掉页脚
     document.getElementById('settings-foot').classList.toggle('hidden', name === 'reflect' || name === 'library');
     document.querySelector('.settings-panes').scrollTop = 0;
-    if (name === 'storage') loadStorage();
+    if (name === 'storage') { loadStorage(); loadBackup(); }
     if (name === 'reflect') { reflectRangeSel.value = reflectRange; loadReflect(); }
     if (name === 'library') loadLibrary();
 }
@@ -2865,6 +2866,45 @@ document.getElementById('compress-all').addEventListener('click', async () => {
     pollCompress();
 });
 
+// 备份状态：上次成功、已备/本地条数、目录、错误；跑的时候轮询
+let backupPollTimer = null;
+async function loadBackup() {
+    clearTimeout(backupPollTimer);
+    const state = document.getElementById('backup-state');
+    const btn = document.getElementById('backup-now');
+    try {
+        const b = await (await fetch('/api/backup/status')).json();
+        document.getElementById('backup-count').textContent = `${b.backed_count} / ${b.local_count}`;
+        document.getElementById('backup-last').textContent = b.last_ok || T('settings.backupNever');
+        const err = document.getElementById('backup-error');
+        if (b.error) { err.textContent = b.error; err.classList.remove('hidden'); }
+        else if (!b.dest_available) { err.textContent = T('settings.backupNoDrive'); err.classList.remove('hidden'); }
+        else err.classList.add('hidden');
+        const inp = document.getElementById('set-backup-dir');
+        if (!inp.value && b.dest) inp.placeholder = b.dest;
+        state.className = 'backup-state ' + (b.running ? 'run' : b.error || !b.dest_available ? 'bad' : b.last_ok ? 'ok' : '');
+        state.textContent = b.running ? T('settings.backupRunning')
+            : b.error || !b.dest_available ? T('settings.backupFailed')
+            : b.last_ok ? T('settings.backupOk') : T('settings.backupNever');
+        btn.disabled = !!b.running;
+        if (b.running && !document.hidden) backupPollTimer = setTimeout(loadBackup, 2000);
+        else if (!b.running && b.last_run && document.getElementById('backup-res').dataset.waiting) {
+            const res = document.getElementById('backup-res');
+            res.dataset.waiting = '';
+            res.textContent = b.error ? '' : T('settings.backupDone', { n: b.copied_last_run });
+        }
+    } catch { state.textContent = '—'; }
+}
+document.getElementById('backup-now').addEventListener('click', async () => {
+    const res = document.getElementById('backup-res');
+    res.textContent = '…'; res.dataset.waiting = '1';
+    try {
+        const r = await (await fetch('/api/backup/run', { method: 'POST' })).json();
+        if (!r.ok) { res.textContent = r.error || T('settings.saveFailed'); return; }
+        setTimeout(loadBackup, 800);
+    } catch { res.textContent = T('settings.saveFailed'); }
+});
+
 // 删除全部音频副本 + 残留上传（转写稿不动）。后台线程 + 轮询，跟压缩同一套节奏。
 let purgePollTimer = null;
 async function pollPurge() {
@@ -2952,6 +2992,7 @@ document.getElementById('settings-save').addEventListener('click', async () => {
         gemini_analysis_model: document.getElementById('set-gemini-analysis').value.trim(),
         gemini_extract_model: document.getElementById('set-gemini-extract').value.trim(),
         keep_audio: document.getElementById('set-keep-audio').checked ? '1' : '',
+        backup_dir: document.getElementById('set-backup-dir').value.trim(),
     };
     if (setGeminiKey.value.trim()) body.gemini_key = setGeminiKey.value.trim();
     if (setDashKey.value.trim()) body.dashscope_key = setDashKey.value.trim();

@@ -70,11 +70,13 @@ _SETTING_ENV = {
     'gemini_extract_model': 'GEMINI_EXTRACT_MODEL',
     # Storage：转写完成后是否把音频留在 results/ 里供回放。'1' = 留；空 = 不留（默认）。
     'keep_audio': 'KEEP_AUDIO',
+    # Storage：备份目录（空 = 自动找本机 Google Drive）
+    'backup_dir': 'BACKUP_DIR',
 }
 
 # 非秘密、可清空（空 = 回默认）的设置字段
 _PLAIN_FIELDS = ('gemini_base_url', 'whisper_model', 'gemini_transcribe_model',
-                 'gemini_analysis_model', 'gemini_extract_model', 'keep_audio')
+                 'gemini_analysis_model', 'gemini_extract_model', 'keep_audio', 'backup_dir')
 
 
 def _keep_audio():
@@ -124,7 +126,7 @@ def _demo_readonly_guard():
         return None
     path = request.path or ''
     if request.method == 'DELETE' or (request.method == 'POST' and
-                                      path.startswith(('/api/settings', '/api/audio/purge'))):
+                                      path.startswith(('/api/settings', '/api/audio/purge', '/api/backup/run'))):
         return jsonify({'error': 'demo workspace is read-only'}), 403
     return None
 
@@ -1725,10 +1727,15 @@ def _chain_dir(chain_id):
 
 
 def _reflect_touch():
-    """转写完成后通知回顾模块：防抖后后台重算，用户打开面板时已经是新的。"""
+    """转写完成后通知回顾模块（防抖后后台重算）和备份模块（防抖后同步到 Google Drive）。"""
     try:
         import reflect
         reflect.touch(config.RESULTS_FOLDER)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        import backup
+        backup.touch(config.RESULTS_FOLDER)
     except Exception:  # noqa: BLE001
         pass
 
@@ -3363,6 +3370,21 @@ def api_audio_purge():
     return jsonify({'ok': True})
 
 
+@app.route('/api/backup/status')
+def api_backup_status():
+    import backup
+    return jsonify(backup.status(config.RESULTS_FOLDER))
+
+
+@app.route('/api/backup/run', methods=['POST'])
+def api_backup_run():
+    import backup
+    if backup.status(config.RESULTS_FOLDER)['running']:
+        return jsonify({'ok': False, 'error': 'already running'}), 409
+    threading.Thread(target=backup.run, args=(config.RESULTS_FOLDER,), daemon=True).start()
+    return jsonify({'ok': True})
+
+
 @app.route('/api/audio/purge_status')
 def api_audio_purge_status():
     with _purge_lock:
@@ -3616,6 +3638,8 @@ if __name__ == '__main__':
         try:
             import reflect
             reflect.start_scheduler(config.RESULTS_FOLDER)   # 回顾提前算好，打开不用等
+            import backup
+            backup.start_scheduler(config.RESULTS_FOLDER)    # 内置备份：启动后 90 秒跑一次，之后每 6 小时
         except Exception:  # noqa: BLE001
             pass
     # HOST 默认 127.0.0.1（本地只对自己开）；Docker 里设 HOST=0.0.0.0 对外暴露。

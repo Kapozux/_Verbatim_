@@ -659,6 +659,29 @@
                     <!-- Storage -->
                     <section class="settings-pane" data-pane="storage">
                         <h3 data-i18n="settings.paneStorage">Storage</h3>
+                        <div class="backup-card">
+                            <div class="backup-head">
+                                <b data-i18n="settings.backupTitle">Backup to Google Drive</b>
+                                <span id="backup-state" class="backup-state">—</span>
+                            </div>
+                            <div class="storage-stat">
+                                <div><b id="backup-count">—</b><span data-i18n="settings.backupCount">backed up / local</span></div>
+                                <div><b id="backup-last">—</b><span data-i18n="settings.backupLast">last success</span></div>
+                            </div>
+                            <div id="backup-error" class="backup-error hidden"></div>
+                            <label class="settings-field">
+                                <span class="settings-label"><span data-i18n="settings.backupDir">Backup folder</span>
+                                    <span class="settings-opt" data-i18n="settings.backupDirOpt">blank = auto-detect your Google Drive · saved with the Save button below</span>
+                                </span>
+                                <input type="text" id="set-backup-dir" class="search-input" autocomplete="off"
+                                       placeholder="~/Library/CloudStorage/GoogleDrive-…/My Drive/getAudio_备份">
+                            </label>
+                            <div class="settings-test-row">
+                                <button type="button" id="backup-now" class="btn-secondary" data-i18n="settings.backupNow">Back up now</button>
+                                <span id="backup-res" class="test-res"></span>
+                            </div>
+                            <p class="settings-opt" data-i18n="settings.backupFooter">Transcripts, summaries and analysis documents only, never audio. Append-only: the backup never deletes anything. Runs every 6 hours and 10 minutes after each new transcription.</p>
+                        </div>
                         <p class="settings-desc" data-i18n="settings.storageDesc">
                             Transcripts, summaries and metadata are tiny. Nearly all disk usage is the
                             audio copy kept for the playback bar in the transcript view. Nothing else
