@@ -159,7 +159,7 @@ input[type="file"] { display: none; }
   cursor: pointer; transition: background .15s ease;
 }
 .btn-primary:hover { background: var(--coral-deep); border-color: var(--coral-deep); }
-.btn-primary:disabled { background: var(--faint); border-color: var(--faint); cursor: not-allowed; }
+.btn-primary:disabled { background: var(--line-2); border-color: var(--line-2); color: var(--muted); cursor: not-allowed; box-shadow: none; }
 
 .btn-secondary {
   padding: 8px 15px; min-height: 36px; background: var(--card); color: var(--ink-soft);
@@ -321,6 +321,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .doc-item.doc-total { background: var(--coral-soft); border-color: var(--coral-line); font-weight: 600; color: var(--coral-deep); }
 .doc-item.doc-raw { background: var(--code-bg); border-color: var(--line-2); font-weight: 600; color: var(--ink-soft); }
 .doc-item.doc-raw:hover { border-color: var(--ink); color: var(--ink); }
+.doc-items:not(.expanded) .doc-more { display: none; }
+.doc-item.doc-showall { border-style: dashed; color: var(--muted); }
 
 /* === Markdown 阅读排版（衬线标题 · 编辑感）=== */
 #doc-view { max-width: 780px; margin: 0 auto; }
@@ -446,7 +448,14 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 }
 .url-box { width: 100%; resize: vertical; min-height: 52px; font-family: var(--mono); font-size: 12.5px; line-height: 1.6;
   padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--paper); color: var(--ink); }
-.local-hint { font-size: 12.5px; color: var(--ink-faint); margin: 2px 0 12px; line-height: 1.5; }
+.local-hint { font-size: 12.5px; color: var(--ink-faint); margin: 6px 0 12px; line-height: 1.5; }
+.hint-details { margin: 2px 0 10px; }
+.hint-details > summary { font-size: 12.5px; color: var(--muted); cursor: pointer; list-style: none; display: inline-flex; align-items: center; gap: 6px; }
+.hint-details > summary::-webkit-details-marker { display: none; }
+.hint-details > summary::before { content: ''; width: 5px; height: 5px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); transition: transform .15s ease; }
+.hint-details[open] > summary::before { transform: rotate(45deg); }
+.hint-details > summary:hover { color: var(--ink); }
+.file-icon svg { display: block; color: var(--coral); }
 
 /* 统一入口：文件/链接/路径 解析预览列表 */
 #mixed-input { margin-top: 10px; }
@@ -514,9 +523,13 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   background-color: var(--coral-soft);
 }
 .creator-noimg {
-  display: flex; align-items: center; justify-content: center;
-  font-size: 32px; color: var(--coral); background: var(--coral-soft);
+  position: relative; overflow: hidden;
+  height: 72px; display: flex; align-items: center; justify-content: center;
+  font-family: var(--serif); font-size: 30px; font-weight: 600; color: var(--coral-deep);
+  background: linear-gradient(160deg, var(--coral-soft), #F6E3D8);
 }
+.creator-noimg:has(.creator-thumb-img) { height: 120px; }
+.creator-thumb-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .creator-body { padding: 12px 14px; }
 .creator-name {
   font-weight: 700; font-size: 14.5px; color: var(--ink);

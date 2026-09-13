@@ -127,7 +127,28 @@ def _gemini_translate(tags):
     data = _parse_json_obj(raw)
     if not isinstance(data, dict):
         return None
-    return {str(k): str(v).strip()[:30] for k, v in data.items() if str(v).strip()}
+    return {str(k): _clip(v, 30, 30) for k, v in data.items() if str(v).strip()}
+
+
+def _clip(text, cjk_n, latin_n):
+    """截断到上限，但英文按词边界截。中文按字数（cjk_n），拉丁文字放宽到 latin_n。
+
+    之前一律 [:30]/[:60]/[:10] 硬切，英文标题会断在单词中间
+    （"Common College Student Archety"、"#College Li"）。
+    """
+    text = str(text or '').strip()
+    if not text:
+        return ''
+    latin = sum(c.isascii() for c in text) / len(text) > 0.6
+    n = latin_n if latin else cjk_n
+    if len(text) <= n:
+        return text
+    cut = text[:n]
+    if latin:
+        sp = cut.rfind(' ')
+        if sp > n * 0.5:
+            cut = cut[:sp]
+    return cut.rstrip(' ,;:-–—·')
 
 
 def _parse_json(raw):
@@ -142,9 +163,9 @@ def _parse_json(raw):
     if not isinstance(tags, list):
         tags = []
     return {
-        'title': title[:30],
-        'one_line': str(data.get('one_line', '')).strip()[:60],
-        'tags': [str(t).strip()[:10] for t in tags if str(t).strip()][:4],
+        'title': _clip(title, 30, 70),
+        'one_line': _clip(data.get('one_line', ''), 60, 140),
+        'tags': [_clip(t, 10, 24) for t in tags if str(t).strip()][:4],
         'filename_meaningful': bool(data.get('filename_meaningful', False)),
     }
 

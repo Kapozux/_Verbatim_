@@ -956,7 +956,7 @@ function buildSourceLink(url) {
     a.href = url;
     a.target = '_blank';
     a.rel = 'noopener noreferrer';
-    a.textContent = '🔗';
+    a.innerHTML = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1"/><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/></svg>';
     a.title = `${T('library.openSource')} · ${url}`;
     a.addEventListener('click', e => e.stopPropagation());
     return a;
@@ -988,7 +988,7 @@ function buildHistoryCard(entry) {
     if (entry.source === 'pipeline') {
         const src = document.createElement('span');
         src.className = 'source-badge';
-        src.textContent = `🎬 ${entry.creator || T('nav.creators')}`;
+        src.textContent = entry.creator || T('nav.creators');
         src.title = T('library.fromPipelineRun');
         titleRow.appendChild(src);
     }
@@ -1174,7 +1174,7 @@ async function openDetailView(taskId) {
         if (data.source_url) {
             detailMeta.appendChild(document.createTextNode(' · '));
             const link = buildSourceLink(data.source_url);
-            link.textContent = '🔗 ' + T('library.openSource');
+            link.innerHTML = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1"/><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/></svg> ' + escapeHtml(T('library.openSource'));
             detailMeta.appendChild(link);
         }
 
@@ -1403,16 +1403,36 @@ function chainPercent(c) {
     return Math.max(2, Math.min(99, Math.round(num / (total * steps) * 100)));
 }
 
+// 卡片 / 详情 / 文档列表共用的博主显示名：作者名 → 第一条视频标题 → 站点域名。绝不直接印 URL。
+function chainDisplayName(c) {
+    if (c.author && c.author !== '该博主') return c.author;
+    const v = (c.videos || []).find(x => x.title && !/^https?:\/\//.test(x.title));
+    if (v) return v.title;
+    try { return new URL(c.url).hostname.replace(/^www\./, ''); } catch { return T('chainDetail.creatorFallback'); }
+}
+
+// 卡片上的失败原因：一句人话；原始错误串放进 title 悬停可见，详情页的运行详情里也有全文。
+function shortChainError(e) {
+    const s = String(e || '');
+    if (/errno 61|connect|unreachable|getaddrinfo|network|timed? ?out/i.test(s)) return T('err.unreachable');
+    if (/429|quota|rate.?limit|RESOURCE_EXHAUSTED/i.test(s)) return T('err.quota');
+    if (/PROHIBITED|RECITATION|SAFETY|拦截|安全过滤/i.test(s)) return T('err.blocked');
+    if (/api.?key|401|403|unauthor/i.test(s)) return T('err.apiKey');
+    const head = s.split(/[:：(（\n]/)[0].trim();
+    return (head || T('stage.failed')).slice(0, 60);
+}
+
 // 一条 chain → 一张卡。四态：进行中（进度） / 完成（现状不变） / 失败（错误+Retry）
 // / 停止或中断（Stopped+Continue，别让旧数据从界面消失）。
 function buildChainCard(c) {
     const active = !['done', 'failed', 'cancelled'].includes(c.stage);
-    const author = (c.author && c.author !== '该博主') ? c.author : (c.url || 'Creator');
+    const author = chainDisplayName(c);
     const vids = c.videos || [];
     const img = c.avatar || (vids.find(v => v.thumbnail) || {}).thumbnail || '';
-    const thumb = img
-        ? `<div class="creator-thumb" style="background-image:url('${escapeHtml(img).replace(/[()'"\\]/g, '')}')"></div>`
-        : `<div class="creator-thumb creator-noimg">▷</div>`;
+    // 封面：先摆首字占位，图片加载成功就盖在上面；加载失败（B 站防盗链 / 过期 URL）自动移除，露出首字
+    const initial = escapeHtml(String(author).trim().slice(0, 1).toUpperCase() || '?');
+    const thumb = `<div class="creator-thumb creator-noimg"><span>${initial}</span>${img
+        ? `<img class="creator-thumb-img" src="${escapeHtml(img)}" alt="" loading="lazy" onerror="this.remove()">` : ''}</div>`;
     const name = `<div class="creator-name">${escapeHtml(String(author).slice(0, 60))}</div>`;
 
     let body;
@@ -1425,7 +1445,7 @@ function buildChainCard(c) {
         const nEp = vids.filter(v => v.status === 'done').length || vids.length;
         body = `<div class="creator-meta">${nEp} episode${nEp === 1 ? '' : 's'} · ${brainLabel(c.analysis_preset)}</div>`;
     } else if (c.stage === 'failed') {
-        body = `<div class="creator-meta creator-error">⚠ ${escapeHtml(String(c.error || T('stage.failed')).slice(0, 90))}</div>
+        body = `<div class="creator-meta creator-error" title="${escapeHtml(String(c.error || '').slice(0, 400))}">${escapeHtml(shortChainError(c.error))}</div>
             <button class="btn-secondary btn-small creator-retry"
                 onclick="continueChain('${c.id}', event)">${T('creators.retry')}</button>`;
     } else {
@@ -1530,14 +1550,14 @@ async function refreshChainDetail() {
            <span class="ci-hint">${T('chainDetail.actionsHint')}</span>`
         : `<button class="btn-secondary ci-btn" onclick="stopChain('${c.id}')">${T('creators.stop')}</button>`;
     // ===== 布局原则：主角是「这个博主 + 读他的解读」；运维细节全部折叠 =====
-    const author = (c.author && c.author !== '该博主') ? c.author : '';
+    const author = chainDisplayName(c);
     const doneN = vids.filter(v => v.status === 'done').length;
     // 主 CTA：读画像 / 合并原文（核心内容，做大）
     let ctas = '';
     if (c.final_doc) ctas += `<button class="btn-primary cd-cta"
-        onclick="navigate('chain/${c.id}/doc/${encodeURIComponent(c.final_doc)}')">📖 ${T('creators.report')}</button>`;
+        onclick="navigate('chain/${c.id}/doc/${encodeURIComponent(c.final_doc)}')">${T('creators.report')}</button>`;
     if (c.raw_doc) ctas += `<button class="btn-secondary cd-cta"
-        onclick="navigate('chain/${c.id}/doc/${encodeURIComponent(c.raw_doc)}')">📜 ${T('creators.fullTranscript')}</button>`;
+        onclick="navigate('chain/${c.id}/doc/${encodeURIComponent(c.raw_doc)}')">${T('creators.fullTranscript')}</button>`;
     // 镜头：核心动作，大 chip
     const LENSES = ['roast', 'craft', 'fun', 'quotes', 'worldview'].map(k => [k, T('lens.' + k)]);
     const lensBlock = (chainTerminal && c.analyze !== false)
@@ -1565,7 +1585,7 @@ async function refreshChainDetail() {
                 ${avatarHtml}
                 <div class="cd-id">
                     <div class="cd-eyebrow">${T('chainDetail.eyebrow', { n: doneN })}</div>
-                    <div class="cd-name">${escapeHtml((author || c.url || T('chainDetail.creatorFallback')).slice(0, 60))}</div>
+                    <div class="cd-name">${escapeHtml(String(author).slice(0, 60))}</div>
                     <div class="cd-sub">${stageLabel(c.stage)}${c.finished_at ? ' · ' + c.finished_at : ''}</div>
                 </div>
             </div>
@@ -1886,7 +1906,7 @@ async function pollXhsAnalyze() {
     } else if (s.has_report) {
         box.classList.remove('hidden');
         box.innerHTML = `<span class="xhs-done">✓ ${T('xhs.reportReady')}</span>
-            <button class="lens-btn" onclick="navigate('xhs-report')">📖 ${T('xhs.readReport')}</button>`;
+            <button class="lens-btn" onclick="navigate('xhs-report')">${T('xhs.readReport')}</button>`;
     } else {
         box.classList.add('hidden');
     }
@@ -2089,22 +2109,31 @@ async function loadDocs() {
             // 排序：Report(总分析) > Full transcript(合并原文) > 其余按名
             const rank = f => f === '总分析.md' ? 0 : f === '合并原文.md' ? 1 : 2;
             files.sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
-            const title = (c.author && c.author !== '该博主') ? c.author : c.url;
+            const title = chainDisplayName(c);
             const stageBadge = c.stage === 'done' ? ''
                 : `<span class="doc-stage">（${stageLabel(c.stage)}）</span>`;
-            const items = files.map(f => {
+            const labelOf = f => f === '总分析.md' ? T('creators.report')
+                : f === '合并原文.md' ? T('creators.fullTranscript')
+                : f.replace(/^分析_\d+_/, '').replace(/\.md$/, '');
+            // 同一期重跑过会留下 分析_001_X 和 分析_005_X 两份同名文档，只列后一份
+            const byLabel = new Map();
+            for (const f of files) byLabel.set(labelOf(f), f);
+            const uniq = [...byLabel.entries()];
+            const LIMIT = 8;
+            const items = uniq.map(([label, f], i) => {
                 const isTotal = f === '总分析.md';
                 const isRaw = f === '合并原文.md';
-                const label = isTotal ? T('creators.report') : isRaw ? T('creators.fullTranscript')
-                    : f.replace(/^分析_\d+_/, '').replace(/\.md$/, '');
-                const cls = isTotal ? 'doc-total' : isRaw ? 'doc-raw' : '';
-                return `<button class="doc-item ${cls}"
-                    onclick="navigate('chain/${c.id}/doc/${encodeURIComponent(f)}')">${label}</button>`;
+                const cls = (isTotal ? 'doc-total' : isRaw ? 'doc-raw' : '') + (i >= LIMIT ? ' doc-more' : '');
+                return `<button class="doc-item ${cls}" title="${escapeHtml(label)}"
+                    onclick="navigate('chain/${c.id}/doc/${encodeURIComponent(f)}')">${escapeHtml(label)}</button>`;
             }).join('');
+            const more = uniq.length > LIMIT
+                ? `<button class="doc-item doc-showall" onclick="this.parentElement.classList.add('expanded');this.remove()">${T('library.showAll', { n: uniq.length })}</button>`
+                : '';
             return `<div class="doc-group">
-                <div class="doc-group-title">${escapeHtml(title.slice(0, 70))} ${stageBadge}
-                    <span class="doc-count">${T('library.docCount', { n: files.length })}</span></div>
-                <div class="doc-items">${items}</div>
+                <div class="doc-group-title">${escapeHtml(String(title).slice(0, 70))} ${stageBadge}
+                    <span class="doc-count">${T('library.docCount', { n: uniq.length })}</span></div>
+                <div class="doc-items">${items}${more}</div>
             </div>`;
         }));
         const html = blocks.filter(Boolean).join('');

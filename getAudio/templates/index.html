@@ -47,7 +47,7 @@
                     <div class="form-group">
                         <div id="drop-zone" class="drop-zone">
                             <label for="audio-file" class="file-label">
-                                <span class="file-icon">📁</span>
+                                <span class="file-icon"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V4"/><path d="M7 9l5-5 5 5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg></span>
                                 <span id="file-label-text" data-i18n="transcribe.dropLabel">Choose or drop audio / video files (multiple ok)</span>
                                 <span id="file-info" class="file-info"></span>
                             </label>
@@ -57,6 +57,7 @@
                         <textarea id="mixed-input" class="url-box" rows="2"
                             data-i18n-placeholder="transcribe.mixedPlaceholder"
                             placeholder="Or paste video links / local file paths — one per line, mix freely&#10;https://www.bilibili.com/video/BV...      /Users/you/Documents/lecture.mp4"></textarea>
+                        <details class="hint-details"><summary data-i18n="transcribe.tipsSummary">Tips: links, time ranges, playlists, local paths</summary>
                         <p class="local-hint" data-i18n-html="transcribe.localHint">Links download &amp; transcribe (YouTube, Bilibili &amp; other yt-dlp
                             sites — for a whole channel use Creators). Local paths are read in place, nothing
                             uploaded — note: macOS blocks reading from Downloads/Desktop, keep files in
@@ -67,6 +68,7 @@
                             real video position.<br>
                             A collection / playlist link (e.g. a Bilibili 合集, a YouTube playlist) is expanded
                             into its videos and each one is transcribed — transcripts only, no analysis.</p>
+                        </details>
                         <label class="collection-cap"><span data-i18n="transcribe.videosPerCollection">Videos per collection</span>
                             <input type="number" id="url-max-videos" class="search-input chain-small"
                                    min="1" max="300" value="20"
@@ -116,7 +118,7 @@
                                 <span class="radio-custom"></span>
                                 <span class="radio-label">
                                     <strong data-i18n="engine.gemini35">Gemini 3.5 Transcribe</strong>
-                                    <small data-i18n="transcribe.gemini35Desc">Cloud · new · built-in speaker labels ✨</small>
+                                    <small data-i18n="transcribe.gemini35Desc">Cloud · new · built-in speaker labels</small>
                                 </span>
                             </label>
                         </div>
@@ -223,7 +225,7 @@
             <section id="tab-creators" class="tab-panel">
                 <div class="hero">
                     <h1 data-i18n="creators.title">Creators<span class="accent">.</span></h1>
-                    <p data-i18n="creators.subtitle">Paste a channel, playlist, or video — Verbatim downloads and transcribes every episode, then writes a portrait. Open a card for the portrait, then re-read it through a lens — 🔥 Roast / ✍️ Craft / 😂 Watchability / 💬 Quotes / 🖼 Worldview.</p>
+                    <p data-i18n="creators.subtitle">Paste a channel, playlist, or video — Verbatim downloads and transcribes every episode, then writes a portrait. Open a card for the portrait, then re-read it through a lens — Roast / Craft / Watchability / Quotes / Worldview.</p>
                 </div>
 
                 <form class="chain-form-shell">
@@ -351,8 +353,8 @@
                                        placeholder="Search titles, filenames, transcript text — or paste a video link…">
                                 <div id="source-filters" class="filter-chips">
                                     <button class="chip active" data-source="" data-i18n="library.allSources">All sources</button>
-                                    <button class="chip" data-source="mine" data-i18n="library.mine">🙋 Mine</button>
-                                    <button class="chip" data-source="pipeline" data-i18n="library.fromCreators">🎬 From Creators</button>
+                                    <button class="chip" data-source="mine" data-i18n="library.mine">Mine</button>
+                                    <button class="chip" data-source="pipeline" data-i18n="library.fromCreators">From Creators</button>
                                 </div>
                                 <div id="engine-filters" class="filter-chips">
                                     <button class="chip active" data-engine="" data-i18n="library.allEngines">All</button>

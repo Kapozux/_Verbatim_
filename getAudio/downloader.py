@@ -509,6 +509,48 @@ _SRT_TS = re.compile(
     r'(\d{2}):(\d{2}):(\d{2})[,.](\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2})[,.](\d{3})')
 
 
+_CUE_JUNK = re.compile(r'\[(?:\\h|\s|_)*\]|\\h')       # WebVTT 的 \h 转义、[__] 残留
+_SENT_END = re.compile(r'[.!?。！？…]["”’)）]?$')
+
+
+def _ts_to_sec(ts):
+    try:
+        parts = [int(x) for x in str(ts).split(':')]
+    except ValueError:
+        return 0
+    sec = 0
+    for x in parts:
+        sec = sec * 60 + x
+    return sec
+
+
+def merge_caption_cues(segs, max_chars=200, max_span=15):
+    """把两三秒一条的字幕 cue 合并成句子级片段，读起来像转写稿而不是 248 行半句话。
+
+    合并规则：一直往当前片段里追加，直到句末标点、累计超过 max_chars、
+    或时间跨度超过 max_span 秒。时间戳取第一条 cue 的。顺手清掉 \h、[__] 这类字幕格式残留。
+    """
+    out, buf, start = [], None, 0
+    for seg in segs or []:
+        text = re.sub(r'\s+', ' ', _CUE_JUNK.sub(' ', seg.get('text') or '')).strip()
+        if not text:
+            continue
+        if buf is None:
+            buf = {'timestamp': seg.get('timestamp'), 'end': seg.get('end'), 'text': text}
+            start = _ts_to_sec(seg.get('timestamp'))
+        else:
+            joiner = '' if ord(buf['text'][-1]) > 0x2E7F else ' '     # 中日韩不加空格
+            buf['text'] += joiner + text
+            buf['end'] = seg.get('end') or buf['end']
+        span = _ts_to_sec(seg.get('end') or seg.get('timestamp')) - start
+        if _SENT_END.search(buf['text']) or len(buf['text']) >= max_chars or span >= max_span:
+            out.append(buf)
+            buf = None
+    if buf:
+        out.append(buf)
+    return out
+
+
 def parse_srt(path):
     """SRT → [{'timestamp','end','text'}]，格式对齐转写输出。
 

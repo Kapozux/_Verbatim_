@@ -1944,8 +1944,17 @@ def _save_subtitle_task(task_id, target, segments, source, lang=None, timing=Non
     """
     task_dir = os.path.join(config.RESULTS_FOLDER, task_id)
     os.makedirs(task_dir, exist_ok=True)
+    from downloader import merge_caption_cues
+    segments = merge_caption_cues(segments)          # 句子级片段，不是两秒一行的字幕 cue
     title = target.get('title') or target.get('video_id') or 'untitled'
     display = f"{title} [{target.get('video_id', '')}]"
+    # 字幕来源也出摘要：Library 卡片、详情页 Summary 区跟普通转写一致
+    summary = None
+    try:
+        from summarize import summarize_transcript
+        summary = summarize_transcript('\n'.join(s.get('text', '') for s in segments))
+    except Exception:  # noqa: BLE001
+        summary = None
     meta = {
         'id': task_id,
         'filename': display,
@@ -1954,7 +1963,7 @@ def _save_subtitle_task(task_id, target, segments, source, lang=None, timing=Non
         'audio_ext': None,                    # 字幕来源，无音频
         'segment_count': len(segments),
         'duration_seconds': None,
-        'has_summary': False,
+        'has_summary': bool(summary),
         'subtitle_source': source,            # manual / auto
     }
     if lang:
@@ -1969,6 +1978,9 @@ def _save_subtitle_task(task_id, target, segments, source, lang=None, timing=Non
         json.dump(meta, f, ensure_ascii=False, indent=2)
     with open(os.path.join(task_dir, 'transcript.json'), 'w', encoding='utf-8') as f:
         json.dump(segments, f, ensure_ascii=False, indent=2)
+    if summary:
+        with open(os.path.join(task_dir, 'summary.json'), 'w', encoding='utf-8') as f:
+            json.dump(summary, f, ensure_ascii=False, indent=2)
     taskdb.create(task_id, display, 'subtitle', None, None)
     taskdb.set_status(task_id, 'done')
     try:
