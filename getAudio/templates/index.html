@@ -10,31 +10,34 @@
     <link rel="stylesheet" href="/static/style.css?v={{ static_version }}">
 </head>
 <body>
-    <div class="container">
+    <div class="app">
+        <aside class="sidebar" id="sidebar">
+            <div class="sb-brand"><img class="logo" src="/static/logo.svg?v={{ static_version }}" alt="" width="20" height="20"><span>Verbatim</span>{% if demo %}<span class="demo-pill" data-i18n="nav.demo">Demo · sample library</span>{% endif %}</div>
+            <nav class="sb-nav">
+                <button class="nav-tab active" data-tab="transcribe" type="button"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="M8 7l4-4 4 4"/><path d="M5 15v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3"/></svg><span data-i18n="nav.transcribe">Transcribe</span></button>
+                <button class="nav-tab" data-tab="xhs" type="button"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 12h8"/><path d="M12 8v8"/></svg><span data-i18n="nav.xhs">Xiaohongshu</span></button>
+                <button class="nav-tab" data-tab="creators" type="button"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg><span data-i18n="nav.creators">Creators</span></button>
+                <button class="nav-tab" data-tab="library" type="button"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5h5v14H4z"/><path d="M11 5h5v14h-5z"/><path d="M18 6l3 13"/></svg><span data-i18n="nav.library">Library</span></button>
+            </nav>
+            <div class="sb-tasks">
+                <button id="global-tasks" class="global-tasks hidden" type="button" data-i18n-title="nav.activeTasks">
+                    <span class="gt-spin">⟳</span><span id="global-tasks-count"></span>
+                </button>
+                <div id="global-tasks-pop" class="global-tasks-pop hidden"></div>
+            </div>
+            <div class="sb-bottom">
+                <button id="reflect-open" class="sb-item" type="button" data-i18n-title="reflect.open" title="Reflect"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9"/><path d="M12 7v5l3 2"/><path d="M17 3h4v4"/><path d="M21 3l-5 5"/></svg><span data-i18n="reflect.open">Reflect</span></button>
+                <button id="settings-open" class="sb-item" type="button" data-i18n-title="settings.title" title="Settings"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span data-i18n="settings.title">Settings</span></button>
+                <div class="sb-foot">
+                    <button id="ui-lang-toggle" class="stats-lang ui-lang-toggle" type="button" data-i18n-title="nav.langToggle">中</button>
+                    <span class="tagline" data-i18n="nav.tagline">Audio → transcript → insight · local</span>
+                </div>
+            </div>
+        </aside>
+    <div class="content container">
 
         <!-- ===== Main View ===== -->
         <div id="main-view">
-            <header>
-                <div class="topbar">
-                    <div class="brand"><img class="logo" src="/static/logo.svg?v={{ static_version }}" alt="" width="18" height="18">Verbatim{% if demo %}<span class="demo-pill" data-i18n="nav.demo">Demo · sample library</span>{% endif %}</div>
-                    <div class="topbar-right">
-                        <button id="global-tasks" class="global-tasks hidden" type="button"
-                                data-i18n-title="nav.activeTasks">
-                            <span class="gt-spin">⟳</span><span id="global-tasks-count"></span>
-                        </button>
-                        <button id="ui-lang-toggle" class="stats-lang ui-lang-toggle" type="button"
-                                data-i18n-title="nav.langToggle">中</button>
-                        <div class="tagline" data-i18n="nav.tagline">Audio → transcript → insight · local</div>
-                        <div id="global-tasks-pop" class="global-tasks-pop hidden"></div>
-                    </div>
-                </div>
-                <nav class="main-nav">
-                    <button class="nav-tab active" data-tab="transcribe" data-i18n="nav.transcribe">Transcribe</button>
-                    <button class="nav-tab" data-tab="xhs" data-i18n="nav.xhs">Xiaohongshu</button>
-                    <button class="nav-tab" data-tab="creators" data-i18n="nav.creators">Creators</button>
-                    <button class="nav-tab" data-tab="library" data-i18n="nav.library">Library</button>
-                </nav>
-            </header>
 
             <!-- ===== Tab: Transcribe ===== -->
             <section id="tab-transcribe" class="tab-panel active">
@@ -465,6 +468,7 @@
         </footer>
 
     </div>
+    </div><!-- /.app -->
 
     <!-- ===== Settings modal (two-pane, Claude-style) ===== -->
     <div id="settings-overlay" class="settings-overlay hidden">
@@ -705,18 +709,6 @@
                     <button type="button" id="settings-save" class="btn-primary" data-i18n="settings.save">Save</button>
                 </div>
             </div>
-        </div>
-    </div>
-
-    <!-- ===== 左下角按钮行 ===== -->
-    <div id="stats-fab" class="stats-fab">
-        <div class="fab-row">
-            <button id="reflect-open" class="stats-toggle" data-i18n-title="reflect.open" title="Reflect">
-                <span class="stats-dot"></span><span data-i18n="reflect.open">Reflect</span>
-            </button>
-            <button id="settings-open" class="stats-toggle" data-i18n-title="settings.title" title="Settings">
-                <span class="fab-gear">⚙</span><span data-i18n="settings.title">Settings</span>
-            </button>
         </div>
     </div>
 

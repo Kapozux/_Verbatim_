@@ -24,8 +24,8 @@
   --gutter: clamp(16px, 4vw, 96px);      /* 顶栏、正文、页脚、角落按钮共用，左右边缘对齐 */
   --shell-w: 1800px;                      /* 唯一的宽度上限 */
   --col-gap: clamp(24px, 3vw, 56px);      /* 多栏栏间距 */
-  --fab-h: 64px;                          /* 左下角按钮行占用的高度，页脚给它让位 */
-  --footer-h: 104px;                      /* 页脚总高（含给角落按钮让出的底部空间）*/
+  --sidebar-w: clamp(220px, 15vw, 268px); /* 左侧导航栏宽度 */
+  --footer-h: 56px;                       /* 页脚高度（列表定高时扣掉）*/
   /* 视窗高度决定列表可见量：100vh − 列表顶部到页面顶部的距离（运行时量，写在元素的 --list-top 上）− 角落按钮行 */
   --list-top-fallback: 470px;
 }
@@ -957,18 +957,13 @@ body { display: flex; flex-direction: column; }
 
 /* 页脚：钉底，底部留出角落按钮的高度 */
 .site-footer {
-  margin-top: auto; padding: 14px 0 calc(var(--fab-h) + 8px); min-height: var(--footer-h);
+  margin-top: auto; padding: 16px 0 18px; min-height: var(--footer-h);
   border-top: 1px solid var(--line); font-size: 12px; color: var(--muted);
   display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap;
 }
 .site-footer a { color: var(--ink-soft); text-decoration: none; }
 .site-footer a:hover { color: var(--ink); }
 
-/* 角落按钮：左边缘 = 正文左边缘（外壳窄于视窗时按外壳算）*/
-.stats-fab {
-  left: max(var(--gutter), calc((100vw - var(--shell-w)) / 2 + var(--gutter)));
-  bottom: 16px;
-}
 
 /* 列表：按视窗高度定可见量，装不下在容器内滚 */
 /* 首屏填满：列表高度 = 视窗 − 列表顶部 − 页脚（页脚自身已含角落按钮的位置）− 卡片底边 */
@@ -1053,3 +1048,57 @@ body { display: flex; flex-direction: column; }
 .recent-list .history-item-actions { display: none; }
 .recent-list .history-item-name { font-size: 14px; }
 .recent-list .history-item-oneline { -webkit-line-clamp: 1; }
+
+
+/* ============================================================
+   应用外壳：左侧导航栏 + 内容区（导航贴边、品牌在顶、回顾/设置沉底）
+   ============================================================ */
+.app { display: grid; grid-template-columns: var(--sidebar-w) minmax(0, 1fr); min-height: 100vh; }
+.sidebar {
+  position: sticky; top: 0; height: 100vh; overflow: visible;
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 18px 12px 16px; background: var(--paper); border-right: 1px solid var(--line);
+}
+.sb-brand { display: flex; align-items: center; gap: 9px; padding: 4px 10px 16px; font-size: 15px; font-weight: 600; letter-spacing: -.01em; color: var(--ink); }
+.sb-brand .logo { width: 20px; height: 20px; border-radius: 5px; }
+.sb-brand .demo-pill { margin-left: 4px; }
+.sb-nav { display: flex; flex-direction: column; gap: 2px; }
+.sidebar .nav-tab, .sb-item {
+  display: flex; align-items: center; gap: 11px; width: 100%; min-height: 38px;
+  padding: 8px 10px; margin: 0; border: 0; border-radius: var(--r-sm); background: none;
+  font-family: inherit; font-size: 13.5px; font-weight: 500; color: var(--ink-soft);
+  text-align: left; cursor: pointer; transition: background .15s ease, color .15s ease;
+}
+.sidebar .nav-tab svg, .sb-item svg { flex: none; color: var(--muted); }
+.sidebar .nav-tab:hover, .sb-item:hover { background: var(--card); color: var(--ink); }
+.sidebar .nav-tab.active { background: var(--coral-soft); color: var(--coral-deep); font-weight: 600; border-bottom: 0; }
+.sidebar .nav-tab.active svg { color: var(--coral); }
+.sb-tasks { position: relative; margin-top: 6px; }
+.sidebar .global-tasks { width: 100%; justify-content: flex-start; }
+.sidebar .global-tasks-pop { left: 0; top: calc(100% + 6px); }
+.sb-bottom { margin-top: auto; display: flex; flex-direction: column; gap: 2px; }
+.sb-foot { display: flex; align-items: center; gap: 10px; padding: 12px 10px 0; }
+.sb-foot .tagline { font-size: 11.5px; line-height: 1.4; color: var(--muted); }
+
+/* 内容区：只有一套 gutter；顶部不再有横向导航，主标题直接开始 */
+.content.container { padding: 0 var(--gutter); }
+.hero { padding: 34px 0 26px; }
+
+/* ---------- <1080：侧栏变成顶栏，导航横排 ---------- */
+@media (max-width: 1079.98px) {
+  .app { grid-template-columns: minmax(0, 1fr); }
+  .sidebar {
+    position: static; height: auto; flex-direction: row; flex-wrap: wrap; align-items: center;
+    gap: 4px 14px; padding: 10px var(--gutter); border-right: 0; border-bottom: 1px solid var(--line);
+  }
+  .sb-brand { padding: 4px 0; }
+  .sb-nav { flex-direction: row; flex: 1; gap: 2px; overflow-x: auto; }
+  .sidebar .nav-tab, .sb-item { width: auto; white-space: nowrap; }
+  .sb-tasks { margin-top: 0; }
+  .sb-bottom { margin-top: 0; flex-direction: row; align-items: center; }
+  .sb-foot { padding: 0; }
+  .sb-foot .tagline { display: none; }
+}
+@media (max-width: 700px) {
+  .sb-nav { flex-wrap: wrap; overflow: visible; }
+}
