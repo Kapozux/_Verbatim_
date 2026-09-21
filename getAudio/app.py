@@ -22,6 +22,7 @@ from flask import Flask, Response, jsonify, render_template, request, send_file
 
 import config
 import taskdb
+import usage
 
 
 # task_id 从 URL 直接拼到 os.path.join，必须严格校验防止路径穿越
@@ -159,11 +160,30 @@ def _persist_auth_cookie(resp):
         )
     return resp
 
-# 批量转录：所有任务都提交到同一个线程池，池子开得足够大（不成为瓶颈），
-# 真正的并发上限由每个引擎各自的信号量控制（见 config.ENGINE_CONCURRENCY）。
-# 这样用户可以一次丢进很多文件——云引擎几乎同时开跑，本地 Whisper 自动排队。
-_pool_size = max(sum(config.ENGINE_CONCURRENCY.values()), 4)
-executor = ThreadPoolExecutor(max_workers=_pool_size)
+# 批量转录：**每个引擎一个线程池**，池子大小就是该引擎的并发上限。
+#
+# 以前是所有引擎共用一个大池（44 个线程），靠每个引擎的信号量限流。问题是
+# 信号量是在 worker 线程**里面**等的：一条 158 期的 Whisper 链条一次提交，
+# 44 个线程瞬间被占满（4 个真在转、40 个占着线程干等 Whisper 信号量），
+# 后面提交的任务——哪怕是走云端、本该立刻开跑的——只能排在池子队列里。
+# 实测现象：用户传了个 .mov 选 Gemini 3.5，任务卡在 pending 两小时没动静。
+# 分池之后，Whisper 的队再长也只占它自己那 4 个线程。
+_engine_executors = {
+    engine: ThreadPoolExecutor(max_workers=max(1, n), thread_name_prefix=f'tx-{engine}')
+    for engine, n in config.ENGINE_CONCURRENCY.items()
+}
+# 没在 ENGINE_CONCURRENCY 里的引擎名（老任务、手填的）走这个兜底池
+_other_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix='tx-other')
+
+
+def submit_transcription(engine, fn, *args, **kwargs):
+    """按引擎分池提交转写任务。"""
+    pool = _engine_executors.get(engine) or _other_executor
+    return pool.submit(fn, *args, **kwargs)
+
+
+# 信号量保留：跨池的路径仍要它兜底（如云引擎失败后落 Whisper，
+# 那条任务占着云引擎的线程，却要排 Whisper 的额度）。
 _engine_semaphores = {
     engine: threading.Semaphore(n)
     for engine, n in config.ENGINE_CONCURRENCY.items()
@@ -183,9 +203,18 @@ def allowed_file(filename):
 
 
 def format_seconds(s):
+    """秒 → MM:SS，超过一小时给 HH:MM:SS。
+
+    别退回纯 MM:SS：Whisper 的段落时间戳走这里，长音频会给出 `173:12` 这种
+    三位分钟数，下游（sanitize 的时间戳校验、前端 parseTimestampToSeconds）
+    按两位分钟解析，整条长稿的时间轴会被判坏并塌成同一个值。
+    """
     total = int(s)
-    minutes = total // 60
+    hours = total // 3600
+    minutes = total % 3600 // 60
     seconds = total % 60
+    if hours:
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
     return f"{minutes:02d}:{seconds:02d}"
 
 
@@ -500,10 +529,77 @@ def _is_content_block(err):
     return any(m in s for m in _CONTENT_BLOCK_MARKERS)
 
 
+def _chain_stopped(chain_id):
+    """这条链条是不是已经被用户停掉了（内存标记 + 落盘终态都算）。
+
+    _cancel_chains 只在链条线程活着的时候有值（finally 里就 discard 了），而按下停止
+    之后队列里可能还压着几十个已提交的转写——它们得自己看一眼 chain.json 的终态，
+    否则用户按了停止，最贵的部分照样一个个跑完。
+    """
+    if not chain_id:
+        return False
+    if chain_id in _cancel_chains:
+        return True
+    try:
+        with open(os.path.join(_chain_dir(chain_id), 'chain.json'), 'r',
+                  encoding='utf-8') as f:
+            return json.load(f).get('stage') == 'cancelled'
+    except Exception:  # noqa: BLE001  读不到就当没停，宁可多转一条也不误杀
+        return False
+
+
+class _EmptyTranscript(RuntimeError):
+    """转写「看着成功了但其实什么都没有」：0 段、全是音乐标记、或纯静音幻听。
+
+    当成普通失败抛出去，好处是自动吃到既有的兜底逻辑——云引擎空转就换 Whisper
+    再试一次，Whisper 也拿不到东西才把任务判失败，并把原因写给用户。
+    """
+
+
+def _check_transcript(segments, duration, audio_path):
+    """转写出口校验：真的没内容就抛 _EmptyTranscript。判据见 sanitize.transcript_quality。
+
+    先跑一遍清洗层的纯文字清洗再判——落盘走的是清洗后的稿，而清洗会把
+    「（音乐）×200 折成一段再删掉」这类内容清成 0 段。只看原始稿会漏判：
+    校验通过、清洗之后却存了一份空转写。
+    """
+    try:
+        from sanitize import clean_transcript, transcript_quality
+    except Exception:  # noqa: BLE001  校验层不可用绝不影响正常转写
+        return
+    checked, report = segments, None
+    try:
+        if segments and 'timestamp' in (segments[0] or {}):
+            checked, report = clean_transcript(segments, duration=duration)
+    except Exception:  # noqa: BLE001
+        checked, report = segments, None
+    try:
+        ok, reason, stats = transcript_quality(checked, duration, audio_path,
+                                               clean_report=report)
+    except Exception:  # noqa: BLE001
+        return
+    if not ok:
+        raise _EmptyTranscript(f'{reason}（{stats}）')
+
+
 def run_transcription(task_id, filepath, engine, original_filename, q,
                       speaker_count=None, fallback_whisper=False,
                       model_review=False, offset_sec=0, extra_meta=None,
                       timing=None):
+    """记账归属：这个 worker 线程里所有模型调用（转写、摘要、enrich）都记到 task_id，
+    链条里的转写再带上 chain_id（extra_meta 里由 run_chain 塞入）。"""
+    with usage.scope(ref=task_id, chain=(extra_meta or {}).get('chain_id')):
+        return _run_transcription(task_id, filepath, engine, original_filename, q,
+                                  speaker_count=speaker_count,
+                                  fallback_whisper=fallback_whisper,
+                                  model_review=model_review, offset_sec=offset_sec,
+                                  extra_meta=extra_meta, timing=timing)
+
+
+def _run_transcription(task_id, filepath, engine, original_filename, q,
+                       speaker_count=None, fallback_whisper=False,
+                       model_review=False, offset_sec=0, extra_meta=None,
+                       timing=None):
     """Background worker: runs transcription, saves results, pushes events.
 
     每个引擎有独立信号量限流。任务提交后可能先排队（quota 已满），
@@ -521,6 +617,15 @@ def run_transcription(task_id, filepath, engine, original_filename, q,
     cleanup_paths = [filepath]
     input_path = filepath
 
+    # 链条已被停止 → 队列里剩下的这些别再开跑（停止前可能已经提交了几十个）。
+    # 音频留在 uploads/ 不删，Continue 会直接拿它重转，不用重下载。
+    chain_id = (extra_meta or {}).get('chain_id')
+    if _chain_stopped(chain_id):
+        taskdb.set_status(task_id, 'failed', error='已随链条停止，未开始转写')
+        q.put(json.dumps({'type': 'error', 'message': '已随链条停止，未开始转写'}))
+        tasks.pop(task_id, None)
+        return
+
     # 分阶段计时（秒）：queued / extract / transcribe / summary / save / enrich，
     # 外加调用方可能先填好的 download / subs_check。最后并进 meta.json 的 timing 字段，
     # 供详情页显示、统计面板按引擎算速度、以及给后来的任务估「还要多久」。
@@ -534,6 +639,15 @@ def run_transcription(task_id, filepath, engine, original_filename, q,
         sem.acquire()
     timing['queued_s'] = round(time.monotonic() - t_enq, 1)
     t_tx = time.monotonic()           # 抽音频前就开始算；下面抽完会重置
+
+    # 排队期间（可能几十分钟）用户按了停止 → 到自己这一轮时再确认一次
+    if _chain_stopped(chain_id):
+        if sem is not None:
+            sem.release()
+        taskdb.set_status(task_id, 'failed', error='已随链条停止，未开始转写')
+        q.put(json.dumps({'type': 'error', 'message': '已随链条停止，未开始转写'}))
+        tasks.pop(task_id, None)
+        return
 
     try:
         taskdb.set_status(task_id, 'running')
@@ -570,6 +684,13 @@ def run_transcription(task_id, filepath, engine, original_filename, q,
 
         segments = []
         summary_data = None
+
+        def _verify(segs):
+            """出口校验：在花钱做总结 / 落盘之前，先确认这稿不是空的或纯幻听。
+
+            放在 _summary 之前，空稿就不会再白付一次总结 + enrich 的钱。
+            """
+            _check_transcript(segs, audio_dur, input_path)
 
         def _summary(full_text, use_qwen=False):
             """转写本体到这里为止计时，再单独计总结的时间。"""
@@ -647,6 +768,7 @@ def run_transcription(task_id, filepath, engine, original_filename, q,
 
         if engine == 'whisper':
             segments, full_text = _whisper_transcribe()
+            _verify(segments)
             summary_data = _summary(full_text)
 
         elif engine == 'gemini':
@@ -665,6 +787,7 @@ def run_transcription(task_id, filepath, engine, original_filename, q,
             for seg in segments:
                 q.put(json.dumps({'type': 'segment', **seg}))
 
+            _verify(segments)
             summary_data = _summary(full_text)
 
         elif engine in ('qwenasr', 'dashscope'):
@@ -681,6 +804,9 @@ def run_transcription(task_id, filepath, engine, original_filename, q,
             segments = transcribe_audio(
                 input_path, progress_callback=progress_cb
             )
+            # 阿里云 ASR 按音频时长计费，没有 token 数：记秒数，价格表里配 per_audio_hour 才算钱
+            usage.record('dashscope', config.DASHSCOPE_ASR_MODEL, 'asr',
+                         audio_seconds=audio_dur or 0)
 
             for seg in segments:
                 q.put(json.dumps({'type': 'segment', **seg}))
@@ -688,6 +814,7 @@ def run_transcription(task_id, filepath, engine, original_filename, q,
             full_text = "\n".join(
                 f"[{s['timestamp']}] {s['text']}" for s in segments
             )
+            _verify(segments)
             summary_data = _summary(full_text, use_qwen=True)
 
         elif engine == 'precise':
@@ -720,11 +847,14 @@ def run_transcription(task_id, filepath, engine, original_filename, q,
                         input_path, diarization=True,
                         speaker_count=speaker_count,
                     )
+                    usage.record('dashscope', config.DASHSCOPE_ASR_MODEL, 'asr',
+                                 audio_seconds=audio_dur or 0)
                 except Exception as e:  # noqa: BLE001
                     holder['dashscope_err'] = e
 
-            tg = threading.Thread(target=_do_gemini)
-            td = threading.Thread(target=_do_dashscope)
+            # usage.bound：两个子线程也归到这条 task 的账上
+            tg = threading.Thread(target=usage.bound(_do_gemini))
+            td = threading.Thread(target=usage.bound(_do_dashscope))
             tg.start()
             td.start()
             tg.join()
@@ -771,6 +901,7 @@ def run_transcription(task_id, filepath, engine, original_filename, q,
             for seg in segments:
                 q.put(json.dumps({'type': 'segment', **seg}))
 
+            _verify(segments)
             summary_data = _summary(full_text)
 
         elif engine == 'gemini35':
@@ -795,6 +926,7 @@ def run_transcription(task_id, filepath, engine, original_filename, q,
             full_text = "\n".join(
                 f"[{s['timestamp']}] {s['text']}" for s in segments
             )
+            _verify(segments)
             summary_data = _summary(full_text)
 
         else:
@@ -812,11 +944,15 @@ def run_transcription(task_id, filepath, engine, original_filename, q,
         # 只有明确勾了"失败兜底 Whisper"才自动改用本地 Whisper——不偷偷换引擎/降质量。
         # 例外：**内容拦截**（RECITATION/PROHIBITED 等确定性拒绝）无视开关直接落 Whisper——
         # 因为重试同一云引擎永远是白搭，只有 Whisper 或放弃两条路。
+        # 同理：**云引擎交了白卷**（0 段 / 全是音乐标记 / 纯静音幻听）也无视开关落
+        # Whisper——云端已经在引擎内部重试过了，再试一遍还是白卷。
         content_block = _is_content_block(e)
+        empty_out = isinstance(e, _EmptyTranscript)
         fell_back = False
-        if engine != 'whisper' and (fallback_whisper or content_block):
+        if engine != 'whisper' and (fallback_whisper or content_block or empty_out):
             try:
                 why = ('Content-blocked by Gemini (deterministic)' if content_block
+                       else f'{engine} 没转出有效内容' if empty_out
                        else f'{engine} failed ({str(e)[:50]})')
                 q.put(json.dumps({
                     'type': 'progress', 'percent': 0,
@@ -832,11 +968,15 @@ def run_transcription(task_id, filepath, engine, original_filename, q,
                 timing['fallback_from'] = engine
                 timing.pop('transcribe_s', None)      # 重新计：含云端失败 + Whisper 两段
                 segments, full_text = _whisper_transcribe()
+                _verify(segments)
                 summary_data = _summary(full_text)
                 _finish_ok(segments, summary_data, 'whisper')
                 fell_back = True
             except Exception as e2:  # noqa: BLE001
-                e = e2
+                # 两段都失败：把两边的原因都留着。只报兜底那一条会把"云引擎为什么失败"
+                # 这个更有用的信息盖掉（用户看到的只剩 Whisper 的解码报错）。
+                e = (e2 if str(e2) == str(e)
+                     else RuntimeError(f'{engine} 失败：{e}；Whisper 兜底也失败：{e2}'))
         if not fell_back:
             taskdb.set_status(task_id, 'failed', error=str(e))
             q.put(json.dumps({
@@ -920,8 +1060,8 @@ def _enqueue_task(file, engine, speaker_count=None):
 
     # 模型体检：只对【云引擎】转的稿开（内容本就上了云，体检不增加隐私暴露）；
     # 本地 Whisper 转的（多半是为隐私留本地的）不送云体检。
-    executor.submit(
-        run_transcription, task_id, filepath, engine, file.filename, q,
+    submit_transcription(
+        engine, run_transcription, task_id, filepath, engine, file.filename, q,
         speaker_count, False, engine != 'whisper',
     )
 
@@ -997,8 +1137,8 @@ def _enqueue_local_task(path, engine, speaker_count=None):
     taskdb.create(task_id, display, engine, speaker_count, link)
     q = queue.Queue()
     tasks[task_id] = q
-    executor.submit(
-        run_transcription, task_id, link, engine, display, q,
+    submit_transcription(
+        engine, run_transcription, task_id, link, engine, display, q,
         speaker_count, False, engine != 'whisper',
     )
     return task_id, None
@@ -1020,9 +1160,9 @@ def recover_unfinished_tasks():
             taskdb.set_status(task_id, 'pending')
             q = queue.Queue()
             tasks[task_id] = q
-            executor.submit(
-                run_transcription, task_id, upload_path, row.get('engine'),
-                row.get('filename'), q, row.get('speaker_count'),
+            submit_transcription(
+                row.get('engine'), run_transcription, task_id, upload_path,
+                row.get('engine'), row.get('filename'), q, row.get('speaker_count'),
             )
             active_ids.add(task_id)
             recovered += 1
@@ -1246,7 +1386,7 @@ def api_transcribe_urls():
         taskdb.create(task_id, title or url, engine, None, '')
         q = queue.Queue()
         tasks[task_id] = q
-        executor.submit(_download_then_transcribe, task_id, url, engine, q,
+        submit_transcription(engine, _download_then_transcribe, task_id, url, engine, q,
                         section, offset_sec, sub_mode)
         out.append({'url': url, 'title': title, 'task_id': task_id})
     return jsonify({'tasks': out, 'errors': errors})
@@ -1477,7 +1617,7 @@ def api_history_detail(task_id):
     has_audio = bool(meta.get('audio_ext')) and os.path.isfile(
         os.path.join(task_dir, f"audio{meta.get('audio_ext')}"))
     return jsonify({**meta, 'segments': segments, 'summary': summary,
-                    'has_audio': has_audio})
+                    'has_audio': has_audio, 'cost': usage.cost_for(ref=task_id)})
 
 
 @app.route('/api/history/<task_id>/audio')
@@ -2086,6 +2226,39 @@ def recover_unfinished_chains():
                 pass
 
 
+def _task_duration(task_id):
+    """这条转写对应音频的时长（秒）；取不到返回 None。"""
+    try:
+        with open(os.path.join(config.RESULTS_FOLDER, task_id, 'meta.json'),
+                  'r', encoding='utf-8') as f:
+            return json.load(f).get('duration_seconds')
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _unusable_transcript(task_id):
+    """这一期的转写是不是废稿（返回原因，可用则返回 None）。
+
+    放在逐期分析的最前面：废稿连模型体检和抽卡都不该花钱，而且抽卡模型对着
+    幻听文本照样能编出几十张「证据卡」，一路流进最终画像。
+    """
+    try:
+        from sanitize import transcript_quality
+        with open(os.path.join(config.RESULTS_FOLDER, task_id, 'transcript.json'),
+                  'r', encoding='utf-8') as f:
+            segs = json.load(f)
+        if not isinstance(segs, list):
+            segs = segs.get('segments') or []
+        import glob as _glob
+        audio = sorted(_glob.glob(os.path.join(
+            config.RESULTS_FOLDER, task_id, 'audio.*')))       # 留了音频副本就一起验静音
+        ok, reason, _stats = transcript_quality(
+            segs, _task_duration(task_id), audio[0] if audio else None)
+        return None if ok else reason
+    except Exception:  # noqa: BLE001  判不了就当可用，别挡住正常分析
+        return None
+
+
 def _review_episode_transcript(task_id, preset=None):
     """白嫖分析流程：这一集分析时顺手给它的转写做一次模型体检（模型标、代码删）。
 
@@ -2188,11 +2361,18 @@ def _safe_doc_name(name):
 
 
 def run_chain(state):
+    """记账归属：链条线程里的分析 / 合成调用都记到 chain_id。"""
+    with usage.scope(ref=state['id'], chain=state['id']):
+        return _run_chain(state)
+
+
+def _run_chain(state):
     """链条后台线程：解析 → 边下边转 → 逐期分析 → 总合成。
 
     下载和转写重叠进行（每个视频下完立刻提交转写），下载并发受全局闸限流；
     分析同样走全局闸。无论开多少条链，对外部的瞬时压力都封顶。
     """
+    import glob as _glob
     chain_id = state['id']
     chain_dir = _chain_dir(chain_id)
     dl_dir = os.path.join(chain_dir, 'downloads')
@@ -2209,6 +2389,7 @@ def run_chain(state):
         # ---- 1. 解析目标（拿到标题 + 封面 + 频道名/头像）----
         state['stage'] = 'downloading'
         _save_chain(state)
+        prev_videos = list(state.get('videos') or [])   # 上一轮的视频表（Continue 要用它接回 task_id）
         targets, channel = probe(state['url'], state.get('max_videos'))
         if not targets:
             raise RuntimeError('No downloadable videos at this link')
@@ -2243,6 +2424,33 @@ def run_chain(state):
                 v['source'] = 'reused'
         reused = sum(1 for v in videos if v.get('source') == 'reused')
 
+        # Continue 复用上一轮**失败但音频还在**的任务：上面这份 videos 是按 probe
+        # 结果新建的（task_id 全是 None），而去重索引只认已经成功落盘的转写，
+        # 失败那几期的 task_id 就此丢掉 → 会重新下载一遍。这里把旧 task_id 接回来，
+        # 让下面 _download_and_submit 的「音频还在就直接重转」那条分支真正用得上。
+        prev_by_vid, prev_by_url = {}, {}
+        for pv in (prev_videos or []):
+            if not pv.get('task_id'):
+                continue
+            if pv.get('video_id'):
+                prev_by_vid.setdefault(pv['video_id'], pv['task_id'])
+            if pv.get('video_url'):
+                prev_by_url.setdefault(pv['video_url'], pv['task_id'])
+        resumed = 0
+        for v in videos:
+            if v.get('task_id'):
+                continue
+            old = prev_by_vid.get(v.get('video_id')) or prev_by_url.get(v.get('video_url'))
+            if not old:
+                continue
+            row = taskdb.get(old) or {}
+            up = row.get('upload_path') or ''
+            if row.get('status') in ('pending', 'running') or (up and os.path.isfile(up)):
+                v['task_id'] = old
+                resumed += 1
+        if resumed:
+            print(f'[chain {chain_id[:8]}] Continue：{resumed} 期沿用上次留下的音频，不重下载')
+
         state['videos'] = videos
         state['download_total'] = len(targets)
         state['download_done'] = reused
@@ -2252,6 +2460,19 @@ def run_chain(state):
         state['stage'] = 'transcribing'
 
         def _download_and_submit(i, target):
+            """一期的下载 + 提交转写。**绝不让异常冒出去**：这些调用跑在
+            _download_executor 里，下面 f.result() 会把异常重新抛到链条主线程，
+            一期磁盘写失败就能把整条链判 failed、已下好的几期全作废、
+            剩下的期永久停在 downloading。单期出事就单期标失败。"""
+            try:
+                return _download_and_submit_one(i, target)
+            except Exception as e:  # noqa: BLE001
+                videos[i]['status'] = 'download_failed'
+                videos[i]['error'] = str(e)[:300]
+                save()
+                return None
+
+        def _download_and_submit_one(i, target):
             v = videos[i]
             if v.get('status') == 'done':        # 复用的旧结果，跳过
                 return
@@ -2274,7 +2495,7 @@ def run_chain(state):
                     taskdb.set_status(old_tid, 'pending')
                     q2 = queue.Queue()
                     tasks[old_tid] = q2
-                    executor.submit(run_transcription, old_tid, up,
+                    submit_transcription(state['engine'], run_transcription, old_tid, up,
                                     state['engine'], row.get('filename'), q2, None,
                                     fallback_whisper=state.get('fallback_whisper', False))
                     v['status'] = 'transcribing'
@@ -2324,13 +2545,14 @@ def run_chain(state):
             taskdb.create(task_id, display_name, state['engine'], None, upload_path)
             q = queue.Queue()
             tasks[task_id] = q
-            executor.submit(
-                run_transcription, task_id, upload_path, state['engine'],
+            submit_transcription(
+                state['engine'], run_transcription, task_id, upload_path, state['engine'],
                 display_name, q, None,
                 fallback_whisper=state.get('fallback_whisper', False),
                 extra_meta={'source_url': target.get('video_url'),
                             'video_id': item.get('video_id'),
-                            'creator': state.get('author') or item.get('uploader')},
+                            'creator': state.get('author') or item.get('uploader'),
+                            'chain_id': chain_id},     # 记账：这期转写的钱算到这条链上
             )
             v['task_id'] = task_id
             v['title'] = item['title']
@@ -2387,6 +2609,20 @@ def run_chain(state):
             save()
             from analyze import analyze_episode, synthesize
 
+            # 证据卡缓存：按 task_id 建索引，别按"第几期"。
+            # 文件名仍是 cards_001.json（人要看的），但博主只要新发了视频，probe 返回的
+            # 顺序整体前移，所有索引全错位 → 旧缓存一份都认不出来 → Continue 把每期重抽
+            # 一遍（实测库里大迎那条 195 份卡片全部失配，白花约 $5）。
+            cards_cache = {}
+            for _cf in _glob.glob(os.path.join(chain_dir, 'cards_*.json')):
+                try:
+                    with open(_cf, 'r', encoding='utf-8') as _fh:
+                        _ep = json.load(_fh)
+                    if _ep.get('cards') and _ep.get('task_id'):
+                        cards_cache[_ep['task_id']] = _ep
+                except Exception:  # noqa: BLE001  坏文件当没有
+                    pass
+
             def _analyze_one(v):
                 if v['status'] != 'done' or chain_id in _cancel_chains:
                     return None
@@ -2396,16 +2632,17 @@ def run_chain(state):
                     return None
                 try:
                     # Continue 省钱：这期的证据卡之前抽过就直接用缓存，不再花钱。
-                    # 校验 task_id：这期若被重转过（新 task），旧卡作废重抽。
+                    # 认 task_id：这期若被重转过（新 task），旧卡自然认不上，重抽。
                     cpath2 = os.path.join(chain_dir, f"cards_{v['index'] + 1:03d}.json")
-                    if os.path.isfile(cpath2):
-                        try:
-                            with open(cpath2, 'r', encoding='utf-8') as fh:
-                                ep = json.load(fh)
-                            if ep.get('cards') and ep.get('task_id') == v['task_id']:
-                                return ep
-                        except Exception:
-                            pass
+                    cached = cards_cache.get(v['task_id'])
+                    if cached:
+                        return cached
+                    # 废稿（纯音乐/噪音标注、静音幻听、解码死循环）就地判不可用：
+                    # 不花体检和抽卡的钱，也**留痕**让合成层的护栏算得上这一期
+                    bad = _unusable_transcript(v['task_id'])
+                    if bad:
+                        from analyze import unusable_episode
+                        return unusable_episode(v['title'], bad)
                     # 白嫖：分析读转写时顺手做一次模型体检（模型标、代码删）
                     segs = _review_episode_transcript(
                         v['task_id'], preset=state.get('analysis_preset'))
@@ -2418,7 +2655,9 @@ def run_chain(state):
                     with _chain_analysis_sem:    # 全局分析闸
                         ep = analyze_episode(v['title'], text, state['author'],
                                              verify=state.get('verify', False),
-                                             preset=state.get('analysis_preset'))
+                                             preset=state.get('analysis_preset'),
+                                             segments=segs,
+                                             duration=_task_duration(v['task_id']))
                     fname = f"分析_{v['index'] + 1:03d}_{_safe_doc_name(v['title'])}.md"
                     with open(os.path.join(chain_dir, fname),
                               'w', encoding='utf-8') as fh:
@@ -2437,19 +2676,23 @@ def run_chain(state):
             with ThreadPoolExecutor(
                 max_workers=config.CHAIN_ANALYSIS_CONCURRENCY
             ) as pool:
-                results = list(pool.map(_analyze_one, submitted))
+                results = list(pool.map(usage.bound(_analyze_one), submitted))
             episodes = [r for r in results if r]
-            state['analyzed_ok'] = len(episodes)
+            # 只数真正拿到卡片的期：废稿现在会留痕返回，不该算成"分析成功"
+            state['analyzed_ok'] = sum(1 for e in episodes if e.get('cards'))
 
             # ---- 5. 总合成（只吃证据卡，不吃全文）----
-            if episodes:
+            # 合成是最贵的一步：用户已经按了停止就别再花这笔钱
+            # （_reanalyze_chain_inner 一直有这个判断，这里以前漏了）
+            if episodes and chain_id not in _cancel_chains:
                 state['stage'] = 'synthesizing'
                 save()
                 total_md = synthesize(episodes, state['author'],
                                       critique_level=state.get('critique_level', 'analytical'),
                                       preset=state.get('analysis_preset'),
                                       self_verify=state.get('self_verify', False),
-                                      lang=state.get('lang', 'auto'))
+                                      lang=state.get('lang', 'auto'),
+                                      attempted=len(submitted))
                 with open(os.path.join(chain_dir, '总分析.md'),
                           'w', encoding='utf-8') as fh:
                     fh.write(total_md)
@@ -2471,6 +2714,11 @@ def run_chain(state):
 
 
 def _reanalyze_chain(state):
+    with usage.scope(ref=state['id'], chain=state['id']):
+        return _reanalyze_chain_inner(state)
+
+
+def _reanalyze_chain_inner(state):
     """只重跑分析+合成（不重下、不重转），复用已有转写。供历史链条测试新模型/核实模式。"""
     from analyze import analyze_episode, synthesize
     chain_dir = _chain_dir(state['id'])
@@ -2504,6 +2752,10 @@ def _reanalyze_chain(state):
             if not os.path.isfile(tpath):
                 return None
             try:
+                bad = _unusable_transcript(v['task_id'])
+                if bad:
+                    from analyze import unusable_episode
+                    return unusable_episode(v['title'], bad)
                 # 白嫖：分析读转写时顺手做一次模型体检（模型标、代码删）
                 segs = _review_episode_transcript(
                     v['task_id'], preset=state.get('analysis_preset'))
@@ -2514,7 +2766,9 @@ def _reanalyze_chain(state):
                 with _chain_analysis_sem:
                     ep = analyze_episode(v['title'], text, state['author'],
                                          verify=state.get('verify', False),
-                                         preset=state.get('analysis_preset'))
+                                         preset=state.get('analysis_preset'),
+                                         segments=segs,
+                                         duration=_task_duration(v['task_id']))
                 fname = f"分析_{v['index'] + 1:03d}_{_safe_doc_name(v['title'])}.md"
                 with open(os.path.join(chain_dir, fname),
                           'w', encoding='utf-8') as fh:
@@ -2534,9 +2788,9 @@ def _reanalyze_chain(state):
 
         with ThreadPoolExecutor(
                 max_workers=config.CHAIN_ANALYSIS_CONCURRENCY) as pool:
-            results = list(pool.map(_analyze_one, submitted))
+            results = list(pool.map(usage.bound(_analyze_one), submitted))
         episodes = [r for r in results if r]
-        state['analyzed_ok'] = len(episodes)
+        state['analyzed_ok'] = sum(1 for e in episodes if e.get('cards'))
 
         if episodes and state['id'] not in _cancel_chains:
             state['stage'] = 'synthesizing'
@@ -2545,7 +2799,8 @@ def _reanalyze_chain(state):
                                   critique_level=state.get('critique_level', 'analytical'),
                                   preset=state.get('analysis_preset'),
                                   self_verify=state.get('self_verify', False),
-                                  lang=state.get('lang', 'auto'))
+                                  lang=state.get('lang', 'auto'),
+                                  attempted=len(submitted))
             with open(os.path.join(chain_dir, '总分析.md'),
                       'w', encoding='utf-8') as fh:
                 fh.write(total_md)
@@ -2621,10 +2876,19 @@ def api_chains():
 _channel_backfilling = set()   # 正在补频道信息的链条，防重复重探
 
 
+def _dl_is_real_avatar(url):
+    """downloader.is_real_avatar 的懒加载包装（downloader 在本文件一律按需 import）。"""
+    try:
+        from downloader import is_real_avatar
+        return is_real_avatar(url)
+    except Exception:  # noqa: BLE001  取不到就当"不是真头像"，最多多探一次
+        return False
+
+
 def _backfill_channel(chain_id, url):
     """老链条重探一次频道元信息（名字/订阅数/头像），只取频道级、不列全部视频。"""
     try:
-        from downloader import probe, channel_followers
+        from downloader import probe, channel_followers, is_real_avatar
         _, channel = probe(url, max_videos=1)
         followers = channel_followers(url)   # 单独取（不带 lang，否则 YouTube 返 None）
     except Exception:  # noqa: BLE001
@@ -2637,13 +2901,17 @@ def _backfill_channel(chain_id, url):
             # 只在链条已终态时回写，避免覆盖 run_chain 内存里正在跑的 state
             if st.get('stage') in ('done', 'failed', 'cancelled'):
                 st['followers'] = followers or (channel or {}).get('followers', 0)
-                if not st.get('avatar') and (channel or {}).get('avatar'):
-                    st['avatar'] = channel['avatar']
+                # 头像：空的要补，被当头像用的视频封面也要换掉（老数据里一大片）
+                new_av = (channel or {}).get('avatar') or ''
+                if new_av and (not st.get('avatar')
+                               or (is_real_avatar(new_av) and not is_real_avatar(st['avatar']))):
+                    st['avatar'] = new_av
                 # 名字也补：旧链创建时没存频道名，卡片只能显示裸 URL
                 if (channel or {}).get('name') and st.get('author') in (None, '', '该博主'):
                     st['author'] = channel['name']
                 st['followers_checked'] = True   # 探过就记住，别每次轮询都重探
                 st['author_checked'] = True      # 名字也探过（取不到就是取不到，别反复探）
+                st['avatar_checked'] = True      # 头像同理：番剧等真没有的，别反复探
                 _save_chain(st)
         except Exception:  # noqa: BLE001
             pass
@@ -2677,7 +2945,10 @@ def api_chain_detail(chain_id):
     needs_followers = not data.get('followers') and not data.get('followers_checked')
     needs_author = data.get('author') in (None, '', '该博主') \
         and not data.get('author_checked')
-    if (needs_followers or needs_author) \
+    # 头像：空的、或存的其实是视频封面（老数据默认行为），都值得重探一次
+    needs_avatar = not data.get('avatar_checked') \
+        and not _dl_is_real_avatar(data.get('avatar'))
+    if (needs_followers or needs_author or needs_avatar) \
             and data.get('stage') in ('done', 'failed', 'cancelled') \
             and data.get('url') and chain_id not in _channel_backfilling:
         _channel_backfilling.add(chain_id)
@@ -2691,6 +2962,7 @@ def api_chain_detail(chain_id):
             p = _task_progress.get(tid)
             if p is not None:
                 v['progress'] = p
+    data['cost'] = usage.cost_for(chain=chain_id)
     return jsonify(data)
 
 
@@ -2768,9 +3040,10 @@ def api_chain_lens(chain_id):
     def _run():
         try:
             from analyze import render_lens
-            md = render_lens(eps, lens, author=state.get('author', '该博主'),
-                             preset=state.get('analysis_preset'),
-                             lang=state.get('lang', 'auto'))
+            with usage.scope(ref=chain_id, chain=chain_id):
+                md = render_lens(eps, lens, author=state.get('author', '该博主'),
+                                 preset=state.get('analysis_preset'),
+                                 lang=state.get('lang', 'auto'))
             with open(fpath, 'w', encoding='utf-8') as fh:
                 fh.write(md or '')
             _lens_jobs[key] = 'done'
@@ -2823,6 +3096,16 @@ def api_chain_retry(chain_id):
         state['engine'] = body['engine']
     if body.get('analysis_preset'):
         state['analysis_preset'] = body['analysis_preset']
+    # 模式默认沿用这条链原来的（只转写就还是只转写，别替用户决定花分析的钱）；
+    # 只有前端明确传了 analyze 才改——「接着上次那条跑」时会把表单里的当前模式传过来。
+    if 'analyze' in body:
+        state['analyze'] = bool(body['analyze'])
+    try:                                      # 想多拿几期：接着跑时可以把上限调大
+        more = int(body.get('max_videos') or 0)
+    except (TypeError, ValueError):
+        more = 0
+    if more > 0:
+        state['max_videos'] = min(max(more, state.get('max_videos') or 0), _MAX_CHAIN_VIDEOS)
     _cancel_chains.discard(chain_id)          # 清掉可能残留的取消标记
     # run_chain 会重新 probe + 去重复用（已转写的跳过），只有缺的会真正重下重转
     threading.Thread(target=run_chain, args=(state,), daemon=True).start()
@@ -2876,11 +3159,12 @@ def _retranscribe_video(chain_id, index, target, engine):
         taskdb.create(task_id, display_name, engine, None, upload_path)
         q = queue.Queue()
         tasks[task_id] = q
-        executor.submit(run_transcription, task_id, upload_path, engine,
+        submit_transcription(engine, run_transcription, task_id, upload_path, engine,
                         display_name, q, None,
                         extra_meta={'source_url': target.get('video_url'),
                                     'video_id': item.get('video_id'),
-                                    'creator': item.get('uploader')})
+                                    'creator': item.get('uploader'),
+                                    'chain_id': chain_id})
         _update_video(chain_id, index, {
             'task_id': task_id, 'title': item['title'],
             'video_id': item['video_id'], 'status': 'transcribing',
@@ -3302,6 +3586,12 @@ def _audio_files():
                 yield os.path.join(td, name), name.endswith('.ogg')
 
 
+@app.route('/api/costs')
+def api_costs():
+    """Settings → Costs：模型调用费用汇总（本月 / 全部，按服务商 / 用途 / 模型）。"""
+    return jsonify(usage.summary())
+
+
 @app.route('/api/storage')
 def api_storage():
     total = 0
@@ -3592,7 +3882,8 @@ def _run_xhs_analyze(keywords, lang='auto'):
         def prog(done, total):
             _xhs_an['done'], _xhs_an['total'] = done, total
 
-        report, extractions = xhs_report(dirs, title='小红书调研报告', on_progress=prog, lang=lang)
+        with usage.scope(ref='xhs'):
+            report, extractions = xhs_report(dirs, title='小红书调研报告', on_progress=prog, lang=lang)
         with open(_XHS_REPORT, 'w', encoding='utf-8') as f:
             f.write(report or '')
         with open(os.path.join(_XHS_ROOT, 'xhs_dataset', '_extractions.json'),

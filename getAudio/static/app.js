@@ -1194,6 +1194,14 @@ async function openDetailView(taskId) {
             sp.title = timingBreakdown(tm);
             detailMeta.appendChild(sp);
         }
+        if (data.cost && data.cost.cost_usd > 0) {
+            detailMeta.appendChild(document.createTextNode(' · '));
+            const cs = document.createElement('span');
+            cs.className = 'detail-timing';
+            cs.textContent = fmtUsd(data.cost.cost_usd);
+            cs.title = T('detail.costTitle', { n: data.cost.calls });
+            detailMeta.appendChild(cs);
+        }
         if (data.source_url) {
             detailMeta.appendChild(document.createTextNode(' · '));
             const link = buildSourceLink(data.source_url);
@@ -1296,6 +1304,74 @@ const chainFallbackWhisper = document.getElementById('chain-fallback-whisper');
 const chainCritique = document.getElementById('chain-critique');
 const chainProvider = document.getElementById('chain-provider');
 const chainStartBtn = document.getElementById('chain-start');
+const chainMode = document.getElementById('chain-mode');
+
+// 「只转写」模式：整条链照常下载 + 转写 + 合并原文，但不抽证据卡、不出画像。
+// 分析相关的旋钮在这个模式下没有意义，直接禁掉，省得填了以为生效。
+function syncChainMode() {
+    if (!chainMode) return;
+    const onlyTx = chainMode.value === 'transcribe';
+    chainStartBtn.textContent = T(onlyTx ? 'creators.transcribeAll' : 'creators.analyze');
+    ['chain-provider', 'chain-critique', 'chain-lang', 'chain-verify', 'chain-self-verify']
+        .forEach(id => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.disabled = onlyTx;
+            const wrap = el.closest('label') || el;
+            wrap.classList.toggle('is-muted', onlyTx);
+        });
+}
+if (chainMode) chainMode.addEventListener('change', syncChainMode);
+
+// 同一个地址已经有链条吗？有多条就取已完成期数最多的那条。
+async function findChainByUrl(url) {
+    let chains = [];
+    try { chains = await (await fetch('/api/chains')).json(); } catch { return null; }
+    const want = normalizeChainUrl(url);
+    if (!want) return null;
+    const hits = (Array.isArray(chains) ? chains : [])
+        .filter(c => !c.merged_into && normalizeChainUrl(c.url) === want);
+    if (!hits.length) return null;
+    hits.sort((a, b) => ((b.videos || []).filter(v => v.status === 'done').length
+                       - (a.videos || []).filter(v => v.status === 'done').length));
+    return hits[0];
+}
+
+// 接着已有链条跑：把表单里的当前选择（引擎/模式/分析模型/条数）一并交过去。
+async function continueExistingChain(id) {
+    try {
+        const r = await (await fetch(`/api/chain/${id}/retry`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                engine: chainEngine.value,
+                analyze: !chainMode || chainMode.value !== 'transcribe',
+                analysis_preset: chainProvider.value,
+                max_videos: parseInt(chainMax.value, 10) || 0,
+            }),
+        })).json();
+        if (r && r.ok === false && r.error) alert(r.error);   // 还在跑 → 409，直接进去看
+    } catch { /* 网络抖动：下面照样把用户带到那条链条 */ }
+    chainUrl.value = '';
+    navigate('chain/' + id);
+}
+
+// 这条链条真正生效的设置。只转写的链条不列分析相关的旋钮——列了就是误导：
+// 看着「web-verify 开」会以为在烧搜索配额，其实这条链条压根不跑分析。
+function settingsLine(c) {
+    const onoff = b => b ? T('common.on') : T('common.off');
+    const bits = [`engine <b>${escapeHtml(c.engine || '-')}</b>`,
+                  `mode <b>${T(c.analyze === false ? 'creators.modeTranscribe' : 'creators.modeAnalyze')}</b>`];
+    if (c.analyze !== false) {
+        bits.push(`model <b>${escapeHtml(brainLabel(c.analysis_preset))}</b>`,
+                  `level <b>${escapeHtml(c.critique_level || 'analytical')}</b>`,
+                  `web-verify <b>${onoff(c.verify)}</b>`,
+                  `self-verify <b>${onoff(c.self_verify)}</b>`);
+    }
+    bits.push(`subs-first <b>${onoff(c.prefer_subs)}</b>`);
+    if (c.engine !== 'whisper') bits.push(`whisper-fallback <b>${onoff(c.fallback_whisper)}</b>`);
+    return bits.join(' · ');
+}
 
 // 分析模型的用户可读名（analysis_preset 是内部字段，展示层别裸露）
 function brainLabel(preset) {
@@ -1315,15 +1391,47 @@ chainStartBtn.addEventListener('click', async () => {
     if (chainSubmitting) return;               // 防连点重复建链（每条都烧钱）
     const url = (chainUrl.value || '').trim();
     if (!url) { chainUrl.focus(); return; }
-    // 花钱确认：分析/合成会按视频数调用付费模型
+    // 花钱确认：按当前模式说实话——只转写就别再吓唬人说要合成人物画像
     {
-        const extra = chainVerify.checked ? T('confirm.chainStartVerifyExtra') : '';
-        if (!confirm(T('confirm.chainStart', { extra }))) {
+        const onlyTx = !!chainMode && chainMode.value === 'transcribe';
+        const body = onlyTx
+            ? T('confirm.chainTranscribeOnly', {
+                extra: T(chainEngine.value === 'whisper'
+                    ? 'confirm.chainTranscribeLocalExtra'
+                    : 'confirm.chainTranscribeCloudExtra'),
+            })
+            : T('confirm.chainStart', {
+                extra: chainVerify.checked ? T('confirm.chainStartVerifyExtra') : '',
+            });
+        const head = prior
+            ? T('confirm.chainMergePrefix', {
+                author: chainDisplayName(prior),
+                n: (prior.videos || []).filter(v => v.status === 'done').length,
+            })
+            : '';
+        if (!confirm(head + body)) {
             return;
         }
     }
+    const onlyTranscribe = !!chainMode && chainMode.value === 'transcribe';
+
+    // 这个博主之前跑过 → 直接接着那条，不再开新的、也不多问一句。
+    // 转写本来就跨链条去重，但**证据卡缓存在各自的链条目录里**：另开一条 =
+    // 分析的钱全部重花一遍，还在博主库里留下两张同名卡片。
+    const prior = await findChainByUrl(url);
+    if (prior && !['done', 'failed', 'cancelled'].includes(prior.stage)) {
+        chainUrl.value = '';          // 那条还在跑：直接带你过去看，什么都不用点
+        navigate('chain/' + prior.id);
+        return;
+    }
+
     chainSubmitting = true;
     chainStartBtn.disabled = true;
+    if (prior) {                      // 接着旧的跑，不新建
+        try { await continueExistingChain(prior.id); }
+        finally { chainSubmitting = false; chainStartBtn.disabled = false; }
+        return;
+    }
     try {
         const resp = await fetch('/api/chain', {
             method: 'POST',
@@ -1333,12 +1441,13 @@ chainStartBtn.addEventListener('click', async () => {
                 author: chainAuthor.value.trim(),
                 max_videos: parseInt(chainMax.value, 10) || 0,
                 engine: chainEngine.value,
-                analyze: true,
+                analyze: !chainMode || chainMode.value !== 'transcribe',
                 prefer_subs: chainPreferSubs.checked,
                 sub_lang: (document.getElementById('chain-sub-lang') || {}).value || 'auto',
                 fallback_whisper: chainFallbackWhisper.checked,
-                verify: chainVerify.checked,
-                self_verify: chainSelfVerify.checked,
+                // 只转写模式下这几个旋钮是禁用的，别把"勾着但根本不生效"的状态存进链条
+                verify: chainVerify.checked && !onlyTranscribe,
+                self_verify: chainSelfVerify.checked && !onlyTranscribe,
                 lang: (document.getElementById('chain-lang') || {}).value || 'auto',
                 critique_level: chainCritique.value,
                 analysis_preset: chainProvider.value,
@@ -1406,9 +1515,11 @@ function normalizeChainUrl(raw) {
             .filter(([k]) => !TRACKING_PARAMS.has(k.toLowerCase()));
         kept.sort((a, b) => a[0].localeCompare(b[0]) || a[1].localeCompare(b[1]));
         const q = kept.map(([k, v]) => `${k}=${v}`).join('&');
-        return u.hostname.toLowerCase().replace(/^www\./, '')
-            + u.pathname.replace(/\/+$/, '')
-            + (q ? '?' + q : '');
+        // @creator 和 @creator/videos 是同一个频道：tab 后缀不算差异，
+        // 否则同一个博主会在博主库里出现两张卡片（实测 Y Combinator 就是这么重的）。
+        const path = u.pathname.replace(/\/(videos|featured|streams|shorts|playlists)\/?$/, '')
+            .replace(/\/+$/, '');
+        return u.hostname.toLowerCase().replace(/^www\./, '') + path + (q ? '?' + q : '');
     } catch {
         return String(raw || '').trim();
     }
@@ -1447,15 +1558,40 @@ function shortChainError(e) {
 
 // 一条 chain → 一张卡。四态：进行中（进度） / 完成（现状不变） / 失败（错误+Retry）
 // / 停止或中断（Stopped+Continue，别让旧数据从界面消失）。
+// B站番剧 / 纪录片 / 课堂：bangumi/play/epXXXX 这类链接背后没有 up 主，每一话还是
+// 一个独立 URL。以前它们会每话出一张卡、名字退化成单集标题（「2 千鸟与桔梗」其实是
+// 《薰香花朵凛然绽放》第2话），一部番就刷满一整行。番剧不是博主，博主页不收。
+// 转写本身照常，在资料库里能搜能看。
+function isBangumiUrl(url) {
+    return /bilibili\.com\/(bangumi|cheese)\//i.test(String(url || ''));
+}
+
+
+// 真头像 vs 被当头像用的视频封面。判断口径跟后端 downloader.is_real_avatar 一致：
+// B站真头像在 bfs/face/（封面在 bfs/archive/），YouTube 真头像在 yt3.*。
+function isRealAvatar(url) {
+    const u = String(url || '').toLowerCase();
+    return !!u && ['hdslb.com/bfs/face/', 'yt3.googleusercontent.com', 'yt3.ggpht.com']
+        .some(h => u.includes(h));
+}
+
+
 function buildChainCard(c) {
     const active = !['done', 'failed', 'cancelled'].includes(c.stage);
     const author = chainDisplayName(c);
     const vids = c.videos || [];
-    const img = c.avatar || (vids.find(v => v.thumbnail) || {}).thumbnail || '';
-    // 封面：先摆首字占位，图片加载成功就盖在上面；加载失败（B 站防盗链 / 过期 URL）自动移除，露出首字
+    // 卡面只有一种形状：一枚圆头像。以前是"视频封面当横幅 + 头像压角"，方的圆的
+    // 混在一起看着乱，而且封面尺寸不一让整行高低参差。现在统一——拿不到真头像
+    // （番剧、探测失败）就露名字首字，那也是同一个圆。
+    const face = isRealAvatar(c.avatar) ? c.avatar : '';
     const initial = escapeHtml(String(author).trim().slice(0, 1).toUpperCase() || '?');
-    const thumb = `<div class="creator-thumb creator-noimg"><span>${initial}</span>${img
-        ? `<img class="creator-thumb-img" src="${escapeHtml(img)}" alt="" loading="lazy" onerror="this.remove()">` : ''}</div>`;
+    // referrerpolicy="no-referrer" 是必须的：B站 CDN 见到非 bilibili 的 Referer
+    // 一律 403，不去掉 Referer 的话 B站博主全都只剩首字。
+    const thumb = `<div class="creator-thumb">
+        <div class="creator-face"><span>${initial}</span>${face
+            ? `<img src="${escapeHtml(face)}" alt="" loading="lazy"
+                 referrerpolicy="no-referrer" onerror="this.remove()">` : ''}</div>
+      </div>`;
     const name = `<div class="creator-name">${escapeHtml(String(author).slice(0, 60))}</div>`;
 
     let body;
@@ -1467,6 +1603,11 @@ function buildChainCard(c) {
     } else if (c.stage === 'done' && c.final_doc) {
         const nEp = vids.filter(v => v.status === 'done').length || vids.length;
         body = `<div class="creator-meta">${nEp} episode${nEp === 1 ? '' : 's'} · ${brainLabel(c.analysis_preset)}</div>`;
+    } else if (c.stage === 'done' && c.analyze === false) {
+        // 只转写：没有画像是预期结果，别掉进下面那个「中断」分支
+        const nEp = vids.filter(v => v.status === 'done').length || vids.length;
+        body = `<div class="creator-meta">${T('creators.nTranscripts', { n: nEp })}${
+            c.raw_doc ? ' · ' + escapeHtml(T('creators.fullTranscript')) : ''}</div>`;
     } else if (c.stage === 'failed') {
         body = `<div class="creator-meta creator-error" title="${escapeHtml(String(c.error || '').slice(0, 400))}">${escapeHtml(shortChainError(c.error))}</div>
             <button class="btn-secondary btn-small creator-retry"
@@ -1487,18 +1628,30 @@ function renderChains(chains) {
     const grid = document.getElementById('creators-grid');
     const empty = document.getElementById('creators-empty');
     if (!grid) return;
-    // 同一 URL（去跟踪参数后）只留最新一条：卡片代表"这个博主"，显示最新一次分析；
-    // 旧 run 的文档仍在 Library → Analyses。/api/chains 已按 created_at 倒序。
-    const seen = new Set();
-    const latest = [];
+    // 同一 URL（去跟踪参数、去 /videos 后缀）只留一条：卡片代表"这个博主"。
+    // 挑哪一条：正在跑的 > 有画像的 > 最新的——只按"最新"挑会让一条中断的空跑
+    // 盖住之前花钱做出来的画像。旧 run 的文档仍在 Library → Analyses。
+    const active = c => !['done', 'failed', 'cancelled'].includes(c.stage);
+    const rank = c => (active(c) ? 2 : 0) + (c.final_doc ? 1 : 0);
+    const best = new Map();
+    let bangumiN = 0;
     for (const c of chains) {
+        if (c.merged_into) continue;          // 已并入别条：不出卡片
+        if (isBangumiUrl(c.url)) { bangumiN++; continue; }   // 番剧不算博主
         const key = normalizeChainUrl(c.url);
-        if (seen.has(key)) continue;
-        seen.add(key);
-        latest.push(c);
+        const cur = best.get(key);
+        // /api/chains 已按 created_at 倒序 → 同分时先来的（更新的）胜出
+        if (!cur || rank(c) > rank(cur)) best.set(key, c);
     }
+    const latest = [...best.values()];
     if (empty) empty.classList.toggle('hidden', latest.length > 0);
     grid.innerHTML = latest.map(buildChainCard).join('');
+    // 被滤掉的番剧给一行说明，别让链条看起来凭空消失了
+    const note = document.getElementById('creators-bangumi-note');
+    if (note) {
+        note.textContent = bangumiN ? T('creators.bangumiHidden', { n: bangumiN }) : '';
+        note.classList.toggle('hidden', !bangumiN);
+    }
 }
 
 // ========== 链条详情：视频封面网格 + 每个视频状态 ==========
@@ -1595,13 +1748,15 @@ async function refreshChainDetail() {
     // 真头像（取不到/加载失败 → 名字首字的珊瑚章）+ 真数据条
     const ch = (author || c.url || '?').trim().slice(0, 1) || '?';
     const avatarHtml = `<div class="cd-avatar">${ch}${c.avatar
-        ? `<img class="cd-avatar-img" src="${escapeHtml(c.avatar || '')}" alt="" onerror="this.remove()">`
+        ? `<img class="cd-avatar-img" src="${escapeHtml(c.avatar || '')}" alt=""
+             referrerpolicy="no-referrer" onerror="this.remove()">`
         : ''}</div>`;
     const totalViews = vids.reduce((s, v) => s + (v.view_count || 0), 0);
     const stats = [`<div class="cd-stat"><div class="n">${doneN}</div><div class="l">${T('chainDetail.episodesRead')}</div></div>`];
     if (c.followers) stats.push(`<div class="cd-stat"><div class="n">${fmtCount(c.followers)}</div><div class="l">${T('chainDetail.followers')}</div></div>`);
     if (totalViews) stats.push(`<div class="cd-stat"><div class="n">${fmtCount(totalViews)}</div><div class="l">${T('chainDetail.totalPlays')}</div></div>`);
     stats.push(`<div class="cd-stat"><div class="n">${brainLabel(c.analysis_preset)}</div><div class="l">${T('chainDetail.analysisModel')}</div></div>`);
+    if (c.cost && c.cost.cost_usd > 0) stats.push(`<div class="cd-stat"><div class="n">${fmtUsd(c.cost.cost_usd)}</div><div class="l">${T('chainDetail.cost')}</div></div>`);
     document.getElementById('chain-detail-info').innerHTML = `
         <div class="cd-cover">
             <div class="cd-cover-top">
@@ -1626,11 +1781,7 @@ async function refreshChainDetail() {
                 <div class="ci-row"><span class="ci-k">${T('chainDetail.source')}</span>
                     <span class="ci-v"><a href="${safeUrl(c.url)}" target="_blank" rel="noopener">${escapeHtml((c.url || '').slice(0, 80))}</a></span></div>
                 <div class="ci-row"><span class="ci-k">${T('settings.title')}</span>
-                    <span class="ci-v">engine <b>${c.engine || '-'}</b> · analyze <b>${onoff(c.analyze)}</b>
-                    · model <b>${brainLabel(c.analysis_preset)}</b> · level <b>${c.critique_level || 'analytical'}</b>
-                    · subs-first <b>${onoff(c.prefer_subs)}</b> · web-verify <b>${onoff(c.verify)}</b>
-                    · self-verify <b>${onoff(c.self_verify)}</b>
-                    · whisper-fallback <b>${onoff(c.fallback_whisper)}</b></span></div>
+                    <span class="ci-v">${settingsLine(c)}</span></div>
                 <div class="ci-row"><span class="ci-k">${T('chainDetail.progress')}</span>
                     <span class="ci-v">${chainProgressText(c)}</span></div>
                 <div class="ci-actions">${actions}</div>
@@ -1644,7 +1795,7 @@ async function refreshChainDetail() {
         const clickable = v.status === 'done' && v.task_id;
         const thumb = v.thumbnail
             ? `<img class="vg-thumb" src="${v.thumbnail}" loading="lazy" alt=""
-                 onerror="this.style.display='none'">`
+                 referrerpolicy="no-referrer" onerror="this.style.display='none'">`
             : '<div class="vg-thumb vg-noimg">▷</div>';
         // 转写中且有进度 → 封面上盖珊瑚半透明板 + 大号百分比
         const pct = (v.status === 'transcribing' && typeof v.progress === 'number')
@@ -2118,8 +2269,8 @@ if (docsRefreshBtn) docsRefreshBtn.addEventListener('click', loadDocs);
 async function loadDocs() {
     try {
         const chains = await (await fetch('/api/chains')).json();
-        // 只列出有产物的链条（分析过的）
-        const withDocs = chains.filter(c => c.analyze);
+        // 只列出有产物的链条：分析过的，或只转写但已经合出全文的
+        const withDocs = chains.filter(c => !c.merged_into && (c.analyze || c.raw_doc));
         if (!withDocs.length) {
             docsList.innerHTML = `<p class="history-empty">${T('library.noDocs')}</p>`;
             return;
@@ -2768,9 +2919,10 @@ function showSettingsPane(name) {
     document.querySelectorAll('.settings-pane').forEach(p =>
         p.classList.toggle('active', p.dataset.pane === name));
     // 数据栏目没有"保存"，藏掉页脚
-    document.getElementById('settings-foot').classList.toggle('hidden', name === 'reflect' || name === 'library');
+    document.getElementById('settings-foot').classList.toggle('hidden', name === 'reflect' || name === 'library' || name === 'costs');
     document.querySelector('.settings-panes').scrollTop = 0;
     if (name === 'storage') { loadStorage(); loadBackup(); }
+    if (name === 'costs') loadCosts();
     if (name === 'reflect') { reflectRangeSel.value = reflectRange; loadReflect(); }
     if (name === 'library') loadLibrary();
 }
@@ -2788,6 +2940,76 @@ settingsSearch.addEventListener('input', () => {
     document.querySelectorAll('.settings-nav-group').forEach(g => g.classList.toggle('hidden', !!q));
     document.querySelector('.settings-nav-empty').classList.toggle('hidden', shown > 0);
 });
+
+// ===== Costs：模型调用费用（usage.db 汇总）=====
+function fmtUsd(n) {
+    n = Number(n) || 0;
+    if (n === 0) return '$0';
+    if (n < 0.01) return '$' + n.toFixed(4);
+    if (n < 1) return '$' + n.toFixed(3);
+    return '$' + n.toFixed(2);
+}
+function fmtTok(n) {
+    n = Number(n) || 0;
+    if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+    if (n >= 1e3) return Math.round(n / 1e3) + 'k';
+    return String(n);
+}
+function costLabel(kind, k) {
+    const key = `costs.${kind}.${k}`;
+    const s = T(key);
+    return (!s || s === key) ? k : s;
+}
+async function loadCosts() {
+    const body = document.getElementById('costs-body');
+    try {
+        const d = await (await fetch('/api/costs')).json();
+        renderCosts(d);
+    } catch {
+        body.innerHTML = `<div class="reflect-empty">${T('costs.loadFailed')}</div>`;
+    }
+}
+function costsTable(kind, rows) {
+    const byKey = {};
+    rows.all.forEach(r => { byKey[r.key] = { all: r, month: null }; });
+    rows.month.forEach(r => { (byKey[r.key] = byKey[r.key] || { all: null, month: null }).month = r; });
+    const list = Object.entries(byKey).sort((a, b) => ((b[1].all || {}).cost_usd || 0) - ((a[1].all || {}).cost_usd || 0));
+    if (!list.length) return '';
+    const body = list.map(([k, v]) => {
+        const a = v.all || {}, m = v.month || {};
+        const label = kind === 'model' ? k : costLabel(kind, k);
+        const unpriced = a.unpriced ? `<i title="${escapeHtml(T('costs.unpricedCalls', { n: a.unpriced }))}">${T('costs.unpriced')}</i>` : '';
+        return `<tr><td>${escapeHtml(label)}${unpriced}</td>
+            <td class="num">${fmtUsd(m.cost_usd)}</td><td class="num">${fmtUsd(a.cost_usd)}</td>
+            <td class="num">${a.calls || 0}</td>
+            <td class="num">${fmtTok(a.input_tokens)} / ${fmtTok(a.output_tokens)}</td></tr>`;
+    }).join('');
+    return `<h4>${T('costs.by_' + kind)}</h4>
+        <table class="speed-table costs-table"><thead><tr><th></th><th class="num">${T('costs.thisMonth')}</th>
+        <th class="num">${T('costs.allTime')}</th><th class="num">${T('costs.calls')}</th><th class="num">${T('costs.tokens')}</th></tr></thead>
+        <tbody>${body}</tbody></table>`;
+}
+function renderCosts(d) {
+    const body = document.getElementById('costs-body');
+    if (!d || !d.all || !d.all.calls) {
+        body.innerHTML = `<div class="reflect-empty">${T('costs.empty')}</div>`;
+        return;
+    }
+    const stat = `<div class="storage-stat">
+        <div><b>${fmtUsd(d.month.cost_usd)}</b><span>${T('costs.thisMonth')}</span></div>
+        <div><b>${fmtUsd(d.all.cost_usd)}</b><span>${T('costs.allTime')}</span></div>
+        <div><b>${d.all.calls}</b><span>${T('costs.calls')}</span></div>
+        <div><b>${fmtTok(d.all.input_tokens)} / ${fmtTok(d.all.output_tokens)}</b><span>${T('costs.tokens')}</span></div>
+    </div>`;
+    const tables = ['provider', 'purpose', 'model'].map(k => costsTable(k, d.by[k])).join('');
+    const notes = [];
+    if (d.since) notes.push(T('costs.since', { date: d.since.slice(0, 10) }));
+    if (d.unpriced_models && d.unpriced_models.length) {
+        notes.push(T('costs.unpricedNote', { models: d.unpriced_models.join(', ') }));
+    }
+    body.innerHTML = stat + `<div class="costs-tables">${tables}</div>`
+        + `<p class="costs-note">${notes.map(escapeHtml).join('<br>')}</p>`;
+}
 
 function fmtBytes(n) {
     if (n >= 1e9) return (n / 1e9).toFixed(1) + ' GB';
@@ -3075,11 +3297,13 @@ if (uiLangToggle) {
 }
 document.addEventListener('langchange', () => {
     applyRoute();
+    syncChainMode();          // 按钮文案被 applyStaticI18n 重置回「分析」了，按当前模式再刷一遍
     if (!settingsOverlay.classList.contains('hidden')) {
         if (activeSettingsPane === 'reflect') { reflectData = null; loadReflect(); }
         if (activeSettingsPane === 'library') renderLibrary();
     }
 });
+syncChainMode();              // 首次加载：按当前模式摆好按钮文案和禁用状态
 
 
 // ===== 字幕偏好（记住上次选择）+ 引擎速度提示 =====

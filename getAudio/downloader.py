@@ -147,22 +147,134 @@ def _thumbnail_for(entry):
 
 
 def _channel_from_info(info):
-    """从 yt-dlp 信息里取频道名 + 头像 + 订阅数（尽力而为，取不到留空/0）。"""
+    """从 yt-dlp 信息里取频道名 + 头像 + 订阅数（尽力而为，取不到留空/0）。
+
+    只有 id 里带 'avatar' 的缩略图才算头像（YouTube 频道页会给 avatar_uncropped）。
+    以前这里"取不到就用第一张缩略图兜底"，结果把**视频封面**当头像存了下来——
+    B站任何链接、YouTube 单视频/播放列表全中招，裁成圆形就是一团糊。第一张缩略图
+    现在单独放在 poster 里，只有 enrich_channel 彻底拿不到真头像时才顶上（番剧等）。
+    """
     name = (info.get('channel') or info.get('uploader')
             or info.get('playlist_uploader') or '')
     avatar = ''
+    poster = ''
     thumbs = info.get('thumbnails')
     if isinstance(thumbs, list):
         for t in thumbs:                     # 频道头像的 thumbnail id 通常含 'avatar'
             if 'avatar' in str(t.get('id', '')).lower() and t.get('url'):
                 avatar = t['url']
                 break
-        if not avatar and thumbs and thumbs[0].get('url'):
-            avatar = thumbs[0]['url']        # 兜底：第一张缩略图
+        if thumbs and thumbs[0].get('url'):
+            poster = thumbs[0]['url']
     followers = (info.get('channel_follower_count')
                  or info.get('subscriber_count') or 0)
-    return {'name': (name or '').strip(), 'avatar': avatar,
+    return {'name': (name or '').strip(), 'avatar': avatar, 'poster': poster,
             'followers': int(followers) if followers else 0}
+
+
+# ---- 头像补齐 ----------------------------------------------------------
+#
+# yt-dlp 只在**YouTube 频道页**这一种情况下给真头像，其余一律给视频封面：
+#   - B站：bilibili extractor 压根不解析 up 主头像（头像在 bfs/face/，它只给 bfs/archive/ 封面）
+#   - YouTube 单视频 / 播放列表：thumbnails 是视频的，不含频道头像
+# 所以这里按平台各补一刀。两条路都失败就留空，前端自己画名字首字。
+
+_BILI_MID_RE = re.compile(r'space\.bilibili\.com/(\d+)')
+_BILI_API_TIMEOUT = 8
+_BILI_HEADERS = {
+    'User-Agent': ('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
+                   'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36'),
+    'Referer': 'https://www.bilibili.com/',
+}
+
+
+def _bili_mid(url, info):
+    """拿 up 主 mid：space 链接里直接有；视频链接靠 yt-dlp 的 uploader_id（就是 mid）。"""
+    m = _BILI_MID_RE.search(url or '')
+    if m:
+        return m.group(1)
+    uid = str((info or {}).get('uploader_id') or '').strip()
+    return uid if uid.isdigit() else ''
+
+
+def _bili_card(mid):
+    """B站用户名片接口：头像 + 粉丝数。不需要签名、不需要登录态，比 space/acc/info 稳。"""
+    import urllib.request
+    url = f'https://api.bilibili.com/x/web-interface/card?mid={mid}&photo=false'
+    try:
+        req = urllib.request.Request(url, headers=_BILI_HEADERS)
+        with urllib.request.urlopen(req, timeout=_BILI_API_TIMEOUT) as r:
+            data = json.loads(r.read().decode('utf-8'))
+    except Exception:  # noqa: BLE001  补头像失败不该影响主流程
+        return {}
+    if data.get('code') != 0:
+        return {}
+    card = (data.get('data') or {}).get('card') or {}
+    face = (card.get('face') or '').strip()
+    if face.startswith('http://'):           # 页面走 https 时 http 图会被浏览器拦掉
+        face = 'https://' + face[len('http://'):]
+    return {'name': (card.get('name') or '').strip(), 'avatar': face,
+            'followers': int(card.get('fans') or 0)}
+
+
+def _yt_channel_meta(channel_url):
+    """只要频道元数据、不列视频（--playlist-items 0，约 1 秒），从中取 avatar_uncropped。"""
+    try:
+        binary = _resolve_ytdlp()
+        cmd = [binary, '-J', '--no-warnings', '--flat-playlist', '--playlist-items', '0',
+               *_cookie_args(), *_ffmpeg_location_args(), channel_url]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=_PROBE_TIMEOUT)
+        if r.returncode != 0 or not r.stdout.strip():
+            return {}
+        info = json.loads(r.stdout) or {}
+    except Exception:  # noqa: BLE001
+        return {}
+    return _channel_from_info(info)
+
+
+# 真头像的特征路径。老数据里存的多半是**视频封面**冒充的头像：
+#   B站封面 i*.hdslb.com/bfs/archive/…（真头像在 bfs/face/）
+#   YouTube 封面 i.ytimg.com/vi/…（真头像在 yt3.googleusercontent.com）
+# 番剧海报 bfs/bangumi/image/… 也不算，但它确实没有 up 主，重探一次记标记即可。
+_REAL_AVATAR_HINTS = ('hdslb.com/bfs/face/', 'yt3.googleusercontent.com', 'yt3.ggpht.com')
+
+
+def is_real_avatar(url):
+    """存下来的 avatar 是真头像，还是被当头像用的封面/海报。"""
+    u = (url or '').lower()
+    return bool(u) and any(h in u for h in _REAL_AVATAR_HINTS)
+
+
+def enrich_channel(url, channel, info=None):
+    """补齐 channel 的头像/粉丝数，原地改并返回它。拿不到就保持原样，不抛异常。"""
+    info = info or {}
+    if not channel.get('avatar'):
+        if 'bilibili.com' in (url or '') or 'bilibili.com' in str(info.get('webpage_url') or ''):
+            mid = _bili_mid(url, info)
+            if mid:
+                card = _bili_card(mid)
+                if card.get('avatar'):
+                    channel['avatar'] = card['avatar']
+                if card.get('name') and not channel.get('name'):
+                    channel['name'] = card['name']
+                if card.get('followers') and not channel.get('followers'):
+                    channel['followers'] = card['followers']
+        else:
+            # YouTube：单视频/播放列表的 info 里带着频道地址，拿它再探一次频道页
+            ch_url = (info.get('channel_url') or info.get('uploader_url') or '').strip()
+            if ch_url:
+                meta = _yt_channel_meta(ch_url)
+                if meta.get('avatar'):
+                    channel['avatar'] = meta['avatar']
+                if meta.get('followers'):
+                    # 直接覆盖：单视频的 info 是带 lang=zh-CN 探的，yt-dlp 会把
+                    # "13.4万" 解析成 13，这个假数还非零，把 channel_followers()
+                    # 的兜底也一起挡掉了。频道页这次探测不带 lang，数是准的。
+                    channel['followers'] = meta['followers']
+    if not channel.get('avatar') and channel.get('poster'):
+        channel['avatar'] = channel['poster']    # 番剧等真没有头像的，退回封面/海报
+    channel.pop('poster', None)
+    return channel
 
 
 def channel_followers(url):
@@ -181,12 +293,14 @@ def channel_followers(url):
     return 0
 
 
-def probe(url, max_videos=None):
+def probe(url, max_videos=None, enrich=True):
     """解析 URL 元数据（不下载）。
 
     返回 (targets, channel)：
       targets = [{'video_url','title','video_id','thumbnail'}, ...]
-      channel = {'name', 'avatar'}
+      channel = {'name', 'avatar', 'followers'}
+
+    enrich=False 供内部递归调用用：别在兜底探测里重复打头像接口。
     """
     binary = _resolve_ytdlp()
     url = _normalize_url(url)          # 频道主页 → /videos，避免下成整个频道
@@ -215,7 +329,9 @@ def probe(url, max_videos=None):
         detail = err[-1][:200] if err else 'timeout / unknown error'
         raise RuntimeError(f'Could not parse link: {detail}')
 
-    info = json.loads(result.stdout)
+    info = json.loads(result.stdout) or {}     # 垃圾输入时 yt-dlp 会打印字面量 null
+    if not info:
+        raise RuntimeError('Could not parse link: no metadata returned')
     channel = _channel_from_info(info)
 
     if info.get('_type') == 'playlist':
@@ -236,15 +352,22 @@ def probe(url, max_videos=None):
         # 兜底：对第一个视频做一次全量探测，用它的 uploader 当频道名/头像。
         if not channel.get('name') and targets:
             try:
-                _, ch2 = probe(targets[0]['video_url'])   # 单视频 → 走下面的全量分支
+                # 单视频 → 走下面的全量分支；enrich 留到最后统一做，免得打两次接口
+                _, ch2 = probe(targets[0]['video_url'], enrich=False)
                 if ch2.get('name'):
                     channel['name'] = ch2['name']
                     if not channel.get('avatar') and ch2.get('avatar'):
                         channel['avatar'] = ch2['avatar']
+                    if not channel.get('poster') and ch2.get('poster'):
+                        channel['poster'] = ch2['poster']
             except Exception:  # noqa: BLE001  探测失败不影响主流程
                 pass
+        if enrich:
+            enrich_channel(url, channel, info)
         return targets, channel
 
+    if enrich:
+        enrich_channel(url, channel, info)
     return [{
         'video_url': url,
         'title': info.get('title', ''),
@@ -466,7 +589,10 @@ def fetch_subtitle(target, dest_dir, lang='auto'):
              *_cookie_args(), *_ffmpeg_location_args(), url],
             capture_output=True, text=True, timeout=_SUB_TIMEOUT,
         )
-        info = json.loads(r.stdout) if r.stdout.strip() else {}
+        # `or {}`：yt-dlp 对垃圾输入（用户直接贴了 `abc123`）会打印字面量 null，
+        # json.loads 得到 None，下面 info.get 就抛 AttributeError，
+        # 最后原样显示给用户 —— "'NoneType' object has no attribute 'get'"。
+        info = (json.loads(r.stdout) if r.stdout.strip() else {}) or {}
     except Exception:
         return None, None, None
 

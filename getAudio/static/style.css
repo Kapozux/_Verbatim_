@@ -308,6 +308,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .chain-form-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 .chain-small { flex: 1; min-width: 130px; }
 .chain-check { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--muted); white-space: nowrap; }
+/* 「只转写」模式下分析相关的旋钮：禁用 + 变淡，一眼看出这会儿不起作用 */
+.is-muted { opacity: .45; }
+.is-muted, .is-muted select, .is-muted input { cursor: not-allowed; }
 .chain-btn { padding: 11px 22px; width: auto; min-height: 40px; }
 
 /* === 资料库子分区 === */
@@ -528,17 +531,20 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 }
 .creator-card:hover { transform: translateY(-3px); box-shadow: var(--e2); }
 .creator-thumb {
-  height: 120px; background-size: cover; background-position: center;
-  background-color: var(--coral-soft);
-}
-.creator-noimg {
-  position: relative; overflow: hidden;
-  height: 72px; display: flex; align-items: center; justify-content: center;
-  font-family: var(--serif); font-size: 30px; font-weight: 600; color: var(--coral-deep);
+  height: 88px; display: flex; align-items: center; justify-content: center;
   background: linear-gradient(160deg, var(--coral-soft), #F6E3D8);
 }
-.creator-noimg:has(.creator-thumb-img) { height: 120px; }
-.creator-thumb-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+/* 卡面唯一的图形：圆头像。没头像就是同款珊瑚圆章 + 名字首字，整页只有一种形状。 */
+.creator-face {
+  position: relative; width: 64px; height: 64px; border-radius: 50%; overflow: hidden;
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--serif); font-size: 28px; color: #fff;
+  background: radial-gradient(120% 120% at 30% 25%, #F6C9B4 0%, var(--coral) 55%, var(--coral-deep) 100%);
+  box-shadow: 0 3px 10px rgba(217,119,87,.28);
+}
+/* 图挂了（B站删图 / URL 过期）会被 onerror 摘掉，露出下面的首字章 */
+.creator-face img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.creators-note { margin-top: 14px; font-size: 12.5px; color: var(--faint); }
 .creator-body { padding: 12px 14px; }
 .creator-name {
   font-weight: 700; font-size: 14.5px; color: var(--ink);
@@ -933,6 +939,10 @@ html[lang="zh-CN"] .reflect-topic .desc { font-family: var(--sans); font-size: 1
 .speed-table td:first-child { font-weight: 600; }
 .speed-table tr.approx td { color: var(--faint); font-weight: 400; }
 .speed-table td i { font-style: normal; font-size: 11px; color: var(--faint); margin-left: 6px; }
+/* Costs 栏目：沿用 speed-table，数字列右对齐 */
+.costs-table th.num, .costs-table td.num { text-align: right; white-space: nowrap; }
+.costs-tables h4 { font-size: 11px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 22px 0 2px; }
+.costs-note { font-size: 11.5px; color: var(--faint); line-height: 1.6; margin-top: 18px; }
 
 /* Storage：带复选框的设置行 */
 .settings-check { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
