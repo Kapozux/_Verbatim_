@@ -4,7 +4,7 @@
 
 **Free, local, unlimited-length transcription. Paste a YouTube/Bilibili link, get a transcript with timestamps. No account needed.**
 
-Built by Kapozux/Kerwin, a high school student in Shanghai. In active development since March 2026.
+Built by Kapozux/Kerwin, student in Shanghai. In active development since March 2026.
 
 ![Verbatim](docs/verbatim.png)
 
