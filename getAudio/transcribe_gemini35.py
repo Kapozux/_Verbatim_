@@ -23,13 +23,16 @@ diarization 链路因为是单次调用处理整个文件，没有这个问题�
 
 import mimetypes
 import os
+import re
+import threading
 import time
 
 import requests
 
 from config import GEMINI_API_KEY, make_gemini_client
-from transcribe_gemini import split_audio_file
+from transcribe_gemini import split_audio_file, _get_audio_duration_seconds
 import config
+import usage
 
 MODEL_NAME = 'gemini-3.5-transcribe'
 _INTERACTIONS_URL = 'https://generativelanguage.googleapis.com/v1beta/interactions'
@@ -40,6 +43,30 @@ _MAX_CHUNK_SECONDS = 28 * 60
 
 _MAX_ATTEMPTS = 3
 _RETRY_BACKOFF_SECONDS = [2, 5, 10]
+
+# 429 限流（按项目每分钟输入 token 算，一个 28 分钟块就五万多 token）不算失败：
+# 按服务端给的 "retry in Ns" 等，而且所有线程一起等——配额是全项目共享的，
+# 一个请求被限流说明大家都该歇一下。最多耐心等这么久，超了才真判失败。
+_RATE_LIMIT_PATIENCE_SECONDS = 60 * 60
+_rate_lock = threading.Lock()
+_rate_until = 0.0
+
+
+def _wait_rate_gate():
+    while True:
+        with _rate_lock:
+            left = _rate_until - time.time()
+        if left <= 0:
+            return
+        time.sleep(min(left, 30))
+
+
+def _push_rate_gate(text):
+    global _rate_until
+    m = re.search(r'retry in (\d+(?:\.\d+)?)s', text or '')
+    wait = float(m.group(1)) if m else 30.0
+    with _rate_lock:
+        _rate_until = max(_rate_until, time.time() + wait + 2)
 
 # 同一说话人连续说话时，词与词之间的间隔超过这个值就当一次停顿，另起一段——
 # 不然一个人连续讲 5 分钟会被并成一整段，时间戳粒度太粗，不好定位。
@@ -66,6 +93,23 @@ def transcribe_audio(filepath, progress_callback=None, speaker_count=None):
     try:
         client = make_gemini_client(GEMINI_API_KEY)
         total = len(chunks)
+
+        # 每块自己的长度：下一块的起点减自己的起点；最后一块用音频总长。
+        # 跟 transcribe_gemini.py 的 _chunk_len 是同一个算法——那边已经验证过
+        # 「块内时间戳不夹到块长会跨块倒退/坍缩」这个 bug，这里切块结构完全一样，
+        # 没理由这个更新、更少人用过的预览期模型反而不会复现同样的边界抖动。
+        try:
+            total_duration = int(_get_audio_duration_seconds(filepath) or 0) or None
+        except Exception:  # noqa: BLE001  探不到时长就只夹到最后一块之前的块（最后一块不夹）
+            total_duration = None
+
+        def _chunk_len(idx):
+            start = chunks[idx][1]
+            end = chunks[idx + 1][1] if idx + 1 < total else total_duration
+            if not end or end <= start:
+                return None
+            return end - start
+
         # 各块并行（之前串行）；结果按块索引回填保序，任一块失败整条任务失败。
         # 宽度沿用 GEMINI_CHUNK_CONCURRENCY，但这个端点还在预览期、配额没摸透，先压到 3。
         from concurrent.futures import ThreadPoolExecutor
@@ -76,7 +120,7 @@ def transcribe_audio(filepath, progress_callback=None, speaker_count=None):
 
         def _one(i):
             chunk_path, offset_sec = chunks[i]
-            results[i] = _transcribe_one(client, chunk_path, offset_sec)
+            results[i] = _transcribe_one(client, chunk_path, offset_sec, _chunk_len(i))
             if progress_callback:
                 with lock:
                     done[0] += 1
@@ -85,7 +129,7 @@ def transcribe_audio(filepath, progress_callback=None, speaker_count=None):
 
         width = max(1, min(3, config.GEMINI_CHUNK_CONCURRENCY, total))
         with ThreadPoolExecutor(max_workers=width) as pool:
-            list(pool.map(_one, range(total)))   # list() 让第一个异常在这里抛出
+            list(pool.map(usage.bound(_one), range(total)))   # list() 让第一个异常在这里抛出
         all_segments = []
         for segs in results:
             all_segments.extend(segs or [])
@@ -96,13 +140,32 @@ def transcribe_audio(filepath, progress_callback=None, speaker_count=None):
             shutil.rmtree(temp_dir, ignore_errors=True)
 
 
-def _transcribe_one(client, chunk_path, offset_sec):
-    """上传一个块 + 调 Interactions API + 解析成本模块的段落格式。"""
+def _transcribe_one(client, chunk_path, offset_sec, chunk_seconds=None):
+    """上传一个块 + 调 Interactions API + 解析成本模块的段落格式。
+
+    chunk_seconds：这一块自己的长度（秒），传给 _parse_response 夹时间戳用。
+    """
     uploaded = _upload_file(client, chunk_path)
+    try:
+        return _call_with_retry(client, uploaded, chunk_path, offset_sec, chunk_seconds)
+    finally:
+        # 用完立刻删：Files API 按项目限 20GB，靠 48h 自动过期的话，批量跑一个频道
+        # 没几十期就会 429 file_storage_bytes
+        try:
+            client.files.delete(name=uploaded.name)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _call_with_retry(client, uploaded, chunk_path, offset_sec, chunk_seconds):
     _wait_active(client, uploaded.name)
 
     last_err = None
-    for attempt in range(1, _MAX_ATTEMPTS + 1):
+    attempt = 0
+    rate_deadline = time.time() + _RATE_LIMIT_PATIENCE_SECONDS
+    while attempt < _MAX_ATTEMPTS:
+        attempt += 1
+        _wait_rate_gate()
         try:
             resp = requests.post(
                 _INTERACTIONS_URL,
@@ -126,15 +189,40 @@ def _transcribe_one(client, chunk_path, offset_sec):
                 },
                 timeout=180,
             )
+            if resp.status_code == 429 and time.time() < rate_deadline:
+                _push_rate_gate(resp.text)
+                last_err = RuntimeError(f'HTTP 429: {resp.text[:300]}')
+                attempt -= 1                     # 限流等待不占重试次数
+                continue
             if resp.status_code == 429 or resp.status_code >= 500:
                 raise RuntimeError(f'HTTP {resp.status_code}: {resp.text[:300]}')
             resp.raise_for_status()
-            return _parse_response(resp.json(), offset_sec)
+            data = resp.json()
+            _record_usage(data, chunk_path)
+            return _parse_response(data, offset_sec, chunk_seconds)
         except Exception as e:  # noqa: BLE001
             last_err = e
             if attempt < _MAX_ATTEMPTS:
                 time.sleep(_RETRY_BACKOFF_SECONDS[attempt - 1])
     raise RuntimeError(f'Gemini 3.5 Transcribe 调用失败: {last_err}')
+
+
+def _record_usage(data, chunk_path):
+    """记账。预览期接口的 usage 字段名还没稳定，几种形态都试；都没有就只记音频秒数
+    （价格表里给这个模型配 per_audio_hour 就能算钱）。"""
+    try:
+        u = (data.get('usage') or data.get('usage_metadata') or {}) if isinstance(data, dict) else {}
+        i = u.get('input_tokens') or u.get('prompt_token_count') or u.get('prompt_tokens') or 0
+        o = u.get('output_tokens') or u.get('candidates_token_count') or u.get('completion_tokens') or 0
+        secs = 0
+        try:
+            secs = _get_audio_duration_seconds(chunk_path) or 0
+        except Exception:  # noqa: BLE001
+            pass
+        usage.record('gemini', MODEL_NAME, 'transcribe', input_tokens=i, output_tokens=o,
+                     audio_tokens=i, audio_seconds=secs)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _upload_file(client, path):
@@ -174,8 +262,14 @@ def _speaker_label(spk):
     return f'说话人{int(digits) + 1}' if digits else '说话人?'
 
 
-def _parse_response(data, offset_sec):
-    """把 interactions 响应的 word_info 标注按「说话人切换/停顿/时长上限」分组成段落。"""
+def _parse_response(data, offset_sec, chunk_seconds=None):
+    """把 interactions 响应的 word_info 标注按「说话人切换/停顿/时长上限」分组成段落。
+
+    chunk_seconds：这一块自己的长度（秒），有值就把块内偏移夹到 [0, chunk_seconds]
+    再加 offset_sec——模型偶尔会在某一块里吐出超过块长的偏移，直接加会越界压到
+    后面几块的区间上，造成时间戳倒退（transcribe_gemini.py 的 shift_timestamps
+    已经验证过同一类问题：3 小时的稿里实测出现过 00:30:00 → 02:30:00 的跳跃）。
+    """
     steps = data.get('steps') or []
     if not steps:
         return []
@@ -208,7 +302,10 @@ def _parse_response(data, offset_sec):
             ' '.join(w.get('text', '') for w in g)
         if not text:
             continue
-        start_sec = offset_sec + _parse_offset(g[0].get('start_offset'))
+        intra_offset = _parse_offset(g[0].get('start_offset'))
+        if chunk_seconds is not None:
+            intra_offset = max(0, min(intra_offset, chunk_seconds))
+        start_sec = offset_sec + intra_offset
         segments.append({
             'timestamp': _fmt_ts(start_sec),
             'text': f'{_speaker_label(g[0].get("speaker"))}：{text}',

@@ -59,7 +59,8 @@ GitHub 反垃圾系统眼里的"新账号 + 改名 + 关键词描述 + 批量 to
 - 应用名 Verbatim（目录仍叫 getAudio）。Flask 单页应用，`bash run.sh` → `localhost:5001`。
 - 演示实例：`启动演示.command` → 只读演示库，端口 5002（`VERBATIM_DEMO=1`）。
 - 数据目录：`results/`（每条转写一个 uuid 目录）、`results/_chains/`（博主分析链）、
-  `uploads/`、`tasks.db`。`results/` 现在约 12G，别 `rm -rf`、别改动结构。
+  `uploads/`、`tasks.db`、`usage.db`（每次模型调用的 token / 费用记账，Settings → Costs 汇总；
+  价格表可用 `prices.json` 覆盖）。别 `rm -rf`、别改动结构。
 - 详细功能与架构见 `README.md`（写于 2026-08-10，之后新增的 Gemini 3.5 引擎、Reflect
   面板、演示模式、合并转写、单期重转写还没写进去）。
 - MCP server 在 `../verbatim-mcp`（已发 PyPI）；打包脚本在 `packaging/`。

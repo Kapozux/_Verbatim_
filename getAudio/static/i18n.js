@@ -70,7 +70,8 @@ const STRINGS = {
         'creators.urlPlaceholder': 'https://www.youtube.com/@creator  ·  a channel / homepage (for one video, use Transcribe)',
         'creators.authorPlaceholder': 'Author (optional)',
         'creators.engineTitle': 'Transcription engine.',
-        'creators.engineGemini': 'Gemini (recommended)',
+        'creators.engineGemini35': 'Gemini 3.5 Transcribe (recommended)',
+        'creators.engineGemini': 'Gemini',
         'creators.engineWhisper': 'Whisper (local)',
         'creators.engineQwenasr': 'Alibaba Qwen-ASR (zh ASR · no Gemini filter)',
         'creators.providerTitle': "Which model does the analysis. Aliyun (DeepSeek/Kimi/GLM/Qwen) reuses your DashScope key and dodges the Gemini quota — but it moderates content, so use it only for non-sensitive creators.",
@@ -107,6 +108,12 @@ const STRINGS = {
         'creators.fallbackWhisper': 'Whisper fallback',
         'creators.selfVerifyTitle': 'After building the portrait, run a self-critique pass: pull out every evaluative claim, send a skeptic per claim to refute it against the evidence cards, then cut the unsupported ones and soften the overstated ones (with a 证伪留痕 appendix). Costs extra calls; on for high-stakes reads.',
         'creators.selfVerify': 'Self-verify',
+        'creators.summarize': 'Episode summaries',
+        'creators.summarizeTitle': 'Also write a summary for every episode. Off by default: the creator analysis only uses evidence cards, and summaries cost about 1¢ per episode. You can still summarize any single episode later from its transcript page.',
+        'detail.summarize': 'Summarize',
+        'detail.summarizing': 'Summarizing…',
+        'detail.summarizeTitle': 'Write a summary for this episode (one model call, about 1¢)',
+        'toast.summaryFailed': 'Could not generate a summary',
         'creators.hint': 'YouTube tip: use <code>channel/videos</code>. Bilibili &amp; other '
             + 'yt-dlp sites work too. <b>Prefer subtitles</b> skips download + transcription when a '
             + 'video already has captions.',
@@ -495,6 +502,19 @@ const STRINGS = {
         'chainDetail.actionsHint': 'Continue = fill whatever is missing (reuses everything done). Re-analyze = redo analysis only, with the Creators form\'s brain/level settings.',
         'chainDetail.lensTitle': 'Read him through a lens',
         'chainDetail.lensHint': 'same evidence cards, different angle — nearly free',
+        'cards.title': 'Evidence cards',
+        'cards.sub': '{n} cards from {m} episodes. Each one is a verbatim quote; click to jump to that moment in the episode.',
+        'cards.all': 'All',
+        'cards.layer.claim': 'Claims',
+        'cards.layer.transcript': 'Rhetoric & framing',
+        'cards.layer.verified': 'Fact-checked',
+        'cards.search': 'Search quotes…',
+        'cards.shuffle': 'Shuffle',
+        'cards.more': 'Show more ({n} left)',
+        'cards.none': 'No cards match.',
+        'cards.jump': 'Open this episode at {ts}',
+        'creators.subtitleDemo': 'Sample creator reads. Verbatim transcribed every episode, pulled out evidence cards (each one a verbatim quote you can trace back to the exact second), then wrote a portrait on top. Open a creator to browse the cards.',
+        'demo.readonly': 'This is a read-only demo.',
         'chainDetail.episodesRead': 'episodes read',
         'chainDetail.followers': 'followers',
         'chainDetail.totalPlays': 'total plays',
@@ -613,7 +633,8 @@ const STRINGS = {
         'creators.urlPlaceholder': 'https://www.youtube.com/@creator  ·  频道/主页链接（单个视频请用「转写」）',
         'creators.authorPlaceholder': '作者（可选）',
         'creators.engineTitle': '转写引擎。',
-        'creators.engineGemini': 'Gemini（推荐）',
+        'creators.engineGemini35': 'Gemini 3.5 Transcribe（推荐）',
+        'creators.engineGemini': 'Gemini',
         'creators.engineWhisper': 'Whisper（本地）',
         'creators.engineQwenasr': '阿里云 Qwen-ASR（中文强 · 不受 Gemini 内容过滤）',
         'creators.providerTitle': '由哪个模型做分析。阿里云（DeepSeek/Kimi/GLM/Qwen）复用你的 DashScope key，能绕开 Gemini 配额限制——但会审核内容，只适合非敏感博主。',
@@ -649,6 +670,12 @@ const STRINGS = {
         'creators.fallbackWhisper': 'Whisper 兜底',
         'creators.selfVerifyTitle': '画像写完后再跑一轮自我证伪：抽出每条评判性论断，各派一个「怀疑者」拿证据卡反驳，删掉站不住脚的、软化夸大的（并附一份证伪留痕附录）。会多花几次调用；重要的深度分析建议开。',
         'creators.selfVerify': '自我证伪',
+        'creators.summarize': '每期摘要',
+        'creators.summarizeTitle': '给每一期也写一份摘要。默认关：博主分析只用证据卡，摘要每期约 1 美分。之后想看哪期，在那期的转写页单独点「生成摘要」就行。',
+        'detail.summarize': '生成摘要',
+        'detail.summarizing': '生成中…',
+        'detail.summarizeTitle': '给这一期写一份摘要（调用一次模型，约 1 美分）',
+        'toast.summaryFailed': '摘要生成失败',
         'creators.hint': 'YouTube 小技巧：用 <code>channel/videos</code> 这种链接。B站和其它 yt-dlp '
             + '支持的网站也可以。<b>优先字幕</b>会在视频已有字幕时跳过下载+转写。',
         'creators.empty': '还没有博主——在上面粘贴一个链接开始分析。',
@@ -1028,6 +1055,19 @@ const STRINGS = {
         'chainDetail.actionsHint': '继续 = 补全缺失的部分（已完成的全部复用）。重新分析 = 只重做分析，用 Creators 表单当前的分析大脑/档位设置。',
         'chainDetail.lensTitle': '换个镜头重读',
         'chainDetail.lensHint': '同一批证据卡，换个视角——几乎不花钱',
+        'cards.title': '证据卡',
+        'cards.sub': '{n} 张，来自 {m} 期。每张都是原话，点开跳到那一期的那一秒。',
+        'cards.all': '全部',
+        'cards.layer.claim': '他的主张',
+        'cards.layer.transcript': '修辞与叙事',
+        'cards.layer.verified': '外部核实',
+        'cards.search': '搜索原话…',
+        'cards.shuffle': '随机换一批',
+        'cards.more': '再看一些（还剩 {n} 张）',
+        'cards.none': '没有匹配的卡片',
+        'cards.jump': '打开这一期，跳到 {ts}',
+        'creators.subtitleDemo': '示例博主解读。Verbatim 把每一期都转写出来，抽出证据卡（每张都是原话，能追到那一秒），再在上面写一份人物画像。点开一个博主就能翻卡片。',
+        'demo.readonly': '这是只读演示。',
         'chainDetail.episodesRead': '期已读',
         'chainDetail.followers': '粉丝数',
         'chainDetail.totalPlays': '总播放',
@@ -1084,8 +1124,9 @@ const STRINGS = {
     },
 };
 
-let currentLang = localStorage.getItem('getaudio_ui_lang')
-    || (navigator.language && navigator.language.toLowerCase().startsWith('zh') ? 'zh' : 'en');
+// 演示实例一律英文（给外面的人看），不读本机偏好
+let currentLang = window.VERBATIM_DEMO ? 'en' : (localStorage.getItem('getaudio_ui_lang')
+    || (navigator.language && navigator.language.toLowerCase().startsWith('zh') ? 'zh' : 'en'));
 
 // 命名为 T() 而不是 t()：app.js 里大量循环变量本来就叫 t（列表项/标签/任务……），
 // 叫 t() 会在几十处被局部变量遮蔽，静默调用失败。
@@ -1109,7 +1150,7 @@ function applyStaticI18n(root) {
 }
 
 function setLang(lang) {
-    currentLang = lang === 'zh' ? 'zh' : 'en';
+    currentLang = (lang === 'zh' && !window.VERBATIM_DEMO) ? 'zh' : 'en';
     localStorage.setItem('getaudio_ui_lang', currentLang);
     document.documentElement.lang = currentLang === 'zh' ? 'zh-CN' : 'en';
     applyStaticI18n();

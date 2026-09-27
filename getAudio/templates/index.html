@@ -9,7 +9,7 @@
     <link rel="apple-touch-icon" href="/static/apple-touch-icon.png?v={{ static_version }}">
     <link rel="stylesheet" href="/static/style.css?v={{ static_version }}">
 </head>
-<body>
+<body{% if demo %} class="demo"{% endif %}>
     <div class="app">
         <aside class="sidebar" id="sidebar">
             <div class="sb-brand"><img class="logo" src="/static/logo.svg?v={{ static_version }}" alt="" width="20" height="20"><span>Verbatim</span>{% if demo %}<span class="demo-pill" data-i18n="nav.demo">Demo · sample library</span>{% endif %}</div>
@@ -101,7 +101,7 @@
                         <label class="group-label" data-i18n="transcribe.engine">Engine</label>
                         <div class="radio-group">
                             <label class="radio-option">
-                                <input type="radio" name="engine" value="whisper" checked>
+                                <input type="radio" name="engine" value="whisper">
                                 <span class="radio-custom"></span>
                                 <span class="radio-label">
                                     <strong data-i18n="engine.whisper">Whisper</strong>
@@ -117,7 +117,7 @@
                                 </span>
                             </label>
                             <label class="radio-option">
-                                <input type="radio" name="engine" value="gemini35">
+                                <input type="radio" name="engine" value="gemini35" checked>
                                 <span class="radio-custom"></span>
                                 <span class="radio-label">
                                     <strong data-i18n="engine.gemini35">Gemini 3.5 Transcribe</strong>
@@ -259,7 +259,8 @@
                             <select id="chain-engine" class="search-input chain-small"
                                     data-i18n-title="creators.engineTitle"
                                     title="Transcription engine.">
-                                <option value="gemini" data-i18n="creators.engineGemini">Gemini (recommended)</option>
+                                <option value="gemini35" selected data-i18n="creators.engineGemini35">Gemini 3.5 Transcribe (recommended)</option>
+                                <option value="gemini" data-i18n="creators.engineGemini">Gemini</option>
                                 <option value="whisper" data-i18n="creators.engineWhisper">Whisper (local)</option>
                                 <option value="qwenasr" data-i18n="creators.engineQwenasr">Alibaba Qwen-ASR (zh ASR · no Gemini filter)</option>
                             </select>
@@ -281,7 +282,7 @@
                             <summary data-i18n="creators.moreOptions">⚙ More options</summary>
                             <div class="chain-form-row chain-adv-row">
                                 <input type="number" id="chain-max" class="search-input chain-small"
-                                       min="1" max="300" data-i18n-placeholder="creators.maxVideos" placeholder="Max videos">
+                                       min="1" max="600" data-i18n-placeholder="creators.maxVideos" placeholder="Max videos">
                                 <select id="chain-lang" class="search-input chain-small"
                                         data-i18n-title="creators.langTitle"
                                         title="Language of the analysis documents (portrait, per-episode notes, lenses). Auto = follow the content's language. Verbatim quotes always stay original.">
@@ -321,6 +322,10 @@
                                 <label class="chain-check" data-i18n-title="creators.fallbackWhisperTitle" title="If the cloud engine fails (e.g. quota), fall back to local Whisper for that video instead of leaving it failed. Off by default — otherwise it just fails and you re-run on the same engine (e.g. once your quota is back).">
                                     <input type="checkbox" id="chain-fallback-whisper">
                                     <span data-i18n="creators.fallbackWhisper">Whisper fallback</span>
+                                </label>
+                                <label class="chain-check" data-i18n-title="creators.summarizeTitle" title="Also write a summary for every episode. Off by default: the creator analysis only uses evidence cards, and summaries cost about 1¢ per episode. You can still summarize any single episode later from its transcript page.">
+                                    <input type="checkbox" id="chain-summarize">
+                                    <span data-i18n="creators.summarize">Episode summaries</span>
                                 </label>
                                 <label class="chain-check" data-i18n-title="creators.selfVerifyTitle" title="After building the portrait, run a self-critique pass: pull out every evaluative claim, send a skeptic per claim to refute it against the evidence cards, then cut the unsupported ones and soften the overstated ones (with a 证伪留痕 appendix). Costs extra calls; on for high-stakes reads.">
                                     <input type="checkbox" id="chain-self-verify" checked>
@@ -435,6 +440,7 @@
                 <div class="results-header">
                     <h2 data-i18n="detail.transcript">Transcript</h2>
                     <div class="results-actions">
+                        <button id="detail-summarize-btn" class="btn-secondary hidden" data-i18n-title="detail.summarizeTitle" title="Write a summary for this episode (one model call, about 1¢)"><span data-i18n="detail.summarize">Summarize</span></button>
                         <button id="detail-copy-btn" class="btn-secondary" data-i18n-title="detail.copyTitle" title="Copy text"><span data-i18n="detail.copy">Copy</span></button>
                         <button id="detail-download-btn" class="btn-secondary" data-i18n-title="detail.downloadTitle" title="Download as TXT"><span data-i18n="detail.download">TXT</span></button>
                         <button id="detail-srt-btn" class="btn-secondary" data-i18n-title="detail.srtTitle" title="Download subtitles"><span data-i18n="detail.srt">SRT</span></button>
@@ -452,8 +458,9 @@
             </div>
             <div id="chain-detail-meta" class="detail-meta"></div>
             <div id="chain-detail-info"></div>
+            <section id="chain-cards" class="cc-wall hidden"></section>
             <button id="chain-episodes-toggle" class="episodes-toggle" type="button">
-                <span data-i18n="chainDetail.episodes">Episodes</span> <span id="chain-episodes-count"></span> ▸
+                <span data-i18n="chainDetail.episodes">Episodes</span> <span id="chain-episodes-count"></span> <span class="ep-arrow">▸</span>
             </button>
             <div id="chain-detail-grid" class="video-grid hidden"></div>
         </div>
@@ -756,6 +763,7 @@
         </div>
     </div>
 
+    <script>window.VERBATIM_DEMO = {{ 'true' if demo else 'false' }};</script>
     <script src="/static/i18n.js?v={{ static_version }}"></script>
     <script src="/static/app.js?v={{ static_version }}"></script>
 </body>

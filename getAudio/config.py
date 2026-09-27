@@ -73,8 +73,8 @@ ENGINE_CONCURRENCY = {
     # （上传 + 长音频分段各一次），所以实际 QPS 会更高；若大量 429/空文本再下调。
     'gemini': int(os.environ.get('GEMINI_CONCURRENCY') or 12),
     'dashscope': 9,
-    # Qwen-ASR：和 dashscope 同一套异步转写接口，配额也是同一个账号，给同样的并发。
-    'qwenasr': 9,
+    # Qwen-ASR：和 dashscope 同一套异步转写接口。2026-09 批量转一个频道时从 9 提到 20（查询接口默认 20 QPS）。
+    'qwenasr': 20,
     # 精准模式：单个任务内部会并发跑 Gemini 转写 + 阿里云说话人分离，最后再 Gemini 合并。
     # 一个任务实际打 2~3 次 Gemini + 1 次阿里云，所以并发压低到 4，避免叠加把两边都打爆。
     'precise': 4,
@@ -95,6 +95,16 @@ YTDLP_LANG = 'zh-CN'
 # 值为浏览器名（chrome/edge/firefox/brave…）；置空则不带 cookies。
 # 注意：仅本机、读你自己的浏览器 cookie；换机器或没装该浏览器时设为 '' 关闭。
 YTDLP_COOKIES_FROM_BROWSER = os.environ.get('YTDLP_COOKIES_BROWSER', 'chrome')
+
+# B站登录态 cookie（SESSDATA）：yt-dlp 的 space 列表探测（BilibiliSpaceVideo）被 412
+# 风控封锁、且退避重试也扛不过时，probe() 会退回用 bilibili-api-python + 这个登录态
+# 直接拉列表。留空则不启用这条 fallback。
+BILI_SESSDATA = os.environ.get('BILI_SESSDATA', '')
+
+# 直连被 412 风控拦下时，probe() 换这个代理再探一次（2026-09 实测：B站对 space 列表
+# 探测的 412 是按当前出口 IP 判的，换出口立刻通）。填本机代理地址，如
+# http://127.0.0.1:7897（Clash 等默认端口）；留空则不启用这条 fallback。
+YTDLP_PROXY = os.environ.get('YTDLP_PROXY', '')
 
 # 访问令牌：不设置（默认）= 完全不启用鉴权，本地照常用。
 # 要暴露到局域网/公网前，在 .env 里加 GETAUDIO_TOKEN=一串随机字符串，
@@ -166,6 +176,12 @@ def resolve_analysis(preset):
     return p
 # 卡片元数据（标题/标签）生成用 Flash：快、便宜，质量足够
 GEMINI_ENRICH_MODEL = 'gemini-2.5-flash'
+# 回顾面板的叙事。原来走 OpenRouter 上的 Opus 4.6，一次刷新是 4 个时段 × 中英两份 = 8 个
+# 请求、一美元出头，占了整份账单的九成多，而且每次转写完都会重算。换成 flash-lite 后
+# 同一次刷新几分钱，速度从几十秒降到两三秒；文风由 prompt 管死，输出看不出差别。
+# 想用回 Opus：在 .env 里设 REFLECT_OPENROUTER_MODEL=anthropic/claude-opus-4.6。
+REFLECT_MODEL = os.environ.get('REFLECT_MODEL') or 'gemini-3.5-flash-lite'
+REFLECT_OPENROUTER_MODEL = (os.environ.get('REFLECT_OPENROUTER_MODEL') or '').strip()
 GEMINI_INLINE_LIMIT = 19 * 1024 * 1024  # 19 MB, use File API above this
 
 # 送云引擎的音频一律先压成 Opus 单声道 16k（ogg 容器）。
@@ -190,7 +206,7 @@ DASHSCOPE_API_KEY = os.environ.get('DASHSCOPE_API_KEY', '')
 # 同 sentences[].begin_time/text/speaker_id 返回结构），所以换模型名即可。
 # 单文件上限 12 小时 / 2GB。需要退回旧模型时设 DASHSCOPE_ASR_MODEL=paraformer-v2。
 DASHSCOPE_ASR_MODEL = (os.environ.get('DASHSCOPE_ASR_MODEL')
-                       or 'qwen-audio-3.0-asr-flash-filetrans')
+                       or 'qwen-audio-3.1-asr-flash-filetrans')   # 2026-09-23 发布，同接口
 DASHSCOPE_LLM_MODEL = 'qwen-plus'
 
 

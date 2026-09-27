@@ -15,6 +15,7 @@ from google import genai
 from google.genai import types
 from config import GEMINI_API_KEY, GEMINI_MODEL, GEMINI_INLINE_LIMIT, make_gemini_client
 import config
+import usage
 
 # 全局在飞请求闸：不管有多少个任务、每个任务拆了多少块，同时打向 Gemini 的
 # 转写请求总数封顶在 ENGINE_CONCURRENCY['gemini']。app.py 的引擎信号量按"任务"
@@ -127,10 +128,24 @@ def transcribe_audio(filepath, progress_callback=None):
         done_count = [0]
         done_lock = threading.Lock()
 
+        try:
+            total_duration = int(_get_audio_duration_seconds(filepath) or 0) or None
+        except Exception:  # noqa: BLE001  探不到时长就只夹块长（最后一块不夹）
+            total_duration = None
+
+        def _chunk_len(idx):
+            """第 idx 块自己的长度：下一块的起点 - 自己的起点；最后一块用音频总长。"""
+            start = chunk_files[idx][1]
+            end = (chunk_files[idx + 1][1] if idx + 1 < total_chunks else total_duration)
+            if not end or end <= start:
+                return None
+            return end - start
+
         def _one(idx):
             chunk_path, start_offset_seconds = chunk_files[idx]
             text = _transcribe_single_file(client=client, filepath=chunk_path)
-            merged_text_parts[idx] = shift_timestamps(text, start_offset_seconds).strip()
+            merged_text_parts[idx] = shift_timestamps(
+                text, start_offset_seconds, chunk_seconds=_chunk_len(idx)).strip()
             if progress_callback:
                 with done_lock:
                     done_count[0] += 1
@@ -143,13 +158,15 @@ def transcribe_audio(filepath, progress_callback=None):
                 client=client, filepath=chunk_files[0][0],
                 progress_callback=progress_callback,
             )
-            merged_text_parts[0] = shift_timestamps(text, chunk_files[0][1]).strip()
+            merged_text_parts[0] = shift_timestamps(
+                text, chunk_files[0][1], chunk_seconds=_chunk_len(0)).strip()
         else:
             # 各块互相独立，并行转写；保序靠索引回填。
             # 任一块失败（含内容拦截）→ 取消还没开跑的块，抛出让整条任务按原逻辑失败/兜底。
             width = max(1, min(config.GEMINI_CHUNK_CONCURRENCY, total_chunks))
             with ThreadPoolExecutor(max_workers=width) as pool:
-                futures = [pool.submit(_one, i) for i in range(total_chunks)]
+                _one_bound = usage.bound(_one)       # 记账归属跟进子线程
+                futures = [pool.submit(_one_bound, i) for i in range(total_chunks)]
                 wait(futures, return_when=FIRST_EXCEPTION)
                 failed = next((f for f in futures if f.done() and f.exception()), None)
                 if failed is not None:
@@ -231,10 +248,12 @@ def _transcribe_single_file_inner(client, filepath, progress_callback=None):
                 # 本次尝试的进度区间：30 -> 95。重试会从 30 重新开始，体现"再试一次"
                 progress_callback(min(95, 30 + attempt * 10))
 
+            model_name = os.environ.get('GEMINI_TRANSCRIBE_MODEL') or GEMINI_MODEL
             response = client.models.generate_content(
-                model=os.environ.get('GEMINI_TRANSCRIBE_MODEL') or GEMINI_MODEL,
+                model=model_name,
                 contents=content_parts,
             )
+            usage.record_gemini(response, model_name, 'transcribe')
             text = response.text or ""
             if not text.strip():
                 reason, retryable = _diagnose_empty_response(response)
@@ -374,17 +393,26 @@ def _seconds_to_hhmmss(total_seconds):
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
 
-def shift_timestamps(text, offset_seconds):
-    """Shift [MM:SS] / [HH:MM:SS] timestamps by offset seconds."""
-    if offset_seconds <= 0:
+def shift_timestamps(text, offset_seconds, chunk_seconds=None):
+    """Shift [MM:SS] / [HH:MM:SS] timestamps by offset seconds.
+
+    chunk_seconds：这一块自己的长度（秒）。块内时间戳先夹到 [0, chunk_seconds]
+    再加偏移——模型偶尔会在某一块里吐出超过块长的时间戳（有时甚至是整条视频的
+    绝对时间），直接加偏移就会越界压到后面几块的区间上：合并后时间戳倒退、
+    整块内容被甩到一两小时之后（3 小时的稿里实测出现过 00:30:00 → 02:30:00 的跳跃）。
+    夹一下最坏也只是这一块内部的时间戳偏保守，不会污染别的块。
+    """
+    pattern = r'\[((?:\d{1,2}:)?\d{1,2}:\d{2})\]'
+    if offset_seconds <= 0 and not chunk_seconds:
         return _normalize_timestamps(text)
 
-    pattern = r'\[((?:\d{1,2}:)?\d{1,2}:\d{2})\]'
+    limit = int(chunk_seconds) if chunk_seconds else None
 
     def repl(match):
-        original_ts = match.group(1)
-        total_seconds = _timestamp_to_seconds(original_ts) + offset_seconds
-        return f"[{_seconds_to_hhmmss(total_seconds)}]"
+        ts = _timestamp_to_seconds(match.group(1))
+        if limit is not None:
+            ts = max(0, min(ts, limit))
+        return f"[{_seconds_to_hhmmss(ts + offset_seconds)}]"
 
     return re.sub(pattern, repl, text)
 

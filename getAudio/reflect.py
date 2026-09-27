@@ -2,9 +2,11 @@
 Reflect：回顾你这段时间在听什么（仿 Claude 的 Reflect 面板）。
 
 纯统计部分（最活跃星期、高峰时段、按日曲线、主题占比）每次现算，很快；
-叙事标题、一段话、每个主题的一句说明由 Claude Opus 4.6（走 OpenRouter）写，
-没配 OpenRouter key 时回落到 Gemini Flash。中文、英文两个请求并行发出、一起写入
-results/_reflect_cache.json（按 时段:语言 存）。
+叙事标题、一段话、每个主题的一句说明交给 Gemini flash-lite 写（config.REFLECT_MODEL）。
+这活儿是把一份清单缩成一段话，文风又被 prompt 管死，用贵模型纯属浪费——之前用
+Opus 4.6 一次刷新一美元出头，换掉后只剩几分钱。想用回 OpenRouter 上的大模型，
+在 .env 里设 REFLECT_OPENROUTER_MODEL。中英两份在同一个请求里一起写出来（清单很长，
+分两次发等于白传一遍），拆开写入 results/_reflect_cache.json（按 时段:语言 存）。
 
 生成是提前做的，打开面板不用等：
   - 服务启动 90 秒后、之后每 6 小时，后台把四个时段里数据变了的重算一遍；
@@ -21,10 +23,10 @@ from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
 from datetime import datetime, timedelta
 
-from config import GEMINI_API_KEY, GEMINI_ENRICH_MODEL, OPENROUTER_COMPAT_BASE, make_gemini_client
+from config import (GEMINI_API_KEY, GEMINI_ENRICH_MODEL, OPENROUTER_COMPAT_BASE,
+                    REFLECT_MODEL, REFLECT_OPENROUTER_MODEL, make_gemini_client)
 from enrich import _parse_json_obj
-
-NARRATIVE_MODEL = 'anthropic/claude-opus-4.6'   # OpenRouter 模型名
+import usage
 
 RANGES = {'1m': 1, '3m': 3, '6m': 6, '12m': 12}
 TOP_N = 5            # 主题条最多显示几段（其余并入"其它"）
@@ -190,18 +192,26 @@ def compute(results_dir, range_key='1m', now=None):
 
 # ---------- 叙事（LLM） ----------
 
-NARRATIVE_PROMPT = {
-    'zh': """下面是一个人在 {period} 期间用转写工具转写过的音视频清单（每行：日期 | 时长分钟 | 标题 | 一句话简介 | 标签），
-以及按时长算出的主题占比。请写一份简短的回顾。
+NARRATIVE_PROMPT = """下面是一个人在 {period} 期间用转写工具转写过的音视频清单（每行：日期 | 时长分钟 | 标题 | 一句话简介 | 标签），
+以及按时长算出的主题占比。请写一份简短的回顾，中文、英文各一份。
 
-风格要求：直接、具体、说人话。像朋友看完你的收听记录后直接告诉你"你这段时间主要在听什么"。
+风格要求（两种语言一样）：直接、具体、说人话。像朋友看完你的收听记录后直接告诉你"你这段时间主要在听什么"。
 不要比喻，不要抒情，不要"仿佛置身""沉潜""画卷"这类修辞，不要评价好坏，不要给建议，不要罗列数字。
-可以直接点名博主、节目、具体话题。
+可以直接点名博主、节目、具体话题。英文那份是照着清单独立写一遍，不是把中文逐句翻译过去。
 
-输出三部分：
-1. headline：一句话概括这段时间在听什么，不超过 20 个字，直接陈述，例如「主要在听中国政治评论和立党的求职讲座」。不要冒号、感叹号、书名号。
-2. narrative：一段 80-130 字。第一句说最主要在听什么；然后说第二、第三大的内容是什么；如果有明显变化（比如后半段转向了别的主题）说一句；最后可以提一个反复出现的具体话题或人。
-3. topics：对下面每个主题标签，给一个具体的名字（name，不超过 10 个字，说清在这个标签下实际听的是什么）和一句说明（desc，不超过 35 字，直接说内容）。"__other__" 这项 name 固定写「其它」，desc 一句话说剩下零散的是什么。
+每种语言都输出三部分：
+1. headline：一句话概括这段时间在听什么，直接陈述，不要冒号、感叹号、书名号。
+   中文不超过 20 个字，例如「主要在听中国政治评论和立党的求职讲座」；
+   英文不超过 12 个词，例如 "Mostly Chinese political commentary and Lidang's career talks"。
+2. narrative：一段话。第一句说最主要在听什么；然后说第二、第三大的内容是什么；如果有明显变化
+   （比如后半段转向了别的主题）说一句；最后可以提一个反复出现的具体话题或人。
+   中文 80-130 字，英文 60-100 词。
+3. topics：对下面每个主题标签，说清在这个标签下实际听的是什么——
+   name 不要照抄标签本身（标签是"时政评论"就别再写"时政评论"），要比标签更具体，
+   例如「中国政治与高层人事分析」、"Chinese politics and elite power struggles"。
+   name_zh 不超过 10 个字，name_en 不超过 5 个词；desc_zh 不超过 35 字，desc_en 不超过 16 词，直接说内容。
+   tag 一栏必须原样抄下面的标签，包括 "__other__" 这个写法本身，不要翻译、不要换成别的词。
+   "__other__" 这项 name_zh 固定写「其它」、name_en 固定写 "Everything else"，desc 说剩下零散的是什么。
 
 主题占比：
 {topics}
@@ -210,34 +220,9 @@ NARRATIVE_PROMPT = {
 {items}
 
 严格按以下 JSON 输出，不要输出其他任何内容：
-{{"headline": "...", "narrative": "...", "topics": [{{"tag": "原标签", "name": "...", "desc": "..."}}]}}""",
-
-    'en': """Below is a list of audio/video a person transcribed during {period} (one per line: date | minutes |
-title | one-line summary | tags), plus the share of listening time per topic. Write a short recap.
-
-Style: direct, concrete, plain. Like a friend who looked at your listening history and tells you straight
-what you mostly listened to. No metaphors, no lyrical language, no judgement, no advice, no listing numbers.
-Name creators, shows and specific topics directly.
-
-Output three parts:
-1. headline: one plain sentence saying what this period was mostly about, at most 12 words, e.g.
-   "Mostly Chinese political commentary and Lidang's career talks". No colons, no exclamation marks.
-2. narrative: one paragraph of 60-100 words. First sentence: the main thing they listened to. Then the
-   second and third biggest things. If there was a clear shift (e.g. the later weeks moved to another
-   subject), say so in one sentence. Optionally end with one specific recurring topic or person.
-3. topics: for each topic tag below, a concrete name (name, at most 5 words, what they actually listened
-   to under that tag) and one sentence (desc, at most 16 words, state the content directly). For the
-   "__other__" entry, name must be exactly "Everything else" and desc says what the long tail was.
-
-Topic shares:
-{topics}
-
-Items ({n} total{truncated}):
-{items}
-
-Output strictly this JSON and nothing else:
-{{"headline": "...", "narrative": "...", "topics": [{{"tag": "original tag", "name": "...", "desc": "..."}}]}}""",
-}
+{{"zh": {{"headline": "...", "narrative": "..."}},
+  "en": {{"headline": "...", "narrative": "..."}},
+  "topics": [{{"tag": "原标签", "name_zh": "...", "desc_zh": "...", "name_en": "...", "desc_en": "..."}}]}}"""
 
 
 def _fingerprint(items):
@@ -275,12 +260,11 @@ def _fallback_text(data, lang):
     lead = [t['tag'] for t in topics[:2] if t['tag'] != '__other__']
     if lang == 'zh':
         headline = '这段时间主要在听' + '和'.join(lead) if lead else '这段时间还没有转写'
-        narrative = ('还没有生成回顾。在设置里配好 OpenRouter 或 Gemini 的 key，'
-                     '再点右上角刷新。')
+        narrative = '还没有生成回顾。在设置里配好 Gemini 的 key，再点右上角刷新。'
         other = '其它'
     else:
         headline = 'A stretch of ' + ' and '.join(lead) if lead else 'Nothing transcribed yet'
-        narrative = ('No recap yet. Add an OpenRouter or Gemini key in Settings, then hit refresh.')
+        narrative = 'No recap yet. Add a Gemini key in Settings, then hit refresh.'
         other = 'Everything else'
     return {
         'headline': headline,
@@ -291,34 +275,58 @@ def _fallback_text(data, lang):
     }
 
 
-def _call_model(prompt):
-    """优先 OpenRouter 上的 Claude Opus 4.6；没 key 或调用失败就回落 Gemini Flash。返回原始文本或 None。"""
+def _openrouter_text(prompt):
+    """只有在 .env 里显式设了 REFLECT_OPENROUTER_MODEL 时才走这条（贵）。"""
     or_key = (os.environ.get('OPENROUTER_API_KEY') or '').strip()
-    if or_key:
-        try:
-            from analyze import _call_openai_compat
-            return _call_openai_compat(
-                prompt, NARRATIVE_MODEL, OPENROUTER_COMPAT_BASE, or_key,
-                extra_payload={'reasoning': {'effort': 'low'}},   # 总结任务，不需要长思考
-                label='Reflect')
-        except Exception:
-            pass
+    if not (or_key and REFLECT_OPENROUTER_MODEL):
+        return None
+    from analyze import _call_openai_compat
+    return _call_openai_compat(
+        prompt, REFLECT_OPENROUTER_MODEL, OPENROUTER_COMPAT_BASE, or_key,
+        extra_payload={'reasoning': {'effort': 'low'}},   # 总结任务，不需要长思考
+        label='Reflect', purpose='reflect')
+
+
+def _gemini_text(prompt):
+    """flash-lite 写不出来（限流 / 模型下架）就退一档到 enrich 那个 flash。"""
     g_key = GEMINI_API_KEY or os.environ.get('GEMINI_API_KEY', '')
     if not g_key:
         return None
-    try:
-        client = make_gemini_client(g_key)
-        resp = client.models.generate_content(model=GEMINI_ENRICH_MODEL, contents=prompt)
-        return (resp.text or '').strip()
-    except Exception:
-        return None
+    client = make_gemini_client(g_key)
+    for model in (REFLECT_MODEL, GEMINI_ENRICH_MODEL):
+        try:
+            resp = client.models.generate_content(model=model, contents=prompt)
+        except Exception:
+            continue
+        usage.record_gemini(resp, model, 'reflect')
+        text = (resp.text or '').strip()
+        if text:
+            return text
+    return None
 
 
-def _generate_text(data, lang):
-    """写一种语言的叙事；失败返回 None。"""
+def _call_model(prompt):
+    """默认 Gemini flash-lite；配了 REFLECT_OPENROUTER_MODEL 就优先用它。返回原始文本或 None。"""
+    for fn in (_openrouter_text, _gemini_text):
+        try:
+            text = fn(prompt)
+        except Exception:
+            text = None
+        if text:
+            return text
+    return None
+
+
+def _generate_pair(data):
+    """一次请求写出中英两份叙事。
+
+    中英分两次发，等于把那份上万 token 的清单原样传两遍，而两份叙事读的是同一批条目，
+    所以合成一个请求：清单只传一次，topics 里中英两套名字并排放。
+    返回 {lang: text}，某种语言没写出来就不在里面；整体失败返回 {}。
+    """
     items = data['_items']
     if not items:
-        return None
+        return {}
 
     truncated = ''
     sample = items
@@ -326,7 +334,7 @@ def _generate_text(data, lang):
         # 太多就均匀抽样，保住时间跨度
         step = len(items) / MAX_ITEMS_FOR_LLM
         sample = [items[int(i * step)] for i in range(MAX_ITEMS_FOR_LLM)]
-        truncated = ('，已均匀抽样' if lang == 'zh' else ', evenly sampled')
+        truncated = '，已均匀抽样'
 
     lines = []
     for it in sample:
@@ -336,35 +344,42 @@ def _generate_text(data, lang):
     topic_lines = '\n'.join('%s: %d%% (%d items)' % (t['tag'], t['percent'], t['count'])
                             for t in data['topics'])
     period = '%s ~ %s' % (data['period']['start'], data['period']['end'])
-    prompt = NARRATIVE_PROMPT[lang].format(
+    prompt = NARRATIVE_PROMPT.format(
         period=period, topics=topic_lines, n=len(items),
         truncated=truncated, items='\n'.join(lines))
 
     raw = _call_model(prompt)
     obj = _parse_json_obj(raw) if raw else None
-    if not isinstance(obj, dict) or not obj.get('headline'):
-        return None
+    if not isinstance(obj, dict):
+        return {}
 
-    tmap = {}
-    for t in obj.get('topics') or []:
-        if isinstance(t, dict) and t.get('tag'):
-            tmap[str(t['tag'])] = {'name': str(t.get('name') or t['tag']).strip()[:40],
-                                   'desc': str(t.get('desc') or '').strip()[:120]}
-    return {
-        'headline': str(obj['headline']).strip().rstrip('。.')[:60],
-        'narrative': str(obj.get('narrative') or '').strip()[:800],
-        'topics': tmap,
-        'generated': True,
-    }
+    out = {}
+    for lang in ('zh', 'en'):
+        part = obj.get(lang)
+        if not isinstance(part, dict) or not part.get('headline'):
+            continue        # 只塌了一种语言就只写另一种，下次重算再补
+        tmap = {}
+        for t in obj.get('topics') or []:
+            if isinstance(t, dict) and t.get('tag'):
+                tmap[str(t['tag'])] = {
+                    'name': str(t.get('name_%s' % lang) or t['tag']).strip()[:40],
+                    'desc': str(t.get('desc_%s' % lang) or '').strip()[:120]}
+        out[lang] = {
+            # 中文 20 字以内，英文 12 个词——英文按 60 字符切会从词中间断掉
+            'headline': str(part['headline']).strip().rstrip('。.')[:60 if lang == 'zh' else 120],
+            'narrative': str(part.get('narrative') or '').strip()[:800],
+            'topics': tmap,
+            'generated': True,
+        }
+    return out
 
 
 def regenerate(results_dir, range_key, data=None):
     """同步重算某个时段的中英叙事并写缓存。返回 {lang: text} （失败的语言为 None）。"""
     data = data or compute(results_dir, range_key)
     fp = _fingerprint(data['_items'])
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        futs = {l: pool.submit(_generate_text, data, l) for l in ('zh', 'en')}
-        results = {l: f.result() for l, f in futs.items()}
+    got = _generate_pair(data)
+    results = {l: got.get(l) for l in ('zh', 'en')}
     if any(results.values()):
         now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         with _CACHE_LOCK:
@@ -381,10 +396,11 @@ def regenerate(results_dir, range_key, data=None):
 
 # ---------- 后台预生成 ----------
 
-_BG = ThreadPoolExecutor(max_workers=1)      # 串行跑，避免几个时段同时各发两路请求
+_BG = ThreadPoolExecutor(max_workers=1)      # 串行跑，避免几个时段的请求同时挤在一起
 _INFLIGHT = set()
 _INFLIGHT_LOCK = threading.Lock()
 _TOUCH_TIMER = None
+_TOUCH_LOCK = threading.Lock()   # 见 touch()：并发转写完成时读-撤-建-启必须串行，否则漏撤的旧计时器会各自触发
 TOUCH_DELAY_SEC = 600          # 转写完成后等 10 分钟再算（一批下载只触发一次）
 PERIODIC_SEC = 6 * 3600        # 平时每 6 小时检查一次（时间窗每天在挪，条目会变）
 STARTUP_DELAY_SEC = 90
@@ -429,13 +445,23 @@ def refresh_stale(results_dir):
 
 
 def touch(results_dir):
-    """有转写完成时调用：防抖 10 分钟后跑一次 refresh_stale。"""
+    """有转写完成时调用：防抖 10 分钟后跑一次 refresh_stale。
+
+    一条链条并发转写多期时，多个线程会在几乎同一时刻调这个函数。之前这里
+    读旧计时器、撤销、建新的、赋值、启动这五步没有锁：两个线程各自读到同一个
+    旧计时器、各自 cancel（本来就没用）、各自新建一个 Timer 并启动，全局变量
+    最后只留得住最后赋值的那个——先创建的那个没被任何变量引用、但已经 start()
+    了，没人能再撤它，10 分钟后照样触发。链条转得越快、并发越高，泄漏的计时器
+    越多，回顾就跟着重算越多次（这条链一次能烧出几十次）。加锁把这五步串行化，
+    保证全局同一时刻只有一个活着的计时器。
+    """
     global _TOUCH_TIMER
-    if _TOUCH_TIMER is not None:
-        _TOUCH_TIMER.cancel()
-    _TOUCH_TIMER = threading.Timer(TOUCH_DELAY_SEC, refresh_stale, args=(results_dir,))
-    _TOUCH_TIMER.daemon = True
-    _TOUCH_TIMER.start()
+    with _TOUCH_LOCK:
+        if _TOUCH_TIMER is not None:
+            _TOUCH_TIMER.cancel()
+        _TOUCH_TIMER = threading.Timer(TOUCH_DELAY_SEC, refresh_stale, args=(results_dir,))
+        _TOUCH_TIMER.daemon = True
+        _TOUCH_TIMER.start()
 
 
 def start_scheduler(results_dir):

@@ -5,6 +5,14 @@
  * into the existing history detail view. Results persist server-side.
  */
 
+// 演示实例（VERBATIM_DEMO=1）：只读展示，界面固定英文，花钱的入口都收起来
+const IS_DEMO = !!window.VERBATIM_DEMO;
+if (IS_DEMO) {
+    // 博主页的说明换成演示版（建链表单在演示里藏起来了，原文案里的「粘贴链接」就不对了）
+    const heroP = document.querySelector('#tab-creators .hero p');
+    if (heroP) heroP.dataset.i18n = 'creators.subtitleDemo';
+}
+
 // ========== DOM: Main view ==========
 const mainView = document.getElementById('main-view');
 const form = document.getElementById('upload-form');
@@ -257,8 +265,8 @@ document.querySelectorAll('input[name="engine"][value="qwenasr"], input[name="en
     .forEach(radio => {
         radio.addEventListener('change', () => {
             if (radio.checked && !confirm(T('confirm.mainlandWarning'))) {
-                // 拒绝 → 退回 Whisper
-                const w = document.querySelector('input[name="engine"][value="whisper"]');
+                // 拒绝 → 退回 Gemini 3.5 Transcribe（云端，不吃本地 CPU/电池）
+                const w = document.querySelector('input[name="engine"][value="gemini35"]');
                 w.checked = true;
                 w.dispatchEvent(new Event('change'));
             }
@@ -757,6 +765,26 @@ function appendSegment(seg, container, player) {
     container.scrollTop = container.scrollHeight;
 }
 
+// 证据卡跳进来：高亮原话所在的那一段、滚到视窗中间，播放器也拨到那一秒（不自动播）
+function focusDetailAt(sec) {
+    const segs = [...detailSegmentsContainer.querySelectorAll('.segment')];
+    let hit = null;
+    for (const el of segs) {
+        if (Number(el.dataset.startSec) <= sec + 0.5) hit = el; else break;
+    }
+    hit = hit || segs[0];
+    if (hit) {
+        hit.classList.add('seg-target');
+        hit.scrollIntoView({ block: 'center' });
+        setTimeout(() => hit.classList.remove('seg-target'), 4000);
+    }
+    if (detailAudioPlayer.src) {
+        const seek = () => { detailAudioPlayer.currentTime = sec; };
+        if (detailAudioPlayer.readyState >= 1) seek();
+        else detailAudioPlayer.addEventListener('loadedmetadata', seek, { once: true });
+    }
+}
+
 function showError(message) {
     errorSection.classList.remove('hidden');
     errorText.textContent = message;
@@ -1155,7 +1183,7 @@ async function pollEnrichStatus() {
 // ========== Detail View ==========
 let detailReturnTo = 'tab/library';   // 打开详情前在哪，返回按钮/路由跳回用
 
-async function openDetailView(taskId) {
+async function openDetailView(taskId, startAt = null) {
     // 记住"从哪来"：如果是从某个博主的详情页点进某一期，返回也回那个博主详情，
     // 而不是死板地弹回主 Tab（旧版一直是这个毛病）。
     detailReturnTo = (chainDetailView && !chainDetailView.classList.contains('hidden') && chainDetailId)
@@ -1175,6 +1203,7 @@ async function openDetailView(taskId) {
         detailView.classList.remove('hidden');
         window.scrollTo({ top: 0 });
 
+        data.id = data.id || taskId;
         detailRecord = data;
         detailTitle.textContent = data.filename;
         const segCount = (data.segments || []).length;
@@ -1225,6 +1254,7 @@ async function openDetailView(taskId) {
         detailSegments.forEach(seg => {
             appendSegment(seg, detailSegmentsContainer, detailAudioPlayer);
         });
+        if (startAt != null && isFinite(startAt)) focusDetailAt(startAt);
 
         if (data.summary && data.summary.overview) {
             renderSummary(detailSummarySection, detailSummaryOverview,
@@ -1232,6 +1262,9 @@ async function openDetailView(taskId) {
         } else {
             detailSummarySection.classList.add('hidden');
         }
+        // 博主链默认不出摘要：没有的话给个按钮，想看哪期单独补
+        detailSummarizeBtn.classList.toggle('hidden',
+            !!(data.summary && data.summary.overview) || !segCount || IS_DEMO);
     } catch {
         showToast(T('toast.couldNotLoadRecord'));
         // 冷启动时 URL 里带着失效/已删除的 taskId 会走到这——保底别留白屏，退回资料库。
@@ -1239,6 +1272,29 @@ async function openDetailView(taskId) {
         navigate('tab/library', { replace: true });
     }
 }
+
+const detailSummarizeBtn = document.getElementById('detail-summarize-btn');
+detailSummarizeBtn.addEventListener('click', async () => {
+    const rec = detailRecord;
+    if (!rec || !rec.id) return;
+    detailSummarizeBtn.disabled = true;
+    detailSummarizeBtn.textContent = T('detail.summarizing');
+    try {
+        const r = await fetch(`/api/history/${rec.id}/summary`, { method: 'POST' });
+        const d = await r.json();
+        if (!r.ok || !d.summary) throw new Error(d.error || 'failed');
+        if (detailRecord !== rec) return;              // 等的时候切到别的期了
+        rec.summary = d.summary;
+        renderSummary(detailSummarySection, detailSummaryOverview,
+            detailSummarySections, d.summary);
+        detailSummarizeBtn.classList.add('hidden');
+    } catch {
+        showToast(T('toast.summaryFailed'));
+    } finally {
+        detailSummarizeBtn.disabled = false;
+        detailSummarizeBtn.textContent = T('detail.summarize');
+    }
+});
 
 function closeDetailView() {
     detailView.classList.add('hidden');
@@ -1301,6 +1357,7 @@ const chainPreferSubs = document.getElementById('chain-prefer-subs');
 const chainVerify = document.getElementById('chain-verify');
 const chainSelfVerify = document.getElementById('chain-self-verify');
 const chainFallbackWhisper = document.getElementById('chain-fallback-whisper');
+const chainSummarize = document.getElementById('chain-summarize');
 const chainCritique = document.getElementById('chain-critique');
 const chainProvider = document.getElementById('chain-provider');
 const chainStartBtn = document.getElementById('chain-start');
@@ -1369,6 +1426,7 @@ function settingsLine(c) {
                   `self-verify <b>${onoff(c.self_verify)}</b>`);
     }
     bits.push(`subs-first <b>${onoff(c.prefer_subs)}</b>`);
+    bits.push(`summaries <b>${onoff(c.summarize)}</b>`);
     if (c.engine !== 'whisper') bits.push(`whisper-fallback <b>${onoff(c.fallback_whisper)}</b>`);
     return bits.join(' · ');
 }
@@ -1391,6 +1449,12 @@ chainStartBtn.addEventListener('click', async () => {
     if (chainSubmitting) return;               // 防连点重复建链（每条都烧钱）
     const url = (chainUrl.value || '').trim();
     if (!url) { chainUrl.focus(); return; }
+
+    // 这个博主之前跑过 → 直接接着那条，不再开新的、也不多问一句。
+    // 转写本来就跨链条去重，但**证据卡缓存在各自的链条目录里**：另开一条 =
+    // 分析的钱全部重花一遍，还在博主库里留下两张同名卡片。
+    const prior = await findChainByUrl(url);
+
     // 花钱确认：按当前模式说实话——只转写就别再吓唬人说要合成人物画像
     {
         const onlyTx = !!chainMode && chainMode.value === 'transcribe';
@@ -1415,10 +1479,6 @@ chainStartBtn.addEventListener('click', async () => {
     }
     const onlyTranscribe = !!chainMode && chainMode.value === 'transcribe';
 
-    // 这个博主之前跑过 → 直接接着那条，不再开新的、也不多问一句。
-    // 转写本来就跨链条去重，但**证据卡缓存在各自的链条目录里**：另开一条 =
-    // 分析的钱全部重花一遍，还在博主库里留下两张同名卡片。
-    const prior = await findChainByUrl(url);
     if (prior && !['done', 'failed', 'cancelled'].includes(prior.stage)) {
         chainUrl.value = '';          // 那条还在跑：直接带你过去看，什么都不用点
         navigate('chain/' + prior.id);
@@ -1445,6 +1505,7 @@ chainStartBtn.addEventListener('click', async () => {
                 prefer_subs: chainPreferSubs.checked,
                 sub_lang: (document.getElementById('chain-sub-lang') || {}).value || 'auto',
                 fallback_whisper: chainFallbackWhisper.checked,
+                summarize: !!(chainSummarize && chainSummarize.checked),
                 // 只转写模式下这几个旋钮是禁用的，别把"勾着但根本不生效"的状态存进链条
                 verify: chainVerify.checked && !onlyTranscribe,
                 self_verify: chainSelfVerify.checked && !onlyTranscribe,
@@ -1676,14 +1737,159 @@ let chainDetailTimer = null;
 async function openChainDetail(id) {
     chainDetailId = id;
     mainView.classList.add('hidden');
+    // 浏览器「后退」从某一期转写 / 报告回到这里时不走它们的返回按钮，得自己把它们收起来，
+    // 不然两页叠着显示（点证据卡进转写再后退，最常见）
+    if (!detailView.classList.contains('hidden')) {
+        detailView.classList.add('hidden');
+        detailAudioPlayer.pause();
+    }
+    if (docView) docView.classList.add('hidden');
     chainDetailView.classList.remove('hidden');
-    // 每次打开先收起分集网格：先看设置/模型/进度，要看每期再展开
-    chainDetailGrid.classList.add('hidden');
+    // 分集网格默认展开：这一页的主体就是每一期，收起来的话整页只剩一张卡
+    //（网格按视窗定高、在容器内滚，299 期也不会把页面撑爆）
+    chainDetailGrid.classList.remove('hidden');
     const tg = document.getElementById('chain-episodes-toggle');
-    if (tg) tg.classList.remove('open');
+    if (tg) tg.classList.add('open');
     window.scrollTo({ top: 0 });
     renderMergeBar();   // 购物车里有跨博主选的期 → 进来就显操作条
+    loadChainCards(id); // 证据卡单独一个容器，不跟着 4 秒轮询重绘
     await refreshChainDetail();
+}
+
+// ===== 证据卡墙：逐期抽过的卡片直接摆出来（原话 + 出处，点开跳回那一秒）=====
+const CC_PAGE = 12;
+let chainCards = { id: null, all: [], episodes: 0, layer: 'all', q: '', shown: CC_PAGE };
+
+async function loadChainCards(id) {
+    const box = document.getElementById('chain-cards');
+    if (!box) return;
+    box.classList.add('hidden');
+    box.innerHTML = '';
+    chainCards = { id, all: [], episodes: 0, layer: 'all', q: '', shown: CC_PAGE };
+    let r;
+    try {
+        const resp = await fetch(`/api/chain/${id}/cards`);
+        if (!resp.ok) return;
+        r = await resp.json();
+    } catch { return; }
+    if (chainCards.id !== id || chainDetailId !== id) return;   // 加载期间切到别的博主了
+    if (!r.cards || !r.cards.length) return;                    // 没跑过分析：整块不出现
+    const eps = r.episodes || [];
+    r.cards.forEach(c => {                                      // 卡片只带期下标，这里接回出处
+        const ep = eps[c.ep] || {};
+        c.episode = ep.title || '';
+        c.task_id = ep.task_id || '';
+    });
+    // 默认顺序按期轮流取（每期第 1 张、再每期第 2 张……），第一屏就能看到不同的期，
+    // 不会前 12 张全是同一期
+    const byEp = new Map();
+    r.cards.forEach(c => {
+        const k = c.task_id || c.episode;
+        if (!byEp.has(k)) byEp.set(k, []);
+        byEp.get(k).push(c);
+    });
+    // 每期里「他的主张」排前面：开场白多半是转写自证类的寒暄（00:00「哦，可以」），不适合打头
+    const rank = c => (c.layer === 'claim' ? 0 : 1);
+    const groups = [...byEp.values()].map(g => g
+        .map((c, i) => [c, i]).sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1])
+        .map(([c]) => c));
+    const mixed = [];
+    for (let i = 0; mixed.length < r.cards.length; i++) {
+        groups.forEach(g => { if (i < g.length) mixed.push(g[i]); });
+    }
+    chainCards.all = mixed;
+    chainCards.episodes = eps.length;
+
+    const counts = {};
+    r.cards.forEach(c => { counts[c.layer] = (counts[c.layer] || 0) + 1; });
+    const chips = [['all', T('cards.all'), r.cards.length]]
+        .concat(['claim', 'transcript', 'verified'].filter(k => counts[k])
+            .map(k => [k, T('cards.layer.' + k), counts[k]]));
+    box.innerHTML = `
+        <div class="cc-head">
+            <div>
+                <div class="cc-title">${T('cards.title')}</div>
+                <div class="cc-sub">${T('cards.sub', { n: r.cards.length, m: eps.length })}</div>
+            </div>
+            <button class="btn-secondary cc-shuffle" type="button">🎲 ${T('cards.shuffle')}</button>
+        </div>
+        <div class="cc-controls">
+            <div class="cc-chips">${chips.map(([k, label, n]) =>
+                `<button type="button" class="cc-chip${k === 'all' ? ' on' : ''}" data-layer="${k}">${label} <span>${n}</span></button>`).join('')}</div>
+            <input class="cc-search" type="search" placeholder="${T('cards.search')}">
+        </div>
+        <div class="cc-grid"></div>
+        <button class="btn-secondary cc-more hidden" type="button"></button>`;
+
+    box.querySelectorAll('.cc-chip').forEach(b => b.addEventListener('click', () => {
+        box.querySelectorAll('.cc-chip').forEach(x => x.classList.toggle('on', x === b));
+        chainCards.layer = b.dataset.layer;
+        chainCards.shown = CC_PAGE;
+        renderChainCards();
+    }));
+    let t = null;
+    box.querySelector('.cc-search').addEventListener('input', e => {
+        clearTimeout(t);
+        t = setTimeout(() => {
+            chainCards.q = e.target.value.trim().toLowerCase();
+            chainCards.shown = CC_PAGE;
+            renderChainCards();
+        }, 150);
+    });
+    box.querySelector('.cc-shuffle').addEventListener('click', () => {
+        const a = chainCards.all;
+        for (let i = a.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [a[i], a[j]] = [a[j], a[i]];
+        }
+        chainCards.shown = CC_PAGE;
+        renderChainCards();
+    });
+    box.querySelector('.cc-more').addEventListener('click', () => {
+        chainCards.shown += CC_PAGE * 2;
+        renderChainCards();
+    });
+    box.classList.remove('hidden');
+    renderChainCards();
+}
+
+function renderChainCards() {
+    const box = document.getElementById('chain-cards');
+    if (!box) return;
+    const { layer, q } = chainCards;
+    const list = chainCards.all.filter(c => (layer === 'all' || c.layer === layer)
+        && (!q || (c.quote + ' ' + c.obs + ' ' + c.episode).toLowerCase().includes(q)));
+    const page = list.slice(0, chainCards.shown);
+    box.querySelector('.cc-grid').innerHTML = page.map(c => {
+        // 统一成 MM:SS（不到一小时的 00:01:56 去掉前导 00:），和转写页的时间戳一个样
+        const ts = ((String(c.timestamp || '').match(/\d+:\d{2}(?::\d{2})?/) || [''])[0])
+            .replace(/^0{1,2}:(?=\d{2}:\d{2}$)/, '');
+        const sec = ts ? parseTimestampToSeconds(ts) : null;
+        const href = c.task_id
+            ? `detail/${c.task_id}` + (sec != null ? `/t/${sec}` : '') : '';
+        const main = c.quote || c.obs;
+        const obs = c.quote && c.obs ? `<div class="cc-obs">${escapeHtml(c.obs)}</div>` : '';
+        const tag = c.quote ? 'blockquote' : 'div';
+        return `<div class="cc-card${href ? ' cc-link' : ''}"${href
+                ? ` role="link" tabindex="0" data-href="${escapeHtml(href)}" title="${escapeHtml(T('cards.jump', { ts: ts || '00:00' }))}"` : ''}>
+            <${tag} class="cc-quote">${escapeHtml(main)}</${tag}>
+            ${obs}
+            <div class="cc-foot">
+                <span class="cc-layer cc-l-${c.layer}">${T('cards.layer.' + c.layer)}</span>
+                <span class="cc-ep">${escapeHtml(c.episode || '')}</span>
+                ${ts ? `<span class="cc-ts">${ts}</span>` : ''}
+            </div>
+        </div>`;
+    }).join('') || `<p class="history-empty">${T('cards.none')}</p>`;
+    box.querySelectorAll('.cc-link').forEach(el => {
+        const go = () => navigate(el.dataset.href);
+        el.addEventListener('click', go);
+        el.addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
+    });
+    const more = box.querySelector('.cc-more');
+    const left = list.length - page.length;
+    more.classList.toggle('hidden', left <= 0);
+    more.textContent = T('cards.more', { n: left });
 }
 
 // Episodes 折叠开关
@@ -2289,6 +2495,7 @@ async function loadDocs() {
                 : `<span class="doc-stage">（${stageLabel(c.stage)}）</span>`;
             const labelOf = f => f === '总分析.md' ? T('creators.report')
                 : f === '合并原文.md' ? T('creators.fullTranscript')
+                : /^镜头_(\w+)\.md$/.test(f) ? T('lens.' + f.match(/^镜头_(\w+)\.md$/)[1])
                 : f.replace(/^分析_\d+_/, '').replace(/\.md$/, '');
             // 同一期重跑过会留下 分析_001_X 和 分析_005_X 两份同名文档，只列后一份
             const byLabel = new Map();
@@ -2340,7 +2547,7 @@ if (docContent) new MutationObserver(buildDocToc).observe(docContent, { childLis
 // 列表按视窗高度定可见量：把每个滚动容器到页面顶部的距离量出来写进 --list-top，
 // CSS 用 100vh − 它 − 角落按钮行 算 max-height。布局一变（切页、换行、窗口缩放）就重量。
 function fitListsToViewport() {
-    document.querySelectorAll('.history-list, #docs-list, .batch-list, .segments-container').forEach(el => {
+    document.querySelectorAll('.history-list, #docs-list, .batch-list, .segments-container, #chain-detail-grid').forEach(el => {
         if (!el.offsetParent) return;                       // 藏着的页面量不到，跳过
         const top = Math.round(el.getBoundingClientRect().top + window.scrollY);
         el.style.setProperty('--list-top', top + 'px');
@@ -3264,13 +3471,20 @@ function _showMain() {
 }
 
 function applyRoute() {
-    const parts = (location.hash.replace(/^#\/?/, '') || 'tab/transcribe').split('/').map(decodeURIComponent);
+    const parts = (location.hash.replace(/^#\/?/, '') || (IS_DEMO ? 'tab/creators' : 'tab/transcribe'))
+        .split('/').map(decodeURIComponent);
+    // 演示里转写 / 小红书两个入口收起来了（会花钱），直接落到博主页
+    if (IS_DEMO && parts[0] === 'tab' && ['transcribe', 'xhs'].includes(parts[1])) {
+        navigate('tab/creators', { replace: true });
+        return;
+    }
     if (parts[0] === 'tab') {
         _showMain();
         switchTab(parts[1] || 'transcribe');
         if (parts[1] === 'library') switchLib(parts[2] || 'transcripts');
     } else if (parts[0] === 'detail' && parts[1]) {
-        openDetailView(parts[1]);
+        // detail/<id>/t/<秒>：从证据卡点进来，打开后定位到那一秒
+        openDetailView(parts[1], parts[2] === 't' ? Number(parts[3]) : null);
     } else if (parts[0] === 'chain' && parts[1] && parts[2] === 'doc' && parts[3]) {
         openDocView(parts[1], encodeURIComponent(parts[3]));
     } else if (parts[0] === 'chain' && parts[1]) {
@@ -3278,7 +3492,7 @@ function applyRoute() {
     } else if (parts[0] === 'xhs-report') {
         openXhsReport();
     } else {
-        navigate('tab/transcribe', { replace: true });
+        navigate(IS_DEMO ? 'tab/creators' : 'tab/transcribe', { replace: true });
     }
 }
 window.addEventListener('hashchange', applyRoute);

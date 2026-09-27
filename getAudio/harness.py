@@ -15,12 +15,16 @@ import json
 import re
 from concurrent.futures import ThreadPoolExecutor
 
+import usage   # 只借它的线程局部归属（记账用），不引入业务逻辑
+
 
 def fanout(items, fn, concurrency=6):
     """并发把 fn 施加到每个 item，**保序**返回。单个抛异常 → 该位置 None。"""
     items = list(items)
     if not items:
         return []
+
+    fn = usage.bound(fn)      # 子线程里也带着调用方的记账归属（task / chain）
 
     def _run(i):
         try:

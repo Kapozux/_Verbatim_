@@ -16,6 +16,8 @@ import re
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 
+import usage
+
 from google import genai
 from google.genai import types
 
@@ -152,6 +154,7 @@ def merge_speaker_transcript(gemini_segments, dashscope_segments):
                 resp = client.models.generate_content(
                     model=GEMINI_MODEL, contents=[prompt]
                 )
+                usage.record_gemini(resp, GEMINI_MODEL, 'precise_merge')
                 text = (resp.text or "").strip()
                 # 时间戳必须落在本窗口范围内，否则视为 LLM 重置/漂移了时间轴
                 if text and _window_ts_ok(text, win):
@@ -165,7 +168,7 @@ def merge_speaker_transcript(gemini_segments, dashscope_segments):
         return _speaker_only_text(a)  # 这段 Gemini 没文字
 
     with ThreadPoolExecutor(max_workers=_MERGE_WORKERS) as ex:
-        parts = list(ex.map(_merge_window, windows))
+        parts = list(ex.map(usage.bound(_merge_window), windows))
 
     full_text = "\n".join(p for p in parts if p).strip()
     if not full_text:

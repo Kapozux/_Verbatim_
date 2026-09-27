@@ -39,7 +39,10 @@ _LOOP_DROP_ALL = 5        # 循环片里，某短句重复 >= 此次数 → 全�
 # 常见语气词/口水词（仅在「成片重复」时才据此判假，单独出现一律保留）
 _FILLER_CHARS = set('嗯呃啊哦唔呐呗哈嘛呀么呢哎诶嗨欸')
 
-_TS_RE = re.compile(r'^\d{1,2}:\d{2}(:\d{2})?$')
+# 合法时间戳：MM:SS / MMM:SS / HH:MM:SS。分钟位必须容三位——Whisper 的
+# format_seconds 对超过 100 分钟的音频会给出 `173:12` 这种分钟数，写死两位的话
+# 整条长稿从 1:40:00 往后全被判成坏时间戳、继承上一条，时间轴直接销毁。
+_TS_RE = re.compile(r'^\d{1,3}:\d{2}(:\d{2})?$')
 # 文字里漏出来的畸形时间戳残片，如 [0m3s30m433ms]、[00:1a]
 _BROKEN_TS_IN_TEXT = re.compile(r'\[\s*\d[0-9a-zA-Z:.\s]*m?s?\]')
 
@@ -266,18 +269,20 @@ def clean_transcript(segments, silence_intervals=None, duration=None):
     return clean, report
 
 
-def detect_silence(filepath, noise_db=-35, min_silence=2.0):
+def detect_silence(filepath, noise_db=-35, min_silence=2.0, max_seconds=None):
     """用 ffmpeg silencedetect 返回静音区间 [(start_sec, end_sec), ...]。
 
     best-effort：ffmpeg 缺失或出错就返回 []（退化为纯文字证伪）。
     noise_db 以下、持续 min_silence 秒以上判为静音。
+    max_seconds：只看开头这么多秒（判「整条有没有人声」够用，长音频不必整条解码）。
     """
     ffmpeg = config.FFMPEG_BIN
     if not os.path.exists(ffmpeg) or not os.path.isfile(filepath):
         return []
     try:
         proc = subprocess.run(
-            [ffmpeg, '-nostats', '-i', filepath,
+            [ffmpeg, '-nostats',
+             *(['-t', str(int(max_seconds))] if max_seconds else []), '-i', filepath,
              '-af', f'silencedetect=noise={noise_db}dB:d={min_silence}',
              '-f', 'null', '-'],
             capture_output=True, text=True, timeout=600,
@@ -296,3 +301,94 @@ def detect_silence(filepath, noise_db=-35, min_silence=2.0):
             intervals.append((max(0.0, start), float(m.group(1))))
             start = None
     return intervals
+
+
+# ==== 出口校验：这份转写是不是「其实什么都没有」 ====
+# 背景：模型对着 3 分钟纯静音也会编出一整段像人话的对话（密度、时间覆盖率都正常，
+# 光看文字挑不出毛病），对着纯音乐/风扇声则可能只回一句「[风扇声]」。两种都会被
+# 当成转写成功落库，还顺带生成摘要和 AI 标题。
+# 这里只用**客观**信号判死：一个字都没有 / 全是括号里的非语音标注 /
+# 回音频验出那段时间根本没人说话。文字密度这类软信号一律不作为判据——
+# 幻听稿的密度可以完全正常，正常稿的密度也可以很低。
+#
+# 已知不覆盖：白噪音、纯音乐这种「响但没人说话」的音频，如果模型编出一段像人话的
+# 文本，这里抓不到（silencedetect 只认安静，不认无语音）。要覆盖得上 VAD。
+_NONSPEECH_WORDS = re.compile(
+    r'^[\s\[\(（【♪♫~*·.-]*(?:music|applause|laughter|noise|silence|inaudible|'
+    r'音乐|音樂|噪音|噪声|掌声|掌聲|笑声|笑聲|静音|靜音|无人说话|無人說話)'
+    r'[\s\]\)）】♪♫~*·.-]*$',
+    re.IGNORECASE)
+# 整段就是一个括号注解（[风扇声]、（背景音乐）、[BLANK_AUDIO]…）：括号外没有别的字
+_BRACKET_ONLY = re.compile(r'^[\s♪♫~*·.,、。-]*[\[\(（【][^\]\)）】]{0,24}[\]\)）】][\s♪♫~*·.,、。-]*$')
+_SYMBOL_ONLY = re.compile(r'^[\s♪♫~*·.,、。-]*$')      # 只有符号/空白
+
+_SILENT_RATIO = 0.95      # 探测窗口里静音占比达到此值 → 这段音频没人说话
+_SILENCE_WINDOW = 600     # 只验开头 10 分钟：整条没人声的音频，开头就看得出来；
+                          # 也把长音频的额外解码开销封在十分钟以内
+_MIN_HALLUCINATED = 3     # 窗口内至少这么多段、这么多字，才判「明明没人说话却转出了话」
+_MIN_HALLUCINATED_CHARS = 40
+
+
+def _is_nonspeech(text):
+    t = (text or '').strip()
+    return (not t or bool(_SYMBOL_ONLY.match(t)) or bool(_NONSPEECH_WORDS.match(t))
+            or bool(_BRACKET_ONLY.match(t)))
+
+
+def silence_ratio(audio_path, duration, window=_SILENCE_WINDOW):
+    """探测窗口内的静音时长占比（0~1）。判不了返回 None（= 不下结论）。
+
+    分母是**窗口本身的长度**（音频比窗口短就用音频长度），不是静音区间的跨度——
+    用跨度当分母的话，开头 3 秒静音就会被算成 100%。
+    """
+    if not audio_path or not os.path.isfile(audio_path) or not duration:
+        return None
+    probe = min(float(duration), float(window))
+    if probe <= 0:
+        return None
+    intervals = detect_silence(audio_path, max_seconds=window)
+    if not intervals:
+        return 0.0                      # 探测成功但一段静音都没有
+    covered = sum(max(0.0, min(b, probe) - min(a, probe)) for a, b in intervals)
+    return max(0.0, min(1.0, covered / probe))
+
+
+def transcript_quality(segments, duration=None, audio_path=None, clean_report=None):
+    """转写出口校验。返回 (ok: bool, reason: str, stats: dict)。
+
+    reason 直接给用户看（任务失败原因），ok=True 时为空串。
+    clean_report：clean_transcript 的报告（给了就能判「清洗完只剩复读残渣」）。
+    """
+    segs = segments or []
+    texts = [(s.get('text') or '').strip() for s in segs]
+    body = ''.join(texts)
+    stats = {'segments': len(segs), 'chars': len(body)}
+
+    if not body:
+        return False, '音频里没有识别到任何语音（可能是无声、纯音乐，或音轨有问题）', stats
+    if all(_is_nonspeech(t) for t in texts):
+        return False, '整段只有音乐/噪音这类非语音标注，没有可转写的语音', stats
+
+    # 解码死循环的残渣：白噪音喂给 Whisper 会吐「Rekordverk, Rekordverk, ...」这种，
+    # 清洗层把它折叠 / 删重复之后还会剩下一两段，看着像内容其实只有一句话在打转。
+    cores = {_core(t) for t in texts if _core(t)}
+    stats['distinct'] = len(cores)
+    looped = bool(clean_report) and any(
+        (clean_report or {}).get(k) for k in ('intra_loops', 'loops', 'filler_runs'))
+    if cores and (len(cores) == 1 and len(segs) >= 2 or (looped and len(cores) <= 2)):
+        return False, '整条转写只有同一句话在反复（解码死循环），没有有效内容', stats
+
+    # 回音频验一次：那段时间到底有没有人说话
+    ratio = silence_ratio(audio_path, duration)
+    if ratio is not None:
+        stats['silence_ratio'] = round(ratio, 2)
+        if ratio >= _SILENT_RATIO:
+            window = min(float(duration or _SILENCE_WINDOW), float(_SILENCE_WINDOW))
+            inside = [t for s, t in zip(segs, texts)
+                      if (_ts_to_seconds(s.get('timestamp', '')) or 0) <= window]
+            n_chars = len(''.join(inside))
+            stats['in_window'] = {'segments': len(inside), 'chars': n_chars}
+            if len(inside) >= _MIN_HALLUCINATED and n_chars >= _MIN_HALLUCINATED_CHARS:
+                return False, (f'音频前 {int(window / 60)} 分钟里 {int(ratio * 100)}% 是静音、'
+                               f'没有人说话，却转出了 {len(inside)} 段话 —— 判为模型幻听'), stats
+    return True, '', stats

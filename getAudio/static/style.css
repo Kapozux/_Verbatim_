@@ -359,7 +359,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 #doc-download-btn { margin-left: auto; }
 
 /* === 链条详情：视频封面网格 === */
-#chain-detail-view { max-width: 1000px; margin: 0 auto; }
+/* 博主详情不自己设宽度上限：全站只有一个 --shell-w，左边缘跟别处对齐。
+   以前这里是 max-width:1000px + margin:0 auto，而 .container 是 flex 纵向容器——
+   交叉轴上的 auto margin 会取消 stretch，这块直接缩成 fit-content：2160px 的屏幕
+   上只占 446px，两边全白。排版见下面 ≥1080 的双栏。 */
 .video-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(196px, 1fr)); gap: 16px; margin-top: 12px; }
 .vg-card { border: 1px solid var(--line); border-radius: var(--r-lg); overflow: hidden; background: var(--card); display: flex; flex-direction: column; }
 .vg-clickable { cursor: pointer; transition: border-color .15s ease, box-shadow .15s ease; }
@@ -427,6 +430,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 }
 .episodes-toggle:hover { color: var(--coral); }
 .episodes-toggle.open { color: var(--ink); }
+/* 默认是展开的，箭头得跟着转，别一直指着 ▸ */
+.ep-arrow { display: inline-block; transition: transform .15s; }
+.episodes-toggle.open .ep-arrow { transform: rotate(90deg); }
 
 /* 链条表单：折叠的高级选项（原生 <details>，无 JS） */
 .chain-advanced { margin-top: 10px; }
@@ -633,6 +639,72 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 }
 .lens-btn:hover { color: #fff; background: var(--coral); border-color: var(--coral);
   transform: translateY(-1px); }
+
+/* 证据卡墙：原话做主角，出处压在底栏，点整张卡跳回那一秒 */
+.cc-wall { margin: 4px 0 22px; }
+.cc-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.cc-title { font-family: var(--serif); font-size: 24px; font-weight: 600; color: var(--ink); line-height: 1.2; }
+.cc-sub { font-size: 12.5px; color: var(--muted); margin-top: 4px; }
+.cc-shuffle { width: auto; padding: 7px 14px; font-size: 13px; }
+.cc-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 14px 0 16px; }
+.cc-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.cc-chip {
+  font: inherit; font-size: 12.5px; font-weight: 600; color: var(--ink-soft);
+  background: var(--card); border: 1px solid var(--line-2); border-radius: 999px;
+  padding: 5px 12px; cursor: pointer; transition: all .12s;
+}
+.cc-chip span { color: var(--faint); font-weight: 500; margin-left: 2px; font-variant-numeric: tabular-nums; }
+.cc-chip:hover { border-color: var(--coral); color: var(--coral-deep); }
+.cc-chip.on { background: var(--ink); border-color: var(--ink); color: #fff; }
+.cc-chip.on span { color: rgba(255,255,255,.6); }
+.cc-search {
+  flex: 1 1 200px; max-width: 320px; margin-left: auto; font: inherit; font-size: 13px;
+  padding: 7px 12px; border: 1px solid var(--line-2); border-radius: var(--r-sm);
+  background: var(--card); color: var(--ink);
+}
+.cc-search:focus { outline: none; border-color: var(--coral); }
+.cc-grid { columns: 300px; column-gap: 16px; }
+.cc-card {
+  break-inside: avoid; margin: 0 0 16px; background: var(--card);
+  border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: var(--e1);
+  padding: 18px 20px 14px; transition: border-color .12s, box-shadow .12s, transform .12s;
+}
+.cc-link { cursor: pointer; }
+.cc-link:hover, .cc-link:focus-visible {
+  border-color: var(--coral-line); box-shadow: var(--e2); transform: translateY(-1px); outline: none;
+}
+.cc-quote {
+  margin: 0; font-family: var(--serif); font-size: 16px; line-height: 1.65; color: var(--ink);
+  display: -webkit-box; -webkit-line-clamp: 7; -webkit-box-orient: vertical; overflow: hidden;
+  overflow-wrap: anywhere;
+}
+blockquote.cc-quote::before { content: '“'; color: var(--coral); margin-right: 1px; }
+blockquote.cc-quote::after { content: '”'; color: var(--coral); margin-left: 1px; }
+.cc-obs { margin-top: 10px; font-size: 12.5px; line-height: 1.55; color: var(--muted); overflow-wrap: anywhere; }
+.cc-foot {
+  display: flex; align-items: center; gap: 8px; margin-top: 14px; padding-top: 10px;
+  border-top: 1px solid var(--line); font-size: 11.5px; color: var(--faint); min-width: 0;
+}
+.cc-layer { flex: none; font-weight: 600; padding: 1px 8px; border-radius: 999px; }
+.cc-l-claim { color: var(--coral-deep); background: var(--coral-soft); }
+.cc-l-transcript { color: var(--run); background: var(--run-bg); }
+.cc-l-verified { color: var(--ok); background: var(--ok-bg); }
+.cc-ep { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cc-ts { flex: none; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.cc-link:hover .cc-ts { color: var(--coral); }
+.cc-more { display: block; width: auto; margin: 4px auto 0; padding: 9px 22px; font-size: 13px; }
+@media (max-width: 700px) {
+  .cc-search { flex-basis: 100%; max-width: none; margin-left: 0; }
+  .cc-card { padding: 16px 16px 12px; }
+}
+/* 从证据卡跳进转写：原话那一段闪一下 */
+.segment.seg-target { background: var(--coral-soft); border-radius: var(--r-sm); box-shadow: inset 3px 0 0 var(--coral); transition: background 1s; }
+
+/* 演示实例：花钱 / 改数据的入口全收起来，只留看的 */
+body.demo .nav-tab[data-tab="transcribe"], body.demo .nav-tab[data-tab="xhs"],
+body.demo #settings-open, body.demo #ui-lang-toggle, body.demo #global-tasks,
+body.demo #tab-creators .chain-form-shell, body.demo .chain-ops, body.demo .cd-alert,
+body.demo .btn-danger, body.demo #detail-summarize-btn { display: none !important; }
 
 /* 运维细节折叠 */
 .chain-ops { margin-bottom: 16px; }
@@ -977,7 +1049,7 @@ body { display: flex; flex-direction: column; }
 
 /* 列表：按视窗高度定可见量，装不下在容器内滚 */
 /* 首屏填满：列表高度 = 视窗 − 列表顶部 − 页脚（页脚自身已含角落按钮的位置）− 卡片底边 */
-.history-list, #docs-list, .batch-list, .segments-container {
+.history-list, #docs-list, .batch-list, .segments-container, #chain-detail-grid {
   max-height: max(260px, calc(100vh - var(--list-top, var(--list-top-fallback)) - var(--footer-h) - 24px));
   overflow: auto;
 }
@@ -1021,6 +1093,22 @@ body { display: flex; flex-direction: column; }
   #detail-view:has(#detail-summary-section:not(.hidden)) > #detail-player-section,
   #detail-view:has(#detail-summary-section:not(.hidden)) > #detail-results-section { grid-column: 1; }
   #detail-view:has(#detail-summary-section:not(.hidden)) > #detail-summary-section {
+    grid-column: 2; grid-row: 3 / span 2; position: sticky; top: 16px;
+    max-height: calc(100vh - 32px); overflow: auto;
+  }
+
+  /* 博主详情：分集网格 | 博主卡。以前整块是居中窄柱，158 期折叠着，
+     一页几乎全白——现在左栏铺视频、右栏放身份卡和镜头按钮。 */
+  #chain-detail-view:not(.hidden) {
+    display: grid; grid-template-columns: minmax(0, 3fr) minmax(320px, 2fr);
+    column-gap: var(--col-gap); align-items: start; align-content: start;
+  }
+  #chain-detail-view > .detail-top-bar,
+  #chain-detail-view > .detail-meta { grid-column: 1 / -1; }
+  #chain-detail-view > #chain-cards,
+  #chain-detail-view > #chain-episodes-toggle,
+  #chain-detail-view > #chain-detail-grid { grid-column: 1; }
+  #chain-detail-view > #chain-detail-info {
     grid-column: 2; grid-row: 3 / span 2; position: sticky; top: 16px;
     max-height: calc(100vh - 32px); overflow: auto;
   }

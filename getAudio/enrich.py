@@ -11,6 +11,7 @@ import os
 import re
 
 from config import GEMINI_API_KEY, GEMINI_ENRICH_MODEL, make_gemini_client
+import usage
 
 ENRICH_PROMPT = """根据下面这条音频转写的信息，生成用于列表卡片展示的元数据。
 
@@ -50,6 +51,7 @@ def generate_card_meta(filename, content):
             model=GEMINI_ENRICH_MODEL,
             contents=ENRICH_PROMPT.format(filename=filename, content=content),
         )
+        usage.record_gemini(resp, GEMINI_ENRICH_MODEL, 'enrich')
         raw = (resp.text or '').strip()
     except Exception:
         return None
@@ -121,6 +123,7 @@ def _gemini_translate(tags):
             model=GEMINI_ENRICH_MODEL,
             contents=prompt,
         )
+        usage.record_gemini(resp, GEMINI_ENRICH_MODEL, 'enrich')
         raw = (resp.text or '').strip()
     except Exception:
         return None
@@ -209,7 +212,9 @@ def enrich_task(task_dir):
         return False
 
     content = enrich_content_for(task_dir)
-    card = generate_card_meta(meta.get('filename', ''), content)
+    # 记账归属：批量补全（enrich_all）时没有外层 scope，按目录名归到这条转写
+    with usage.scope(ref=os.path.basename(os.path.normpath(task_dir))):
+        card = generate_card_meta(meta.get('filename', ''), content)
     if not card:
         return False
 
@@ -242,6 +247,7 @@ def judge_filenames(names):
             model=GEMINI_ENRICH_MODEL,
             contents=FILENAME_JUDGE_PROMPT.format(names=json.dumps(names, ensure_ascii=False)),
         )
+        usage.record_gemini(resp, GEMINI_ENRICH_MODEL, 'enrich')
         data = _parse_json_obj((resp.text or '').strip())
     except Exception:
         return None

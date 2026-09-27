@@ -22,6 +22,7 @@ from config import (GEMINI_API_KEY, GEMINI_ANALYSIS_MODEL,
                     OPENROUTER_COMPAT_BASE, resolve_analysis,
                     make_gemini_client)
 from harness import fanout, agent
+import usage
 
 _CALIBRATION_RULES = """【校准兜底 · 必守】
 - 今天是 {today}。内容可能涉及你知识截止之后的论文/模型/事件。**不认识 ≠ 不存在 ≠ 编造。**
@@ -97,7 +98,7 @@ def review_transcript(segments, preset=None, window=180):
             "[%d] %s" % (i, re.sub(r'\s+', '', (s.get('text') or ''))[:60])
             for i, s in enumerate(chunk))
         try:
-            obj = agent(lambda p: _llm(p, provider, extract_model),
+            obj = agent(lambda p: _llm(p, provider, extract_model, purpose='review'),
                         REVIEW_PROMPT.format(body=body), schema=['drop'])
         except Exception:  # noqa: BLE001
             obj = None
@@ -244,8 +245,9 @@ def _lang_line(lang):
     return _LANG_LINES.get(lang or 'auto', _LANG_LINES['auto'])
 
 
-def _call_gemini(prompt, grounded=False, model=None):
-    """带重试的 Gemini 调用。grounded=True 开 Google 搜索。model 缺省用合成模型。"""
+def _call_gemini(prompt, grounded=False, model=None, purpose='analysis'):
+    """带重试的 Gemini 调用。grounded=True 开 Google 搜索。model 缺省用合成模型。
+    purpose 只用于记账（usage.db 里按用途汇总）。"""
     api_key = GEMINI_API_KEY or os.environ.get('GEMINI_API_KEY', '')
     if not api_key:
         raise RuntimeError('GEMINI_API_KEY 未设置')
@@ -271,6 +273,7 @@ def _call_gemini(prompt, grounded=False, model=None):
                 resp = client.models.generate_content(
                     model=m, contents=prompt, config=cfg
                 )
+                usage.record_gemini(resp, m, purpose)
                 text = (resp.text or '').strip()
                 if text:
                     return text
@@ -290,12 +293,16 @@ def _call_gemini(prompt, grounded=False, model=None):
 
 
 def _call_openai_compat(prompt, model, base_url, api_key, extra_payload=None,
-                        label='模型'):
-    """OpenAI 兼容端点（阿里云百炼 / OpenRouter）。带重试，返回文本或抛异常。"""
+                        label='模型', purpose='analysis'):
+    """OpenAI 兼容端点（阿里云百炼 / OpenRouter）。带重试，返回文本或抛异常。
+    purpose 只用于记账。OpenRouter 请求带 usage.include，响应里就有这一笔的实际美元。"""
     import requests
     url = base_url.rstrip('/') + '/chat/completions'
     headers = {'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'}
     payload = {'model': model, 'messages': [{'role': 'user', 'content': prompt}]}
+    is_openrouter = 'openrouter.ai' in base_url
+    if is_openrouter:
+        payload['usage'] = {'include': True}
     if extra_payload:
         payload.update(extra_payload)
     last_err = None
@@ -303,7 +310,10 @@ def _call_openai_compat(prompt, model, base_url, api_key, extra_payload=None,
         try:
             r = requests.post(url, headers=headers, json=payload, timeout=600)
             if r.status_code == 200:
-                txt = ((r.json().get('choices') or [{}])[0]
+                body = r.json()
+                usage.record_openai(body, 'openrouter' if is_openrouter else 'aliyun',
+                                    model, purpose)
+                txt = ((body.get('choices') or [{}])[0]
                        .get('message', {}).get('content') or '').strip()
                 if txt:
                     return txt
@@ -319,14 +329,15 @@ def _call_openai_compat(prompt, model, base_url, api_key, extra_payload=None,
     raise RuntimeError(f'{label}({model}) 调用失败: {last_err}')
 
 
-def _llm(prompt, provider, model, grounded=False):
-    """按 provider 分发：gemini 走 google-genai，aliyun 走百炼，openrouter 走 OpenRouter。"""
+def _llm(prompt, provider, model, grounded=False, purpose='analysis'):
+    """按 provider 分发：gemini 走 google-genai，aliyun 走百炼，openrouter 走 OpenRouter。
+    purpose：记账用途标签（cards / synth / verify / lens / brief / review / xhs …）。"""
     if provider == 'aliyun':
         key = DASHSCOPE_API_KEY or os.environ.get('DASHSCOPE_API_KEY', '')
         if not key:
             raise RuntimeError('DASHSCOPE_API_KEY 未设置（阿里云分析需要）')
         return _call_openai_compat(prompt, model, ALIYUN_COMPAT_BASE, key,
-                                   label='阿里云')
+                                   label='阿里云', purpose=purpose)
     if provider == 'openrouter':
         key = os.environ.get('OPENROUTER_API_KEY', '')
         if not key:
@@ -334,8 +345,8 @@ def _llm(prompt, provider, model, grounded=False):
         # reasoning: OpenRouter 的统一思考开关；对 Claude 4.6+/5 映射为 adaptive thinking
         return _call_openai_compat(prompt, model, OPENROUTER_COMPAT_BASE, key,
                                    extra_payload={'reasoning': {'enabled': True}},
-                                   label='OpenRouter')
-    return _call_gemini(prompt, grounded=grounded, model=model)
+                                   label='OpenRouter', purpose=purpose)
+    return _call_gemini(prompt, grounded=grounded, model=model, purpose=purpose)
 
 
 def _parse_json_obj(raw):
@@ -353,15 +364,17 @@ def _parse_json_obj(raw):
 
 
 def _extract_cards(title, transcript_text, author, provider, model):
-    """逐期抽取证据卡。返回 {cards, metrics, asr_suspects} 或 None。"""
+    """逐期抽取证据卡。返回 {cards, metrics, asr_suspects} 或 None。
+
+    走 harness.agent：一次网络抖动 / 一次 JSON 没闭合就让整期归零太亏
+    （一期抽卡是这条流水线上最贵的调用之一），所以重试 + 校验必需键。
+    """
     prompt = CARDS_PROMPT.format(
         author=author, title=title, transcript=transcript_text,
         today=datetime.now().strftime('%Y-%m-%d'),
     )
-    try:
-        data = _parse_json_obj(_llm(prompt, provider, model))
-    except Exception:  # noqa: BLE001
-        return None
+    data = agent(lambda p: _llm(p, provider, model, purpose='cards'),
+                 prompt, schema=['cards'], retries=2)
     if not isinstance(data, dict):
         return None
     data.setdefault('cards', [])
@@ -395,8 +408,32 @@ def _external_claims(data):
             if c.get('layer') == '他的主张' and (c.get('obs') or c.get('quote'))]
 
 
-def analyze_episode(title, transcript_text, author='该博主', verify=False, preset=None):
-    """逐期 → {title, cards, metrics, asr_suspects, markdown}。verify 时附核实脚注。"""
+def unusable_episode(title, reason):
+    """一期「转写不可用」的占位结果：卡片为空，但**留痕**。
+
+    关键是不能返回 None——返回 None 这期就从 episodes 里凭空消失，合成层的
+    "废稿过半就拒绝出报告" 护栏连分母都少一个，于是 1 好 3 废也能出画像。
+    """
+    return {'title': title, 'cards': [], 'metrics': {}, 'asr_suspects': [],
+            'markdown': f'# {title}\n\n（转写不可用，未抽取证据卡：{reason}）',
+            'extract_failed': True, 'unusable': reason}
+
+
+def analyze_episode(title, transcript_text, author='该博主', verify=False, preset=None,
+                    segments=None, duration=None):
+    """逐期 → {title, cards, metrics, asr_suspects, markdown}。verify 时附核实脚注。
+
+    给了 segments 就先做一次转写可用性判断：纯音乐/噪音标记、静音幻听这类废稿
+    直接判不可用，**不花钱去抽卡**——模型对着幻听文本照样能编出几十张"证据卡"。
+    """
+    if segments is not None:
+        try:
+            from sanitize import transcript_quality
+            ok, reason, _stats = transcript_quality(segments, duration)
+        except Exception:  # noqa: BLE001  判不了就当可用，别挡住正常分析
+            ok, reason = True, ''
+        if not ok:
+            return unusable_episode(title, reason)
     provider, extract_model, _ = resolve_analysis(preset)
     data = _extract_cards(title, transcript_text, author, provider, extract_model)
     failed = not isinstance(data, dict)          # 抽取失败要留痕，别洗成"成功但空卡"
@@ -413,7 +450,7 @@ def analyze_episode(title, transcript_text, author='该博主', verify=False, pr
                 footnote = _call_gemini(
                     VERIFY_PROMPT.format(
                         claims='\n'.join(f'- {c}' for c in claims[:40])),
-                    grounded=True,
+                    grounded=True, purpose='factcheck',
                 )
                 md = md + '\n\n' + footnote
             except Exception:  # noqa: BLE001
@@ -474,7 +511,7 @@ def _batch_brief(batch, author, provider, model):
         return _llm(BRIEF_PROMPT.format(
             author=author, n=len(batch),
             digest=_digest(batch, _SYNTH_CHAR_LIMIT),
-        ), provider, model)
+        ), provider, model, purpose='brief')
     except Exception:  # noqa: BLE001
         return None
 
@@ -484,7 +521,7 @@ def _verify_portrait(portrait, digest, author, provider, extract_model, synth_mo
 
     任何一步失败/无可检验论断/全部成立 → 原样返回，绝不把画像搞没。
     """
-    obj = agent(lambda p: _llm(p, provider, extract_model),
+    obj = agent(lambda p: _llm(p, provider, extract_model, purpose='verify'),
                 CLAIMS_PROMPT.format(author=author, portrait=portrait),
                 schema=['claims'])
     claims = [c for c in ((obj or {}).get('claims') or []) if isinstance(c, str) and c.strip()]
@@ -496,7 +533,7 @@ def _verify_portrait(portrait, digest, author, provider, extract_model, synth_mo
     verify_cards = digest[:_VERIFY_DIGEST_CHARS]
 
     def _skeptic(claim):
-        return agent(lambda p: _llm(p, provider, extract_model),
+        return agent(lambda p: _llm(p, provider, extract_model, purpose='verify'),
                      SKEPTIC_PROMPT.format(author=author, claim=claim, cards=verify_cards),
                      schema=['verdict'])
 
@@ -512,7 +549,7 @@ def _verify_portrait(portrait, digest, author, provider, extract_model, synth_mo
         revised = _llm(REVISE_PROMPT.format(
             portrait=portrait,
             verdicts=json.dumps(bad, ensure_ascii=False, indent=1),
-        ), provider, synth_model)
+        ), provider, synth_model, purpose='verify')
     except Exception:  # noqa: BLE001
         return portrait
     return revised or portrait
@@ -544,36 +581,56 @@ def _build_digest(episodes, author, provider, extract_model):
     return _digest(episodes, budget)  # 全批失败兜底
 
 
+def _usable_split(episodes, attempted=None):
+    """(真正贡献了证据卡的期, 废掉的期数, 总共尝试的期数)。
+
+    废掉 = 抽卡失败 + 转写不可用 + **在上游就被丢掉、根本没走到这里的期**
+    （attempted 由调用方给：链条里是提交分析的期数）。护栏必须按 attempted 算，
+    不然"多数期是废稿"会因为废稿悄悄消失而看起来像"少数期失败"。
+    """
+    good = [e for e in episodes if e.get('cards')]
+    attempted = max(int(attempted or 0), len(episodes))
+    return good, attempted - len(good), attempted
+
+
 def synthesize(episodes, author='该博主', critique_level='analytical',
-               impression_bias='', preset=None, self_verify=False, lang='auto'):
+               impression_bias='', preset=None, self_verify=False, lang='auto',
+               attempted=None):
     """N 期证据卡 → 一份人物画像。critique_level: descriptive/analytical/sharp。
 
     self_verify=True：合成后再跑一轮证伪——抽出每条论断、逐条 skeptic 拿证据反驳，
     证据撑不住的删、夸大的改软，末尾留痕。
 
     impression_bias：仅供校准回归测试用——注入一条语气基线看结论会不会跟着漂。
+
+    attempted：这一轮一共尝试了多少期（含上游丢掉的）。护栏和"基于 N 期"都按它算。
     """
     episodes = [e for e in episodes if e and e.get('cards') is not None]
     if not episodes:
         raise RuntimeError('没有可综合的证据卡')
-    # 抽取失败的期不能当"成功但沉默"喂进合成，否则模型会拿全零指标凭空编画像
-    failed_n = sum(1 for e in episodes if e.get('extract_failed'))
-    if failed_n >= max(1, len(episodes) * 0.5):
-        raise RuntimeError(
-            f'证据卡抽取失败过半（{failed_n}/{len(episodes)} 期），画像不可信，先查 API key / 限流')
-    if sum(len(e.get('cards') or []) for e in episodes) == 0:
+    # 抽取失败 / 转写不可用的期不能当"成功但沉默"喂进合成，
+    # 否则模型会拿全零指标凭空编画像；被上游丢掉的期同样要算进分母。
+    good, bad_n, attempted_n = _usable_split(episodes, attempted)
+    if not good:
         raise RuntimeError('所有期都没抽到证据卡，无法合成画像')
+    if bad_n >= max(1, attempted_n * 0.5):
+        reasons = {e.get('unusable') for e in episodes if e.get('unusable')}
+        why = ('；'.join(sorted(r for r in reasons if r))[:160]
+               or '抽卡失败，先查 API key / 限流')
+        raise RuntimeError(
+            f'只有 {len(good)}/{attempted_n} 期拿到了可用证据卡，画像不可信：{why}')
     level = critique_level if critique_level in _TONE else 'analytical'
     impression = f'（综合印象的语气基线：{impression_bias}）' if impression_bias else ''
     provider, extract_model, synth_model = resolve_analysis(preset)
-    agg = _agg_metrics(episodes)
-    digest = _build_digest(episodes, author, provider, extract_model)
+    # 只拿有卡片的期去算指标和写"基于 N 期"：把零卡的失败期算进分母是虚报覆盖面
+    agg = _agg_metrics(good)
+    digest = _build_digest(good, author, provider, extract_model)
 
     portrait = _llm(PORTRAIT_PROMPT.format(
-        author=author, n=len(episodes), rules=_rules(), lang_line=_lang_line(lang),
+        author=author, n=len(good), rules=_rules(), lang_line=_lang_line(lang),
         level=level, tone=_TONE[level], impression=impression,
-        digest=_metrics_block(agg, len(episodes)) + '\n\n' + digest,
-    ), provider, synth_model)
+        digest=_metrics_block(agg, len(good)) + '\n\n' + digest,
+    ), provider, synth_model, purpose='synth')
 
     if self_verify:
         portrait = _verify_portrait(
@@ -661,7 +718,7 @@ LENS_META = {
 
 def render_lens(episodes, lens, author='该博主', preset=None, lang='auto'):
     """同一批证据卡 → 指定镜头的报告（Markdown）。复用合成层的证据卡逻辑。"""
-    episodes = [e for e in episodes if e and e.get('cards') is not None]
+    episodes = [e for e in (episodes or []) if e and e.get('cards')]
     if not episodes:
         raise RuntimeError('没有可用的证据卡')
     tpl = LENSES.get(lens)
@@ -673,7 +730,7 @@ def render_lens(episodes, lens, author='该博主', preset=None, lang='auto'):
     return _llm(_lang_line(lang) + '\n\n' + tpl.format(
         author=author, n=len(episodes),
         digest=_metrics_block(agg, len(episodes)) + '\n\n' + digest,
-    ), provider, synth_model)
+    ), provider, synth_model, purpose='lens')
 
 
 # ==== 小红书笔记分析（多模态：读图 + 评论 → 逐篇结构化 → 聚合报告）====
@@ -709,6 +766,7 @@ def _call_gemini_mm(prompt, image_paths, model=None):
         for attempt in range(1, _MAX_ATTEMPTS + 1):
             try:
                 resp = client.models.generate_content(model=m, contents=parts)
+                usage.record_gemini(resp, m, 'xhs')
                 text = (resp.text or '').strip()
                 if text:
                     return text
@@ -823,5 +881,5 @@ def xhs_report(note_dirs, title='小红书调研报告', on_progress=None, lang=
     digest = json.dumps(extractions, ensure_ascii=False, indent=1)[:_SYNTH_CHAR_LIMIT]
     report = _call_gemini(XHS_REPORT_PROMPT.format(
         n=len(extractions), title=title, digest=digest,
-        lang_line=_lang_line(lang)))
+        lang_line=_lang_line(lang)), purpose='xhs')
     return report, extractions

@@ -121,15 +121,26 @@ _AUTH_COOKIE = 'getaudio_token'
 DEMO_MODE = os.environ.get('VERBATIM_DEMO') == '1'
 
 
+_DEMO_LENS_POST = re.compile(r'^/api/chain/([0-9a-f]{32})/lens$')
+
+
 @app.before_request
 def _demo_readonly_guard():
-    if not DEMO_MODE:
+    """演示实例只读、不花钱：写操作一律 403，只放行两样不花钱的——
+    合并转写（纯拼文本）和已经预生成好的镜头（直接读文件）。"""
+    if not DEMO_MODE or request.method in ('GET', 'HEAD', 'OPTIONS'):
         return None
     path = request.path or ''
-    if request.method == 'DELETE' or (request.method == 'POST' and
-                                      path.startswith(('/api/settings', '/api/audio/purge', '/api/backup/run'))):
-        return jsonify({'error': 'demo workspace is read-only'}), 403
-    return None
+    if request.method == 'POST':
+        if path == '/api/transcripts/merge':
+            return None
+        m = _DEMO_LENS_POST.match(path)
+        if m:
+            lens = (request.get_json(silent=True) or {}).get('lens') or ''
+            if re.fullmatch(r'[a-z]+', lens) and os.path.isfile(
+                    os.path.join(_chain_dir(m.group(1)), f'镜头_{lens}.md')):
+                return None
+    return jsonify({'error': 'This is a read-only demo.'}), 403
 
 
 @app.before_request
@@ -548,6 +559,106 @@ def _chain_stopped(chain_id):
         return False
 
 
+# ---- 断网断路器 ----
+# 每条转写各自独立：断网时队首那条撞一下失败、标 failed，下一条接着撞……没人发现
+# "大家都在因为同一个原因失败"，几分钟就把整个队列烧成失败（09-23 一小时 574 条）。
+# 现在：网络类错误不判失败而是重新排队；连续几条都是网络错就判定断网，后面的云端
+# 任务在开跑前原地等，后台隔一阵探一次，网络回来自动放行。
+_NETWORK_ERROR_MARKERS = (
+    'nodename nor servname',                  # macOS DNS 解析失败（[Errno 8]）
+    'Name or service not known',              # Linux DNS
+    'Temporary failure in name resolution',
+    'getaddrinfo failed',
+    'EOF occurred in violation of protocol',  # 线路/代理断了，TLS 被掐
+    'Connection reset by peer',
+    'Connection refused',                     # 常见于代理进程退了但系统代理还指着它
+    'Connection aborted',
+    'Network is unreachable',
+    'No route to host',
+    'Failed to establish a new connection',
+)
+_NET_TRIP_AFTER = 3        # 连续这么多条任务都是网络错 → 判定断网
+_NET_PROBE_EVERY = 30      # 断网期间每隔多少秒探一次
+_NET_MAX_REQUEUE = 5       # 单条任务因网络错最多重新排队几次，再失败就照常判失败
+# 探测打引擎自己的 API 域名（走 requests，和引擎一样认代理设置）；有 HTTP 响应就算通
+_NET_PROBE_URLS = {
+    'dashscope': 'https://dashscope.aliyuncs.com/',
+    'qwenasr': 'https://dashscope.aliyuncs.com/',
+}
+_NET_PROBE_DEFAULT = 'https://generativelanguage.googleapis.com/'
+
+
+def _is_network_error(err):
+    """是不是连不上（DNS / TLS 被掐 / 连接被重置）这类和内容无关的网络错误。"""
+    seen = set()
+    while err is not None and id(err) not in seen:
+        seen.add(id(err))
+        if isinstance(err, ConnectionError):
+            return True
+        s = str(err)
+        if any(m in s for m in _NETWORK_ERROR_MARKERS):
+            return True
+        err = err.__cause__ or err.__context__
+    return False
+
+
+def _network_reachable(url):
+    import requests
+    try:
+        requests.head(url, timeout=10)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+class _NetworkBreaker:
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._up = threading.Event()
+        self._up.set()
+        self._streak = 0
+        self._since = 0.0
+
+    def is_open(self):
+        return not self._up.is_set()
+
+    def record_ok(self):
+        with self._lock:
+            self._streak = 0
+
+    def record_network_error(self, engine):
+        with self._lock:
+            self._streak += 1
+            if self._streak < _NET_TRIP_AFTER or not self._up.is_set():
+                return
+            self._up.clear()
+            self._since = time.time()
+        url = _NET_PROBE_URLS.get(engine, _NET_PROBE_DEFAULT)
+        print(f'[net] 连续 {_NET_TRIP_AFTER} 条转写都是网络错误，判定断网：'
+              f'暂停云端转写，每 {_NET_PROBE_EVERY}s 探测一次 {url}')
+        threading.Thread(target=self._probe_until_up, args=(url,), daemon=True,
+                         name='net-probe').start()
+
+    def _probe_until_up(self, url):
+        while True:
+            time.sleep(_NET_PROBE_EVERY)
+            if _network_reachable(url):
+                with self._lock:
+                    self._streak = 0
+                    self._up.set()
+                print(f'[net] 网络恢复（断了约 {int(time.time() - self._since)}s），排队的转写继续')
+                return
+
+    def wait(self, should_abort):
+        """断网期间挡住云端任务开跑，网络回来或 should_abort() 为真时返回。"""
+        while not self._up.wait(timeout=5):
+            if should_abort():
+                return
+
+
+_net_breaker = _NetworkBreaker()
+
+
 class _EmptyTranscript(RuntimeError):
     """转写「看着成功了但其实什么都没有」：0 段、全是音乐标记、或纯静音幻听。
 
@@ -582,10 +693,28 @@ def _check_transcript(segments, duration, audio_path):
         raise _EmptyTranscript(f'{reason}（{stats}）')
 
 
+class _OnBattery(Exception):
+    """拔了电不让跑本地 Whisper：4 workers × 3 threads 是照着插电时把 M4 Max
+    性能核心喂满设计的（见 config.ENGINE_CONCURRENCY 注释），带出门用电池扛
+    这个几个小时，电量掉得肉眼可见（2026-09-22 真事故：链条转到一半电脑被
+    强制关机）。"""
+
+
+def _on_battery():
+    """当前是否在吃电池（未接电源）。查不到（非 Mac / pmset 不在）就当作接着电源，
+    别因为探测不到就把转写堵死。"""
+    try:
+        out = subprocess.run(['pmset', '-g', 'batt'], capture_output=True,
+                             text=True, timeout=3).stdout
+    except Exception:  # noqa: BLE001
+        return False
+    return "'Battery Power'" in out
+
+
 def run_transcription(task_id, filepath, engine, original_filename, q,
                       speaker_count=None, fallback_whisper=False,
                       model_review=False, offset_sec=0, extra_meta=None,
-                      timing=None):
+                      timing=None, net_retry=0, summarize=True):
     """记账归属：这个 worker 线程里所有模型调用（转写、摘要、enrich）都记到 task_id，
     链条里的转写再带上 chain_id（extra_meta 里由 run_chain 塞入）。"""
     with usage.scope(ref=task_id, chain=(extra_meta or {}).get('chain_id')):
@@ -593,13 +722,14 @@ def run_transcription(task_id, filepath, engine, original_filename, q,
                                   speaker_count=speaker_count,
                                   fallback_whisper=fallback_whisper,
                                   model_review=model_review, offset_sec=offset_sec,
-                                  extra_meta=extra_meta, timing=timing)
+                                  extra_meta=extra_meta, timing=timing,
+                                  net_retry=net_retry, summarize=summarize)
 
 
 def _run_transcription(task_id, filepath, engine, original_filename, q,
                        speaker_count=None, fallback_whisper=False,
                        model_review=False, offset_sec=0, extra_meta=None,
-                       timing=None):
+                       timing=None, net_retry=0, summarize=True):
     """Background worker: runs transcription, saves results, pushes events.
 
     每个引擎有独立信号量限流。任务提交后可能先排队（quota 已满），
@@ -629,8 +759,16 @@ def _run_transcription(task_id, filepath, engine, original_filename, q,
     # 分阶段计时（秒）：queued / extract / transcribe / summary / save / enrich，
     # 外加调用方可能先填好的 download / subs_check。最后并进 meta.json 的 timing 字段，
     # 供详情页显示、统计面板按引擎算速度、以及给后来的任务估「还要多久」。
-    timing = dict(timing or {})
+    timing_in = dict(timing or {})    # 网络错重新排队时原样带过去（下载/字幕探测的耗时）
+    timing = dict(timing_in)
     t_enq = time.monotonic()
+    requeued = False
+
+    # 已判定断网：云端任务先在这儿等网络回来，别去白撞一次失败。
+    # 链条被停止也会放出来，下面拿到额度后那道检查会把它标成"随链条停止"。
+    if engine != 'whisper' and _net_breaker.is_open():
+        q.put(json.dumps({'type': 'queued', 'message': '网络断开，恢复后自动继续...'}))
+        _net_breaker.wait(lambda: _chain_stopped(chain_id))
 
     # 排队等待本引擎的并发额度
     sem = _engine_semaphores.get(engine)
@@ -695,6 +833,8 @@ def _run_transcription(task_id, filepath, engine, original_filename, q,
         def _summary(full_text, use_qwen=False):
             """转写本体到这里为止计时，再单独计总结的时间。"""
             timing.setdefault('transcribe_s', round(time.monotonic() - t_tx, 1))
+            if not summarize:        # 博主链默认不出摘要（每期约 1 美分，上千期很可观）
+                return None
             t0 = time.monotonic()
             try:
                 return _run_summary(full_text, q, use_qwen=use_qwen)
@@ -729,6 +869,8 @@ def _run_transcription(task_id, filepath, engine, original_filename, q,
             _update_meta(os.path.join(config.RESULTS_FOLDER, task_id, 'meta.json'),
                          {'timing': timing})
             _speed_cache['stamp'] = 0.0            # 有新样本，速度表下次重算
+            if engine_used != 'whisper':
+                _net_breaker.record_ok()           # 云端调通了一条，断网计数清零
             _reflect_touch()
             taskdb.set_status(task_id, 'done')
             q.put(json.dumps({
@@ -746,6 +888,9 @@ def _run_transcription(task_id, filepath, engine, original_filename, q,
 
         def _whisper_transcribe():
             """本地 Whisper 转写（主路径 + 云引擎失败时的兜底路径共用）。"""
+            if _on_battery():
+                raise _OnBattery('电脑正在用电池供电，本地 Whisper 会把 CPU 全部性能核心跑满——'
+                                 '插上电源再转，或者这条改用云端引擎（Gemini 等）')
             from transcribe_whisper import transcribe_audio
 
             q.put(json.dumps({
@@ -801,9 +946,14 @@ def _run_transcription(task_id, filepath, engine, original_filename, q,
                 'message': '正在上传文件到阿里云...',
             }))
 
+            # 开说话人分离，并像 gemini35 一样把「说话人N：」写进正文——
+            # 剔除连麦嘉宾、分析、搜索都靠这个前缀认人
             segments = transcribe_audio(
-                input_path, progress_callback=progress_cb
+                input_path, progress_callback=progress_cb, diarization=True
             )
+            for seg in segments:
+                if seg.get('speaker') is not None:
+                    seg['text'] = f"说话人{int(seg['speaker']) + 1}：{seg['text']}"
             # 阿里云 ASR 按音频时长计费，没有 token 数：记秒数，价格表里配 per_audio_hour 才算钱
             usage.record('dashscope', config.DASHSCOPE_ASR_MODEL, 'asr',
                          audio_seconds=audio_dur or 0)
@@ -946,10 +1096,21 @@ def _run_transcription(task_id, filepath, engine, original_filename, q,
         # 因为重试同一云引擎永远是白搭，只有 Whisper 或放弃两条路。
         # 同理：**云引擎交了白卷**（0 段 / 全是音乐标记 / 纯静音幻听）也无视开关落
         # Whisper——云端已经在引擎内部重试过了，再试一遍还是白卷。
+        # 网络类错误（DNS / TLS 被掐 / 连接重置）跟这条音频本身无关：不判失败、不落
+        # Whisper，放回队尾重排（finally 里提交）；断网期间断路器会挡着它先别开跑。
+        if engine != 'whisper' and _is_network_error(e):
+            _net_breaker.record_network_error(engine)
+            if net_retry < _NET_MAX_REQUEUE:
+                requeued = True
+                taskdb.set_status(task_id, 'pending')
+                q.put(json.dumps({
+                    'type': 'queued',
+                    'message': f'网络出错，重新排队（第 {net_retry + 1} 次）：{str(e)[:60]}',
+                }))
         content_block = _is_content_block(e)
         empty_out = isinstance(e, _EmptyTranscript)
         fell_back = False
-        if engine != 'whisper' and (fallback_whisper or content_block or empty_out):
+        if not requeued and engine != 'whisper' and (fallback_whisper or content_block or empty_out):
             try:
                 why = ('Content-blocked by Gemini (deterministic)' if content_block
                        else f'{engine} 没转出有效内容' if empty_out
@@ -977,7 +1138,7 @@ def _run_transcription(task_id, filepath, engine, original_filename, q,
                 # 这个更有用的信息盖掉（用户看到的只剩 Whisper 的解码报错）。
                 e = (e2 if str(e2) == str(e)
                      else RuntimeError(f'{engine} 失败：{e}；Whisper 兜底也失败：{e2}'))
-        if not fell_back:
+        if not fell_back and not requeued:
             taskdb.set_status(task_id, 'failed', error=str(e))
             q.put(json.dumps({
                 'type': 'error',
@@ -995,9 +1156,18 @@ def _run_transcription(task_id, filepath, engine, original_filename, q,
                     os.remove(path)
                 except OSError:
                     pass
-        # worker 完成后才从全局表里清掉自己，
-        # 这样客户端断开/刷新后重连依然能读到队列里剩下的消息。
-        tasks.pop(task_id, None)
+        if requeued:
+            # 放在最后提交：新 worker 用的还是同一个 q，tasks 表里的登记不能被上面清掉
+            submit_transcription(engine, run_transcription, task_id, filepath, engine,
+                                 original_filename, q, speaker_count,
+                                 fallback_whisper=fallback_whisper,
+                                 model_review=model_review, offset_sec=offset_sec,
+                                 extra_meta=extra_meta, timing=timing_in,
+                                 net_retry=net_retry + 1, summarize=summarize)
+        else:
+            # worker 完成后才从全局表里清掉自己，
+            # 这样客户端断开/刷新后重连依然能读到队列里剩下的消息。
+            tasks.pop(task_id, None)
         _task_progress.pop(task_id, None)
 
 
@@ -1193,7 +1363,7 @@ def recover_unfinished_tasks():
 @app.route('/upload', methods=['POST'])
 def upload():
     file = request.files.get('audio')
-    engine = request.form.get('engine', 'whisper')
+    engine = request.form.get('engine', 'gemini35')
     speaker_count = _parse_speaker_count(request.form.get('speaker_count'))
 
     task_id, error = _enqueue_task(file, engine, speaker_count)
@@ -1208,7 +1378,7 @@ def api_transcribe_local():
     """本地文件直采：给个本机路径，零上传（软链，不拷贝、不删原件）。适合大视频。"""
     body = request.get_json(silent=True) or {}
     task_id, error = _enqueue_local_task(
-        body.get('path'), body.get('engine', 'whisper'),
+        body.get('path'), body.get('engine', 'gemini35'),
         _parse_speaker_count(body.get('speaker_count')))
     if error:
         return jsonify({'error': error}), 400
@@ -1348,7 +1518,7 @@ def api_transcribe_urls():
     每条链接行尾可加 ' @10:00-25:00' 只转那一段（时间戳会还原成原视频位置）。
     """
     body = request.get_json(silent=True) or {}
-    engine = body.get('engine', 'whisper')
+    engine = body.get('engine', 'gemini35')
     sub_mode = _clean_sub_mode(body.get('subs'))
     try:
         max_videos = max(1, min(300, int(body.get('max_videos') or 20)))
@@ -1400,7 +1570,7 @@ def upload_batch():
     就返回 200；全部失败返回 400。
     """
     files = request.files.getlist('audios')
-    engine = request.form.get('engine', 'whisper')
+    engine = request.form.get('engine', 'gemini35')
     speaker_count = _parse_speaker_count(request.form.get('speaker_count'))
 
     if not files:
@@ -1618,6 +1788,46 @@ def api_history_detail(task_id):
         os.path.join(task_dir, f"audio{meta.get('audio_ext')}"))
     return jsonify({**meta, 'segments': segments, 'summary': summary,
                     'has_audio': has_audio, 'cost': usage.cost_for(ref=task_id)})
+
+
+_summary_jobs = set()   # 正在补摘要的 task_id，防连点重复花钱
+
+
+@app.route('/api/history/<task_id>/summary', methods=['POST'])
+def api_history_summary(task_id):
+    """给一期补摘要（博主链默认不出摘要，想看哪期点一下再生成）。同步返回，十几秒。"""
+    if not _is_valid_task_id(task_id):
+        return jsonify({'error': 'Invalid task id'}), 400
+    task_dir = os.path.join(config.RESULTS_FOLDER, task_id)
+    summary_path = os.path.join(task_dir, 'summary.json')
+    if os.path.isfile(summary_path):
+        with open(summary_path, 'r', encoding='utf-8') as f:
+            return jsonify({'ok': True, 'summary': json.load(f)})
+    try:
+        with open(os.path.join(task_dir, 'transcript.json'), 'r', encoding='utf-8') as f:
+            segments = json.load(f)
+    except Exception:  # noqa: BLE001
+        return jsonify({'error': 'Transcript not found'}), 404
+    if task_id in _summary_jobs:
+        return jsonify({'error': 'Already generating'}), 409
+    _summary_jobs.add(task_id)
+    try:
+        from summarize import summarize_transcript
+        full_text = '\n'.join(f"[{s.get('timestamp', '')}] {s.get('text', '')}"
+                              for s in segments if isinstance(s, dict))
+        # 固定走 Gemini：用户手动点的这一下可能是敏感内容，不往阿里云发
+        with usage.scope(ref=task_id):
+            summary = summarize_transcript(full_text)
+    except Exception as e:  # noqa: BLE001
+        return jsonify({'error': f'Summary failed: {str(e)[:200]}'}), 502
+    finally:
+        _summary_jobs.discard(task_id)
+    if not summary:
+        return jsonify({'error': 'Summary failed'}), 502
+    with open(summary_path, 'w', encoding='utf-8') as f:
+        json.dump(summary, f, ensure_ascii=False, indent=2)
+    _update_meta(os.path.join(task_dir, 'meta.json'), {'has_summary': True})
+    return jsonify({'ok': True, 'summary': summary})
 
 
 @app.route('/api/history/<task_id>/audio')
@@ -1864,7 +2074,9 @@ CHAINS_DIR = os.path.join(config.RESULTS_FOLDER, '_chains')
 os.makedirs(CHAINS_DIR, exist_ok=True)
 
 _CHAIN_ID_RE = re.compile(r'^[0-9a-f]{32}$')
-_MAX_CHAIN_VIDEOS = 300  # 防手滑整个频道几千个视频全下下来
+_MAX_CHAIN_VIDEOS = 600  # 防手滑整个频道几千个视频全下下来
+_CHAIN_PROBE_COOLDOWN = 1800  # 同一条链两次真探测（打列表接口）之间的最短间隔（秒）：
+                               # 防连点 Continue 把出口 IP 敲脏，已有完整缓存时冷却内直接复用
 
 # 协作式取消：/stop 往里加 chain_id，运行中的链条在安全点自查并收尾（已完成产物保留）。
 _cancel_chains = set()
@@ -2068,10 +2280,12 @@ def _backfill_source_links():
         print(f'[backfill] source links filled for {fixed} transcripts')
 
 
-def _video_id_index():
+def _video_id_index(require_speakers=False):
     """{video_id: task_id}：扫所有已完成转写，从 meta.filename 里的 [id] 回填。
 
     用于去重复用——同一个视频（同 video_id）之前转写过就直接拿旧结果。
+    require_speakers：只认带说话人标签的旧结果（要按说话人剔除连麦嘉宾时，
+    旧 whisper / 字幕 / 老 gemini 引擎的结果不算数，得重转）。
     """
     idx = {}
     rd = config.RESULTS_FOLDER
@@ -2088,6 +2302,8 @@ def _video_id_index():
                 meta = json.load(f)
         except Exception:
             continue
+        if require_speakers and not _has_speaker_labels(d, meta):
+            continue
         if meta.get('video_id'):
             idx.setdefault(meta['video_id'], name)
         m = _VID_IN_NAME.search(meta.get('filename', '') or '')
@@ -2096,7 +2312,18 @@ def _video_id_index():
     return idx
 
 
-def _save_subtitle_task(task_id, target, segments, source, lang=None, timing=None):
+def _has_speaker_labels(result_dir, meta):
+    if meta.get('engine') == 'gemini35':            # 这个引擎总是开着 diarization
+        return True
+    try:
+        with open(os.path.join(result_dir, 'transcript.json'), 'r', encoding='utf-8') as f:
+            return '说话人' in f.read()
+    except Exception:
+        return False
+
+
+def _save_subtitle_task(task_id, target, segments, source, lang=None, timing=None,
+                        summarize=True):
     """把抓来的字幕当作转写结果落盘（无音频），并在 taskdb 里标记 done。
 
     这样它和普通转写任务一样进历史、进分析，只是引擎标为 subtitle、没有音频回放。
@@ -2109,11 +2336,12 @@ def _save_subtitle_task(task_id, target, segments, source, lang=None, timing=Non
     display = f"{title} [{target.get('video_id', '')}]"
     # 字幕来源也出摘要：Library 卡片、详情页 Summary 区跟普通转写一致
     summary = None
-    try:
-        from summarize import summarize_transcript
-        summary = summarize_transcript('\n'.join(s.get('text', '') for s in segments))
-    except Exception:  # noqa: BLE001
-        summary = None
+    if summarize:
+        try:
+            from summarize import summarize_transcript
+            summary = summarize_transcript('\n'.join(s.get('text', '') for s in segments))
+        except Exception:  # noqa: BLE001
+            summary = None
     meta = {
         'id': task_id,
         'filename': display,
@@ -2390,16 +2618,62 @@ def _run_chain(state):
         state['stage'] = 'downloading'
         _save_chain(state)
         prev_videos = list(state.get('videos') or [])   # 上一轮的视频表（Continue 要用它接回 task_id）
-        targets, channel = probe(state['url'], state.get('max_videos'))
+        have_full_cache = bool(prev_videos) and all(v.get('video_url') for v in prev_videos)
+        # 上限调大了（想多拿几期）时旧列表不够用，冷却窗口内也得真探测一次；
+        # 老链没记 probed_max，就按旧列表条数算
+        probed_max = state.get('probed_max') or len(prev_videos)
+        cap_raised = (state.get('max_videos') or 10 ** 9) > probed_max
+
+        def _targets_from_prev():
+            targets = [{
+                'video_url': v['video_url'],
+                'title': v.get('title', ''),
+                'video_id': v.get('video_id', ''),
+                'thumbnail': v.get('thumbnail', ''),
+                'view_count': int(v.get('view_count') or 0),
+            } for v in prev_videos]
+            channel = {'name': state.get('author', ''), 'avatar': state.get('avatar', ''),
+                       'followers': state.get('followers', 0)}
+            return targets, channel
+
+        # 冷却：同一条链短时间内被连点 Continue，没必要每次都真打一次探测接口——
+        # 一次探测本身就带内部重试+代理兜底，密集重复触发是把 IP 敲脏的元凶
+        # （马督工那次就是这么敲了一天被封的）。有完整缓存时，冷却窗口内直接复用。
+        last_probe = state.get('last_probe_at') or 0
+        cooldown_left = _CHAIN_PROBE_COOLDOWN - (time.time() - last_probe)
+        if have_full_cache and cooldown_left > 0 and not cap_raised:
+            print(f'[chain {chain_id[:8]}] 距上次探测不到 {int(_CHAIN_PROBE_COOLDOWN / 60)} 分钟'
+                  f'（还剩 {int(cooldown_left)}s），跳过重新探测，沿用缓存列表')
+            targets, channel = _targets_from_prev()
+        else:
+            state['last_probe_at'] = time.time()
+            _save_chain(state)
+            try:
+                targets, channel = probe(state['url'], state.get('max_videos'))
+                state['probed_max'] = state.get('max_videos') or 10 ** 9
+            except Exception as probe_err:
+                # 列表探测本身被风控封锁（B站 412 等）：上一轮如果已经拿到过完整目标
+                # 列表，没必要陪它一起判死，沿用旧列表接着下/转，只是暂时发现不了新
+                # 视频。真正的第一次探测（没有缓存）该失败还是失败。
+                if have_full_cache:
+                    print(f'[chain {chain_id[:8]}] probe 失败（{probe_err}），'
+                          f'改用上一轮缓存的 {len(prev_videos)} 条目标列表续跑')
+                    targets, channel = _targets_from_prev()
+                else:
+                    raise
         if not targets:
             raise RuntimeError('No downloadable videos at this link')
 
         # 用户没填 author 就用探测到的频道名；头像给卡片展示
         if channel.get('name') and state.get('author') in ('', '该博主'):
             state['author'] = channel['name']
-        state['avatar'] = channel.get('avatar', '')
-        # 订阅数单独取（probe 带 lang=zh-CN 时 YouTube 会返 None）
-        state['followers'] = channel.get('followers', 0) or channel_followers(state['url'])
+        state['avatar'] = channel.get('avatar', '') or state.get('avatar', '')
+        # 订阅数单独取（probe 带 lang=zh-CN 时 YouTube 会返 None）；沿用旧列表时
+        # 探测本来就被封了，别再打一次 channel_followers() 陪绑。
+        if channel.get('followers'):
+            state['followers'] = channel['followers']
+        elif not prev_videos:
+            state['followers'] = channel_followers(state['url'])
         _save_chain(state)
 
         # 预置视频网格：一开始就把全部目标铺出来，前端详情页能立刻看到
@@ -2415,7 +2689,7 @@ def _run_chain(state):
         } for i, t in enumerate(targets)]
 
         # 去重复用：之前已转写过的（同 video_id）直接复用旧结果，跳过下载+转写
-        idx = _video_id_index()
+        idx = _video_id_index(require_speakers=state.get('require_speakers', False))
         for v in videos:
             tid = v['video_id'] and idx.get(v['video_id'])
             if tid:
@@ -2493,11 +2767,20 @@ def _run_chain(state):
                 up = (row or {}).get('upload_path') or ''
                 if up and os.path.isfile(up):
                     taskdb.set_status(old_tid, 'pending')
+                    taskdb.set_engine(old_tid, state['engine'])
                     q2 = queue.Queue()
                     tasks[old_tid] = q2
+                    # extra_meta 跟下面正常下载那条路径保持一致。少了 chain_id，
+                    # worker 里的 _chain_stopped(None) 永远判"没停"——点停止拦不住
+                    # 这批复用音频重投的任务，花费也记不到这条链上。
                     submit_transcription(state['engine'], run_transcription, old_tid, up,
                                     state['engine'], row.get('filename'), q2, None,
-                                    fallback_whisper=state.get('fallback_whisper', False))
+                                    fallback_whisper=state.get('fallback_whisper', False),
+                                    summarize=state.get('summarize', False),
+                                    extra_meta={'source_url': target.get('video_url') or v.get('video_url'),
+                                                'video_id': v.get('video_id') or target.get('video_id'),
+                                                'creator': state.get('author') or target.get('uploader'),
+                                                'chain_id': chain_id})
                     v['status'] = 'transcribing'
                     with lock:
                         state['download_done'] = state.get('download_done', 0) + 1
@@ -2524,7 +2807,8 @@ def _run_chain(state):
             if sub_segs:
                 task_id = str(uuid.uuid4())
                 _save_subtitle_task(task_id, target, sub_segs, sub_source,
-                                    lang=(_sub_meta or {}).get('sub_lang'))
+                                    lang=(_sub_meta or {}).get('sub_lang'),
+                                    summarize=state.get('summarize', False))
                 v['task_id'] = task_id
                 v['title'] = target.get('title') or v['title']
                 v['status'] = 'done'
@@ -2549,6 +2833,7 @@ def _run_chain(state):
                 state['engine'], run_transcription, task_id, upload_path, state['engine'],
                 display_name, q, None,
                 fallback_whisper=state.get('fallback_whisper', False),
+                summarize=state.get('summarize', False),
                 extra_meta={'source_url': target.get('video_url'),
                             'video_id': item.get('video_id'),
                             'creator': state.get('author') or item.get('uploader'),
@@ -2834,12 +3119,14 @@ def api_chain_create():
     state = {
         'id': chain_id,
         'url': url,
-        'engine': data.get('engine') or 'gemini',
+        'engine': data.get('engine') or 'gemini35',
         'max_videos': max_videos,
         'analyze': bool(data.get('analyze', True)),
         'prefer_subs': bool(data.get('prefer_subs', False)),
         'sub_lang': _clean_sub_mode(data.get('sub_lang')),   # 字幕语言：auto / zh / en …
         'fallback_whisper': bool(data.get('fallback_whisper', False)),
+        # 每期摘要默认关：分析只用证据卡，摘要只是给人翻单期看的，按期计费
+        'summarize': bool(data.get('summarize', False)),
         'verify': bool(data.get('verify', False)),
         'self_verify': bool(data.get('self_verify', False)),
         'lang': (data.get('lang') or 'auto'),
@@ -3008,6 +3295,56 @@ def _load_chain_cards(chain_id):
     return eps
 
 
+_BARE_VIDEO_ID = re.compile(r'^[A-Za-z0-9_-]{8,20}$')
+
+
+def _card_layer(layer):
+    """模型偶尔写走样（「他的主主張」），归回三档：claim / transcript / verified。"""
+    s = str(layer or '')
+    if '自证' in s:
+        return 'transcript'
+    if '核实' in s:
+        return 'verified'
+    return 'claim'
+
+
+@app.route('/api/chain/<chain_id>/cards')
+def api_chain_cards(chain_id):
+    """博主页的「证据卡」墙：把逐期抽过的卡片摊平成一个列表，每张带上出处
+    （哪一期、task_id、时间戳），前端点卡片能跳回那期转写的那一秒。只读现成的
+    cards_*.json，不调模型。"""
+    if not _CHAIN_ID_RE.match(chain_id or ''):
+        return jsonify({'error': 'Invalid chain id'}), 400
+    if not os.path.isfile(os.path.join(_chain_dir(chain_id), 'chain.json')):
+        return jsonify({'error': 'Not found'}), 404
+    # 期信息单列一份，卡片只记期的下标：一条 160 期的链有上万张卡，每张都带一遍
+    # 期名的话光重复标题就几 MB；中文也按 UTF-8 原样输出（jsonify 默认转 \uXXXX，体积×2）
+    cards = []
+    episodes = []
+    for ep in _load_chain_cards(chain_id):
+        title = (ep.get('title') or '').strip()
+        # 有的链抽卡时标题还只是视频号（BV1y1T169ELG），换成那期转写的标题
+        if ep.get('task_id') and (not title or _BARE_VIDEO_ID.match(title)):
+            title = _transcript_title(ep['task_id'])
+        idx = len(episodes)
+        n = 0
+        for c in ep.get('cards') or []:
+            if not isinstance(c, dict):
+                continue
+            quote = str(c.get('quote') or '').strip()
+            obs = str(c.get('obs') or '').strip()
+            if not quote and not obs:
+                continue
+            cards.append({'obs': obs, 'quote': quote,
+                          'timestamp': str(c.get('timestamp') or '').strip('[] '),
+                          'layer': _card_layer(c.get('layer')), 'ep': idx})
+            n += 1
+        if n:
+            episodes.append({'title': title, 'task_id': ep.get('task_id') or ''})
+    return Response(json.dumps({'episodes': episodes, 'cards': cards}, ensure_ascii=False),
+                    mimetype='application/json')
+
+
 _lens_jobs = {}  # (chain_id, lens) -> 'running' | 'done' | 'error:...'
 
 
@@ -3100,6 +3437,8 @@ def api_chain_retry(chain_id):
     # 只有前端明确传了 analyze 才改——「接着上次那条跑」时会把表单里的当前模式传过来。
     if 'analyze' in body:
         state['analyze'] = bool(body['analyze'])
+    if 'require_speakers' in body:
+        state['require_speakers'] = bool(body['require_speakers'])
     try:                                      # 想多拿几期：接着跑时可以把上限调大
         more = int(body.get('max_videos') or 0)
     except (TypeError, ValueError):
@@ -3139,10 +3478,21 @@ def _video_target(v):
     return {'video_url': url, 'video_id': vid, 'title': v.get('title')}
 
 
+def _chain_summarize(chain_id):
+    """这条链有没有勾「每期摘要」（老链没这个字段 = 没勾）。"""
+    try:
+        with open(os.path.join(_chain_dir(chain_id), 'chain.json'), 'r', encoding='utf-8') as f:
+            return bool(json.load(f).get('summarize', False))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _retranscribe_video(chain_id, index, target, engine):
     """只对一个视频：重下音频 → 用指定引擎转写 → 回写这张卡的状态。后台线程跑。"""
     from downloader import download_one
-    dl_dir = os.path.join(_chain_dir(chain_id), 'downloads')
+    # 每个视频单独一个下载目录：finally 里会整个删掉，共用目录的话同时重转几期
+    # 会把别人下到一半的文件删了
+    dl_dir = os.path.join(_chain_dir(chain_id), 'downloads', f'retranscribe-{index}')
     try:
         _update_video(chain_id, index, {'status': 'downloading'})
         with _chain_download_sem:
@@ -3161,6 +3511,7 @@ def _retranscribe_video(chain_id, index, target, engine):
         tasks[task_id] = q
         submit_transcription(engine, run_transcription, task_id, upload_path, engine,
                         display_name, q, None,
+                        summarize=_chain_summarize(chain_id),
                         extra_meta={'source_url': target.get('video_url'),
                                     'video_id': item.get('video_id'),
                                     'creator': item.get('uploader'),
@@ -3204,7 +3555,7 @@ def api_chain_retranscribe(chain_id, index):
         return jsonify({'ok': False, 'error': '这个视频正在处理'}), 409
 
     body = request.get_json(silent=True) or {}
-    engine = body.get('engine') or 'whisper'
+    engine = body.get('engine') or 'gemini35'
     target = _video_target(v)
     if not target['video_url']:
         return jsonify({'ok': False, 'error': '没有可用的视频链接，无法重下'}), 400

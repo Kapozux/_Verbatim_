@@ -11,6 +11,7 @@ YouTube 的反爬会让旧版直接解析失败。
   - download_audios(...) 仍保留（串行全下），供非链条场景/兼容使用。
 """
 
+import asyncio
 import json
 import os
 import time
@@ -18,7 +19,7 @@ import re
 import shutil
 import subprocess
 
-from config import YTDLP_LANG, YTDLP_COOKIES_FROM_BROWSER
+from config import YTDLP_LANG, YTDLP_COOKIES_FROM_BROWSER, YTDLP_PROXY, BILI_SESSDATA
 import config
 
 _PROBE_TIMEOUT = 120        # 元数据解析超时（秒）
@@ -52,6 +53,10 @@ def _cookie_args():
     # 借浏览器登录态：绕过 B站 412 风控、抬高 YouTube 限额
     return (['--cookies-from-browser', YTDLP_COOKIES_FROM_BROWSER]
             if YTDLP_COOKIES_FROM_BROWSER else [])
+
+
+def _proxy_args():
+    return ['--proxy', YTDLP_PROXY] if YTDLP_PROXY else []
 
 
 # YouTube 频道主页（无栏目）→ 补 /videos，否则 yt-dlp 会把"视频/直播/短视频"
@@ -217,6 +222,59 @@ def _bili_card(mid):
             'followers': int(card.get('fans') or 0)}
 
 
+def _probe_bili_space_via_api(mid, max_videos=None):
+    """B站 space 列表的另一条识别路径：走 bilibili-api-python 的 WBI 签名投稿列表
+    接口，跟 yt-dlp 的 flat-playlist 抓取是完全不同的请求签名，不容易被同一次
+    风控一起判死。只在 yt-dlp 直连 + 代理都失败、且配了 BILI_SESSDATA 时才用；
+    单次尝试、翻页之间留间隔，不内部重试——这条路本身就是最后一道保险，没必要
+    也把它敲脏。拿不到就返回 None，让调用方继续走缓存兜底。
+    """
+    if not BILI_SESSDATA:
+        return None
+    try:
+        from bilibili_api import user as bili_user, sync as bili_sync, Credential
+    except ImportError:
+        return None
+
+    async def _fetch():
+        cred = Credential(sessdata=BILI_SESSDATA)
+        u = bili_user.User(uid=int(mid), credential=cred)
+        vlist, pn, ps, total = [], 1, 30, None
+        while True:
+            res = await u.get_videos(pn=pn, ps=ps)
+            if total is None:
+                total = (res.get('page') or {}).get('count') or 0
+            items = (res.get('list') or {}).get('vlist') or []
+            if not items:
+                break
+            vlist.extend(items)
+            if max_videos and len(vlist) >= max_videos:
+                del vlist[max_videos:]
+                break
+            if len(vlist) >= total or len(items) < ps:
+                break
+            pn += 1
+            await asyncio.sleep(1.5)   # 翻页之间留间隔，别一梭子打完
+        return vlist
+
+    try:
+        vlist = bili_sync(_fetch())
+    except Exception:
+        return None
+    if not vlist:
+        return None
+
+    targets = [{
+        'video_url': f"https://www.bilibili.com/video/{v.get('bvid', '')}",
+        'title': v.get('title', ''),
+        'video_id': v.get('bvid', ''),
+        'thumbnail': v.get('pic', ''),
+        'view_count': int(v.get('play') or 0),
+    } for v in vlist if v.get('bvid')]
+    channel = _bili_card(mid) or {}
+    return targets, channel
+
+
 def _yt_channel_meta(channel_url):
     """只要频道元数据、不列视频（--playlist-items 0，约 1 秒），从中取 avatar_uncropped。"""
     try:
@@ -312,6 +370,13 @@ def probe(url, max_videos=None, enrich=True):
 
     # B站 412 / 网络抖动这类间歇性风控：退避重试（download_one 早就这么干，
     # probe 之前漏了，一次 412 就把整条链判死）。
+    #
+    # 但 412 是风控明确判定"拦你"，不是网络抖动——几秒内对着同一个出口 IP 重敲
+    # 没用，只会往这个 IP 的风控分上继续加（2026-09 马督工那次就是这么敲了一天
+    # 被彻底封的）。一旦确认是这个信号，直连立刻停手，把重试名额让给换出口。
+    def _is_blocked(r):
+        return bool(r) and 'blocked by server' in (r.stderr or '').lower()
+
     result = None
     for attempt in range(1, _PROBE_ATTEMPTS + 1):
         try:
@@ -322,9 +387,34 @@ def probe(url, max_videos=None, enrich=True):
             result = None
         if result is not None and result.returncode == 0 and result.stdout.strip():
             break
+        if _is_blocked(result):
+            break                       # 确认被拦：别再对同一出口重试，让下面换代理
         if attempt < _PROBE_ATTEMPTS:
-            time.sleep(4 * attempt)     # 4s, 8s 退避
+            time.sleep(4 * attempt)     # 4s, 8s 退避：留给真·网络抖动这类场景
+
+    # 直连扛不过：412 这类风控实测是按当前出口 IP 判的（2026-09），换代理出口
+    # 立刻就通。配了 YTDLP_PROXY 就再单独试一次，不占前面几次直连重试的名额；
+    # 代理这次要是也被拦，同样不重试——同一条道理，留着这个 IP 的信誉。
+    if (result is None or result.returncode != 0 or not result.stdout.strip()) and YTDLP_PROXY:
+        try:
+            result = subprocess.run(
+                cmd + _proxy_args(), capture_output=True, text=True, timeout=_PROBE_TIMEOUT,
+            )
+        except subprocess.TimeoutExpired:
+            pass
+
     if result is None or result.returncode != 0 or not result.stdout.strip():
+        # 直连 + 代理都没扛过去：B站 space 页还有第三条路——换一套完全不同的
+        # 请求签名（bilibili-api-python 的 WBI 接口），试一次，不行就老实报错，
+        # 交给上层（有缓存的话）接住。
+        mid = _bili_mid(url, {})
+        if mid and 'space.bilibili.com' in url:
+            via_api = _probe_bili_space_via_api(mid, max_videos)
+            if via_api:
+                targets, channel = via_api
+                if enrich:
+                    enrich_channel(url, channel, {})
+                return targets, channel
         err = (result.stderr or '').strip().splitlines() if result else []
         detail = err[-1][:200] if err else 'timeout / unknown error'
         raise RuntimeError(f'Could not parse link: {detail}')
@@ -390,8 +480,14 @@ _DOWNLOAD_ATTEMPTS = 3        # B站 412 等间歇性风控：退避重试，绝
 #
 # 首选 m4a 音轨：YouTube / B站 都有现成的 m4a（AAC），拿到就是最终文件、零转码；
 # 没有 m4a 才退到平台给的最佳音轨（多半是 opus，落成 .opus，下游同样直接认）。
-_FORMAT_ATTEMPTS = ('bestaudio[ext=m4a]/bestaudio', 'worstaudio',
-                    'bestaudio[ext=m4a]/bestaudio')
+#
+# 末尾的 /best、/worst 兜底：老式 B 站视频（部分合集/多 P 稿件）压根不给独立音轨，
+# 只有 unknown/unknown 的混流 mp4（vcodec+acodec 一起），此时 bestaudio/worstaudio
+# 两档都无格式可选，yt-dlp 直接报 "Requested format is not available"，没有 -x 抽
+# 音轨的机会。混流文件照样能让 -x 抽出音轨，只是搭了张不需要的视频，兜底选它总比
+# 整期下载失败强。
+_FORMAT_ATTEMPTS = ('bestaudio[ext=m4a]/bestaudio/best', 'worstaudio/worst',
+                    'bestaudio[ext=m4a]/bestaudio/best')
 
 
 def download_one(target, dest_dir, section=None):

@@ -71,6 +71,22 @@ def set_status(task_id, status, error=None):
         )
 
 
+def set_engine(task_id, engine):
+    """换引擎重投一个既有 task_id 时同步这一列，不然它永远留着创建时那个引擎。
+
+    2026-09-22 真实事故：链条从 whisper 切到 gemini35 重跑，重投走的是「音频还在
+    就直接重转」这条分支——只改了运行时传给 run_transcription 的 engine 参数，
+    没改这一列。等服务再崩一次、recover_unfinished_tasks() 从这张表按 engine 列
+    找回任务时，读到的还是最初那个 whisper，跟当时实际在跑的引擎对不上——拔电
+    禁 Whisper 的闸门一查，几百个本该走 gemini35 的任务全被当成 whisper 挡了下来。
+    """
+    with _write_lock, _conn() as c:
+        c.execute(
+            'UPDATE tasks SET engine=?, updated_at=? WHERE id=?',
+            (engine, _now(), task_id),
+        )
+
+
 def unfinished():
     """服务启动时调用：返回所有没跑完的任务行。"""
     with _conn() as c:

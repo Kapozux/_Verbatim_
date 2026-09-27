@@ -7,6 +7,7 @@ import json
 import os
 import re
 
+import usage
 from config import (
     GEMINI_API_KEY, GEMINI_MODEL,
     DASHSCOPE_API_KEY, DASHSCOPE_LLM_MODEL,
@@ -82,6 +83,7 @@ def _call_gemini(prompt):
             model=GEMINI_MODEL,
             contents=prompt,
         )
+        usage.record_gemini(response, GEMINI_MODEL, 'summary')
         return response.text.strip()
     except Exception:
         return None
@@ -111,6 +113,7 @@ def _call_qwen(prompt):
         )
         resp.raise_for_status()
         data = resp.json()
+        usage.record_openai(data, 'aliyun', DASHSCOPE_LLM_MODEL, 'summary')
         return data['choices'][0]['message']['content'].strip()
     except Exception:
         return None
