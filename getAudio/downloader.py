@@ -136,6 +136,104 @@ def _is_video_entry(e):
     return True
 
 
+def _mmss(v):
+    """B站投稿列表的时长 'MM:SS' / 'H:MM:SS' → 秒。"""
+    try:
+        sec = 0
+        for part in str(v or '').split(':'):
+            sec = sec * 60 + int(part)
+        return sec
+    except ValueError:
+        return 0
+
+
+def _epoch_date(ts):
+    try:
+        ts = int(ts or 0)
+    except (TypeError, ValueError):
+        return ''
+    return time.strftime('%Y%m%d', time.localtime(ts)) if ts > 0 else ''
+
+
+def _entry_date(e):
+    """flat 条目的上架日期 YYYYMMDD：upload_date 优先，其次 timestamp / release_timestamp。"""
+    d = str(e.get('upload_date') or '')
+    if re.fullmatch(r'\d{8}', d):
+        return d
+    return _epoch_date(e.get('timestamp') or e.get('release_timestamp'))
+
+
+def bili_space_dates(mid):
+    """B站 UP 主全部投稿的发布日期 {bvid: YYYYMMDD}（补老链条日期用）。
+
+    和 _probe_bili_space_via_api 同一个签名接口，但 B 站会随机对某一页回 412：那边一页失败
+    整个作废，这里每页单独重试（间隔拉长），实在拿不到的页跳过、保留其它页的结果。
+    """
+    if not BILI_SESSDATA:
+        return {}
+    try:
+        from bilibili_api import user as bili_user, sync as bili_sync, Credential
+    except ImportError:
+        return {}
+
+    async def _fetch():
+        u = bili_user.User(uid=int(mid), credential=Credential(sessdata=BILI_SESSDATA))
+        out, pn, total, misses = {}, 1, None, 0
+        while True:
+            res = None
+            for wait in (0, 6, 15):
+                if wait:
+                    await asyncio.sleep(wait)
+                try:
+                    res = await u.get_videos(pn=pn, ps=30)
+                    break
+                except Exception:  # noqa: BLE001  412 风控：等一下再试这一页
+                    res = None
+            if res is None:
+                misses += 1
+                if misses >= 3:          # 连着几页都拿不到：被风控盯上了，停手
+                    break
+            else:
+                if total is None:
+                    total = (res.get('page') or {}).get('count') or 0
+                items = (res.get('list') or {}).get('vlist') or []
+                for v in items:
+                    if v.get('bvid'):
+                        out[v['bvid']] = _epoch_date(v.get('created'))
+                if not items:
+                    break
+            if total is not None and pn * 30 >= total:
+                break
+            pn += 1
+            await asyncio.sleep(2.5)
+        return out
+
+    try:
+        return bili_sync(_fetch())
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def fetch_upload_date(video_url):
+    """单个视频的上架日期（不下载）。拿不到返回 ''。老链条补日期用，调用方负责控节奏。"""
+    binary = _resolve_ytdlp()
+    for extra in ([], _proxy_args()):          # 先直连，不行再走代理（和 probe 一个路数）
+        # 不带 --cookies-from-browser：每次都要解密一遍浏览器 cookie 库，一个视频要二十几秒；
+        # 查发布日期不需要登录态
+        cmd = [binary, '--skip-download', '--no-warnings', '--no-playlist',
+               '--print', '%(upload_date|-)s', *extra, video_url]
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        except subprocess.TimeoutExpired:
+            continue
+        d = (r.stdout or '').strip().splitlines()[-1:] if r.returncode == 0 else []
+        if d and re.fullmatch(r'\d{8}', d[0]):
+            return d[0]
+        if not extra and not _proxy_args():
+            break
+    return ''
+
+
 def _thumbnail_for(entry):
     """从 flat 条目里取封面 URL；YouTube 用稳定的 ytimg 兜底。"""
     thumbs = entry.get('thumbnails')
@@ -270,6 +368,8 @@ def _probe_bili_space_via_api(mid, max_videos=None):
         'video_id': v.get('bvid', ''),
         'thumbnail': v.get('pic', ''),
         'view_count': int(v.get('play') or 0),
+        'upload_date': _epoch_date(v.get('created')),
+        'duration': _mmss(v.get('length')),
     } for v in vlist if v.get('bvid')]
     channel = _bili_card(mid) or {}
     return targets, channel
@@ -437,6 +537,8 @@ def probe(url, max_videos=None, enrich=True):
                 'video_id': e.get('id', ''),
                 'thumbnail': _thumbnail_for(e),
                 'view_count': int(e.get('view_count') or 0),  # flat 常为 0，B站等有时给
+                'upload_date': _entry_date(e),
+                'duration': int(e.get('duration') or 0),       # 秒；建博主前估时长/费用用
             })
         # B站空间页等 flat 探测拿不到频道名（entries 连 title 都是空的）——
         # 兜底：对第一个视频做一次全量探测，用它的 uploader 当频道名/头像。
@@ -523,6 +625,7 @@ def download_one(target, dest_dir, section=None):
             '--print', 'after_move:view_count',
             # 博主名：channel 优先、uploader 兜底；都没有打印 '-' 占位（空行会被过滤掉，打乱行序）
             '--print', 'after_move:%(channel,uploader|-)s',
+            '--print', 'after_move:%(upload_date|-)s',     # 上架日期 YYYYMMDD（立场时间线用）
             '--no-simulate',
             target['video_url'],
         ]
@@ -548,6 +651,9 @@ def download_one(target, dest_dir, section=None):
                 uploader = lines[4].strip() if len(lines) >= 5 else ''
                 if uploader in ('-', 'NA'):
                     uploader = ''
+                upload_date = lines[5].strip() if len(lines) >= 6 else ''
+                if not re.fullmatch(r'\d{8}', upload_date):
+                    upload_date = target.get('upload_date', '')
                 return {
                     'path': lines[0],
                     'title': lines[1] or target.get('title') or 'untitled',
@@ -555,6 +661,7 @@ def download_one(target, dest_dir, section=None):
                     'thumbnail': target.get('thumbnail', ''),
                     'view_count': vc or int(target.get('view_count') or 0),
                     'uploader': uploader,
+                    'upload_date': upload_date,
                 }
         if attempt < _DOWNLOAD_ATTEMPTS:
             time.sleep(4 * attempt)      # 4s, 8s 退避

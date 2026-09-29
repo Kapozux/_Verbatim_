@@ -38,6 +38,7 @@ PRICES = {
     'gemini-2.5-flash':      {'input': 0.30, 'audio_in': 1.00, 'output': 2.50, 'cached': 0.075},
     'gemini-flash-latest':   {'input': 0.30, 'audio_in': 1.00, 'output': 2.50, 'cached': 0.075},
     'gemini-2.5-flash-lite': {'input': 0.10, 'audio_in': 0.30, 'output': 0.40, 'cached': 0.025},
+    'gemini-embedding-001':  {'input': 0.15, 'audio_in': 0.15, 'output': 0.0, 'cached': 0.15},
     'gemini-2.5-pro':        {'tiers': [(200_000, 1.25, 10.0), (None, 2.50, 15.0)], 'cached': 0.31},
     'gemini-3-pro-preview':  {'tiers': [(200_000, 2.00, 12.0), (None, 4.00, 18.0)], 'cached': 0.20},
     'gemini-3-flash-preview': {'input': 0.50, 'audio_in': 1.00, 'output': 3.00, 'cached': 0.05},

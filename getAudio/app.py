@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import threading
 import time
+from datetime import datetime
 import statistics
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -122,6 +123,8 @@ DEMO_MODE = os.environ.get('VERBATIM_DEMO') == '1'
 
 
 _DEMO_LENS_POST = re.compile(r'^/api/chain/([0-9a-f]{32})/lens$')
+_DEMO_ASK_POST = re.compile(r'^/api/chain/[0-9a-f]{32}/ask$')
+DEMO_ASK = DEMO_MODE and os.environ.get('VERBATIM_DEMO_ASK') == '1'
 
 
 @app.before_request
@@ -133,6 +136,9 @@ def _demo_readonly_guard():
     path = request.path or ''
     if request.method == 'POST':
         if path == '/api/transcripts/merge':
+            return None
+        # 问证据卡要花钱（每问一两美分）：演示实例默认不开，VERBATIM_DEMO_ASK=1 才放行
+        if DEMO_ASK and (_DEMO_ASK_POST.match(path) or path == '/api/radar'):
             return None
         m = _DEMO_LENS_POST.match(path)
         if m:
@@ -1182,7 +1188,7 @@ def _static_version():
     文件一变这串数字就变，浏览器才会当成新资源重新拉取。
     """
     try:
-        paths = [os.path.join(app.static_folder, name) for name in ('app.js', 'style.css')]
+        paths = [os.path.join(app.static_folder, name) for name in ('app.js', 'style.css', 'i18n.js', 'explore.js', 'tools.js')]
         return str(int(max(os.path.getmtime(p) for p in paths if os.path.isfile(p))))
     except (ValueError, OSError):
         return '0'
@@ -1190,7 +1196,8 @@ def _static_version():
 
 @app.route('/')
 def index():
-    return render_template('index.html', static_version=_static_version(), demo=DEMO_MODE)
+    return render_template('index.html', static_version=_static_version(), demo=DEMO_MODE,
+                           demo_ask=DEMO_ASK)
 
 
 # ========== Upload & Stream ==========
@@ -2631,6 +2638,7 @@ def _run_chain(state):
                 'video_id': v.get('video_id', ''),
                 'thumbnail': v.get('thumbnail', ''),
                 'view_count': int(v.get('view_count') or 0),
+                'upload_date': v.get('upload_date') or '',
             } for v in prev_videos]
             channel = {'name': state.get('author', ''), 'avatar': state.get('avatar', ''),
                        'followers': state.get('followers', 0)}
@@ -2641,7 +2649,14 @@ def _run_chain(state):
         # （马督工那次就是这么敲了一天被封的）。有完整缓存时，冷却窗口内直接复用。
         last_probe = state.get('last_probe_at') or 0
         cooldown_left = _CHAIN_PROBE_COOLDOWN - (time.time() - last_probe)
-        if have_full_cache and cooldown_left > 0 and not cap_raised:
+        syncing = chain_id in _sub_runs
+        fixed = state.get('fixed_targets')
+        if fixed and not syncing:
+            # 建的时候在预览里亲手挑的那几期：只处理它们（Continue 也一样），不去探测「最新 N 期」
+            targets = [dict(t) for t in fixed]
+            channel = {'name': state.get('author', ''), 'avatar': state.get('avatar', ''),
+                       'followers': state.get('followers', 0)}
+        elif have_full_cache and cooldown_left > 0 and not cap_raised and not syncing:
             print(f'[chain {chain_id[:8]}] 距上次探测不到 {int(_CHAIN_PROBE_COOLDOWN / 60)} 分钟'
                   f'（还剩 {int(cooldown_left)}s），跳过重新探测，沿用缓存列表')
             targets, channel = _targets_from_prev()
@@ -2649,8 +2664,11 @@ def _run_chain(state):
             state['last_probe_at'] = time.time()
             _save_chain(state)
             try:
-                targets, channel = probe(state['url'], state.get('max_videos'))
-                state['probed_max'] = state.get('max_videos') or 10 ** 9
+                if syncing:              # 定期同步：只看最新几十期有没有新的，旧的一律不碰
+                    targets, channel = probe(state['url'], SYNC_PROBE_N)
+                else:
+                    targets, channel = probe(state['url'], state.get('max_videos'))
+                    state['probed_max'] = state.get('max_videos') or 10 ** 9
             except Exception as probe_err:
                 # 列表探测本身被风控封锁（B站 412 等）：上一轮如果已经拿到过完整目标
                 # 列表，没必要陪它一起判死，沿用旧列表接着下/转，只是暂时发现不了新
@@ -2684,9 +2702,41 @@ def _run_chain(state):
             'video_url': t.get('video_url', ''),   # 供 retry 重下用
             'thumbnail': t.get('thumbnail', ''),
             'view_count': int(t.get('view_count') or 0),
+            'upload_date': t.get('upload_date') or '',
+            'duration': int(t.get('duration') or 0),
             'status': 'downloading',
             'task_id': None,
         } for i, t in enumerate(targets)]
+        # 探测没给日期的（YouTube flat 列表多半不给）：沿用上一轮记下的
+        _prev_dates = {pv.get('video_id'): pv.get('upload_date') for pv in prev_videos
+                       if pv.get('video_id') and pv.get('upload_date')}
+        for v in videos:
+            if not v['upload_date']:
+                v['upload_date'] = _prev_dates.get(v['video_id'], '')
+
+        # 定期同步：探测只看了最新几十期。把它们里真正新的放前面，上一轮的整个列表原样接在后面——
+        # 总库只增不减；旧的那些期连状态带 task_id 一个字不改，也不会被重新下载 / 转写 / 抽卡。
+        if syncing and prev_videos:
+            prev_keys = {pv.get('video_id') for pv in prev_videos if pv.get('video_id')} | \
+                        {pv.get('video_url') for pv in prev_videos if pv.get('video_url')}
+            # 「新」= 比库里最新那期还新的：频道列表新的在前，碰到第一期认识的就停。
+            # （否则一个当初只取了最新 6 期的博主，第一次同步会把最近 30 期里另外 24 期全当成新的下载。）
+            fresh_videos = []
+            for v in videos:
+                if v.get('video_id') in prev_keys or v.get('video_url') in prev_keys:
+                    break
+                fresh_videos.append(v)
+            fresh_keys = {v.get('video_id') or v.get('video_url') for v in fresh_videos}
+            videos = fresh_videos + [dict(pv) for pv in prev_videos]
+            for i, v in enumerate(videos):
+                v['index'] = i
+            targets = [t for t in targets if (t.get('video_id') or t.get('video_url')) in fresh_keys] + \
+                      [{'video_url': v.get('video_url', ''), 'title': v.get('title', ''),
+                        'video_id': v.get('video_id', ''), 'thumbnail': v.get('thumbnail', ''),
+                        'view_count': int(v.get('view_count') or 0), 'upload_date': v.get('upload_date', '')}
+                       for v in prev_videos]
+            state['sync_new'] = [v.get('video_id') or v.get('video_url') for v in fresh_videos]
+            print(f'[chain {chain_id[:8]}] 同步：新视频 {len(fresh_videos)} 期，总库保留 {len(prev_videos)} 期')
 
         # 去重复用：之前已转写过的（同 video_id）直接复用旧结果，跳过下载+转写
         idx = _video_id_index(require_speakers=state.get('require_speakers', False))
@@ -2746,10 +2796,14 @@ def _run_chain(state):
                 save()
                 return None
 
+        sync_new = set(state.get('sync_new') or []) if syncing else None
+
         def _download_and_submit_one(i, target):
             v = videos[i]
             if v.get('status') == 'done':        # 复用的旧结果，跳过
                 return
+            if sync_new is not None and (v.get('video_id') or v.get('video_url')) not in sync_new:
+                return                           # 同步只管新视频；以前没下成的旧期原样放着，不重试
             if chain_id in _cancel_chains:       # 已请求停止：不再开新下载
                 v['status'] = 'skipped'
                 save()
@@ -2844,6 +2898,8 @@ def _run_chain(state):
             v['video_id'] = item['video_id']
             if item.get('view_count'):
                 v['view_count'] = int(item['view_count'])   # 下载时抓到的播放量
+            if item.get('upload_date'):
+                v['upload_date'] = item['upload_date']
             v['status'] = 'transcribing'
             save()
 
@@ -2899,6 +2955,8 @@ def _run_chain(state):
             # 顺序整体前移，所有索引全错位 → 旧缓存一份都认不出来 → Continue 把每期重抽
             # 一遍（实测库里大迎那条 195 份卡片全部失配，白花约 $5）。
             cards_cache = {}
+            fresh = [0]                          # 这一轮真正新抽了几期（订阅用：0 就不重做画像）
+            cards_files = _cards_file_index(chain_dir)
             for _cf in _glob.glob(os.path.join(chain_dir, 'cards_*.json')):
                 try:
                     with open(_cf, 'r', encoding='utf-8') as _fh:
@@ -2918,10 +2976,11 @@ def _run_chain(state):
                 try:
                     # Continue 省钱：这期的证据卡之前抽过就直接用缓存，不再花钱。
                     # 认 task_id：这期若被重转过（新 task），旧卡自然认不上，重抽。
-                    cpath2 = os.path.join(chain_dir, f"cards_{v['index'] + 1:03d}.json")
                     cached = cards_cache.get(v['task_id'])
                     if cached:
                         return cached
+                    if sync_new is not None and (v.get('video_id') or v.get('video_url')) not in sync_new:
+                        return None                  # 同步：旧期没卡就算了，不再花钱重抽
                     # 废稿（纯音乐/噪音标注、静音幻听、解码死循环）就地判不可用：
                     # 不花体检和抽卡的钱，也**留痕**让合成层的护栏算得上这一期
                     bad = _unusable_transcript(v['task_id'])
@@ -2937,6 +2996,7 @@ def _run_chain(state):
                         f"[{s.get('timestamp', '')}] {s.get('text', '')}"
                         for s in segs
                     )
+                    fresh[0] += 1
                     with _chain_analysis_sem:    # 全局分析闸
                         ep = analyze_episode(v['title'], text, state['author'],
                                              verify=state.get('verify', False),
@@ -2948,8 +3008,12 @@ def _run_chain(state):
                               'w', encoding='utf-8') as fh:
                         fh.write(ep['markdown'])
                     ep['task_id'] = v['task_id']       # 缓存键：重转过就作废
-                    with open(cpath2, 'w', encoding='utf-8') as fh:
-                        json.dump(ep, fh, ensure_ascii=False)
+                    if v.get('upload_date'):
+                        ep['upload_date'] = v['upload_date']
+                    with lock:
+                        cpath2 = _cards_path_for(chain_dir, v['index'], v['task_id'], cards_files)
+                        with open(cpath2, 'w', encoding='utf-8') as fh:
+                            json.dump(ep, fh, ensure_ascii=False)
                     return ep
                 except Exception:  # noqa: BLE001  单期失败不拖垮整链
                     return None
@@ -2969,19 +3033,51 @@ def _run_chain(state):
             # ---- 5. 总合成（只吃证据卡，不吃全文）----
             # 合成是最贵的一步：用户已经按了停止就别再花这笔钱
             # （_reanalyze_chain_inner 一直有这个判断，这里以前漏了）
-            if episodes and chain_id not in _cancel_chains:
+            skip_synth = chain_id in _sub_runs and not fresh[0] and state.get('final_doc')
+            if episodes and chain_id not in _cancel_chains and not skip_synth:
                 state['stage'] = 'synthesizing'
                 save()
-                total_md = synthesize(episodes, state['author'],
-                                      critique_level=state.get('critique_level', 'analytical'),
-                                      preset=state.get('analysis_preset'),
-                                      self_verify=state.get('self_verify', False),
-                                      lang=state.get('lang', 'auto'),
-                                      attempted=len(submitted))
-                with open(os.path.join(chain_dir, '总分析.md'),
-                          'w', encoding='utf-8') as fh:
+                _annotate_speakers(chain_dir, episodes)
+                total_md = None
+                old_path = os.path.join(chain_dir, '总分析.md')
+                new_eps = [e for e in episodes if e.get('cards') and e.get('task_id') not in cards_cache]
+                good_n = sum(1 for e in episodes if e.get('cards'))
+                if syncing and os.path.isfile(old_path) and new_eps \
+                        and len(new_eps) <= max(3, good_n // 4):
+                    # 定期同步、新增不多：在原画像上并入新内容（原结论不动，除非被新证据推翻）
+                    try:
+                        from analyze import update_portrait
+                        with open(old_path, 'r', encoding='utf-8') as fh:
+                            old_md = fh.read()
+                        total_md = update_portrait(old_md, new_eps, state['author'], good_n,
+                                                   preset=state.get('analysis_preset'),
+                                                   lang=state.get('lang', 'auto'))
+                    except Exception as e:  # noqa: BLE001  增量失败就整份重写
+                        print(f'[chain {chain_id[:8]}] 增量更新画像失败，改整份重写：{e}')
+                if not total_md:
+                    total_md = synthesize(episodes, state['author'],
+                                          critique_level=state.get('critique_level', 'analytical'),
+                                          preset=state.get('analysis_preset'),
+                                          self_verify=state.get('self_verify', False),
+                                          lang=state.get('lang', 'auto'),
+                                          attempted=len(submitted))
+                if os.path.isfile(old_path):     # 旧画像留底（history/ 不出现在文档列表里）
+                    os.makedirs(os.path.join(chain_dir, 'history'), exist_ok=True)
+                    shutil.copy2(old_path, os.path.join(
+                        chain_dir, 'history', f"总分析_{datetime.now().strftime('%Y%m%d_%H%M')}.md"))
+                with open(old_path, 'w', encoding='utf-8') as fh:
                     fh.write(total_md)
                 state['final_doc'] = '总分析.md'
+
+            if state.get('analyze') and chain_id not in _cancel_chains:
+                _auto_tag(chain_dir)
+                if state.get('auto_predict') and not syncing:   # 建的时候勾了「分析完自动核对预测」
+                    try:
+                        import ask
+                        ask.check_predictions(chain_dir)
+                    except Exception as e:  # noqa: BLE001
+                        print(f'[chain {chain_id[:8]}] auto predictions: {e}')
+        state.pop('sync_new', None)
 
         state['stage'] = 'cancelled' if chain_id in _cancel_chains else 'done'
     except Exception as e:  # noqa: BLE001
@@ -3029,6 +3125,8 @@ def _reanalyze_chain_inner(state):
         state['final_doc'] = None
         save()
 
+        cards_files = _cards_file_index(chain_dir)
+
         def _analyze_one(v):
             if state['id'] in _cancel_chains:
                 return None
@@ -3060,9 +3158,12 @@ def _reanalyze_chain_inner(state):
                     fh.write(ep['markdown'])
                 # Re-analyze 是显式重做：无视旧缓存、写入新证据卡（供以后 Continue 复用）
                 ep['task_id'] = v['task_id']
-                with open(os.path.join(chain_dir, f"cards_{v['index'] + 1:03d}.json"),
-                          'w', encoding='utf-8') as fh:
-                    json.dump(ep, fh, ensure_ascii=False)
+                if v.get('upload_date'):
+                    ep['upload_date'] = v['upload_date']
+                with lock:
+                    cpath2 = _cards_path_for(chain_dir, v['index'], v['task_id'], cards_files)
+                    with open(cpath2, 'w', encoding='utf-8') as fh:
+                        json.dump(ep, fh, ensure_ascii=False)
                 return ep
             except Exception:  # noqa: BLE001
                 return None
@@ -3080,6 +3181,7 @@ def _reanalyze_chain_inner(state):
         if episodes and state['id'] not in _cancel_chains:
             state['stage'] = 'synthesizing'
             save()
+            _annotate_speakers(chain_dir, episodes)
             total_md = synthesize(episodes, state['author'],
                                   critique_level=state.get('critique_level', 'analytical'),
                                   preset=state.get('analysis_preset'),
@@ -3090,6 +3192,8 @@ def _reanalyze_chain_inner(state):
                       'w', encoding='utf-8') as fh:
                 fh.write(total_md)
             state['final_doc'] = '总分析.md'
+        if state['id'] not in _cancel_chains:
+            _auto_tag(chain_dir)
 
         state['stage'] = 'cancelled' if state['id'] in _cancel_chains else 'done'
         save()
@@ -3133,17 +3237,512 @@ def api_chain_create():
         'critique_level': (data.get('critique_level') or 'analytical'),
         'analysis_preset': (data.get('analysis_preset') or 'gemini'),
         'author': (data.get('author') or '').strip() or '该博主',
+        'require_speakers': bool(data.get('require_speakers', False)),
+        'auto_predict': bool(data.get('auto_predict', False)),
+        'avatar': str(data.get('avatar') or '')[:500],
+        'followers': int(data.get('followers') or 0) if str(data.get('followers') or '0').isdigit() else 0,
         'stage': 'starting',
         'created_at': __import__('datetime').datetime.now().strftime(
             '%Y-%m-%d %H:%M:%S'),
     }
+    # 建之前在预览里挑好的那些期：就处理这些，不再按「最新 N 期」去探测
+    picked = data.get('targets')
+    if isinstance(picked, list) and picked:
+        clean = []
+        for t in picked[:_MAX_CHAIN_VIDEOS]:
+            if not isinstance(t, dict) or not str(t.get('video_url') or '').startswith(('http://', 'https://')):
+                continue
+            clean.append({k: t.get(k) for k in ('video_url', 'title', 'video_id', 'thumbnail',
+                                                 'view_count', 'upload_date', 'duration')})
+        if clean:
+            state['fixed_targets'] = clean
+            state['max_videos'] = len(clean)
     _save_chain(state)
+    iv = data.get('sync_interval_h')
+    if iv:                                        # 建的时候就开了定期同步
+        try:
+            iv = int(iv)
+        except (TypeError, ValueError):
+            iv = 0
+        if iv in SUB_INTERVALS:
+            _write_sub(chain_id, {'on': True, 'interval_h': iv, 'last_run': time.time(),
+                                  'since': datetime.now().strftime('%Y-%m-%d %H:%M:%S')})
     threading.Thread(target=run_chain, args=(state,), daemon=True).start()
     return jsonify({'chain_id': chain_id})
 
 
+# ---- 建博主之前的预览：是谁、一共多少期、每期多长、哪些已经转写过、之前分析过没有 ----
+_preview_cache = {}           # 规范化 URL → (时间, 结果)；30 分钟内同一个链接不重复探测（B站风控）
+
+
+def _norm_chain_url(url):
+    from downloader import _normalize_url
+    u = _normalize_url((url or '').strip())
+    u = re.sub(r'[?&](spm_id_from|vd_source|share_source|share_medium|si|feature|buvid|from_spmid)=[^&#]*', '', u)
+    return u.rstrip('/?&').lower()
+
+
+@app.route('/api/chain/preview', methods=['POST'])
+def api_chain_preview():
+    body = request.get_json(silent=True) or {}
+    url = str(body.get('url') or '').strip()
+    if not url.startswith(('http://', 'https://')):
+        return jsonify({'error': 'Paste a full http(s) link'}), 400
+    key = _norm_chain_url(url)
+    hit = _preview_cache.get(key)
+    if hit and time.time() - hit[0] < 1800 and not body.get('refresh'):
+        data = dict(hit[1])
+    else:
+        from downloader import probe
+        try:
+            targets, channel = probe(url, None)
+        except Exception as e:  # noqa: BLE001
+            return jsonify({'error': str(e)[:300]}), 502
+        data = {'channel': {'name': channel.get('name') or '', 'avatar': channel.get('avatar') or '',
+                            'followers': channel.get('followers') or 0},
+                'videos': [{k: t.get(k) for k in ('video_url', 'title', 'video_id', 'thumbnail',
+                                                   'view_count', 'upload_date', 'duration')}
+                           for t in targets[:3000]],
+                'total': len(targets)}
+        _preview_cache[key] = (time.time(), data)
+    # 已经转写过的期（跨博主去重）：这些不花转写费
+    idx = _video_id_index()
+    for v in data['videos']:
+        v['transcribed'] = bool(v.get('video_id') and idx.get(v['video_id']))
+    # 之前分析过这个博主吗
+    existing = None
+    for name in os.listdir(CHAINS_DIR) if os.path.isdir(CHAINS_DIR) else []:
+        if not _CHAIN_ID_RE.match(name):
+            continue
+        try:
+            with open(os.path.join(CHAINS_DIR, name, 'chain.json'), 'r', encoding='utf-8') as f:
+                st = json.load(f)
+        except Exception:  # noqa: BLE001
+            continue
+        if st.get('kind') == 'collection' or not st.get('url') or _norm_chain_url(st['url']) != key:
+            continue
+        done = sum(1 for v in st.get('videos') or [] if v.get('status') == 'done')
+        # 同一个频道跑过好几次：优先「分析过的」，再比期数
+        if not existing or (bool(st.get('final_doc')), done) > (existing['analyzed'], existing['episodes']):
+            existing = {'chain_id': name, 'episodes': done, 'stage': st.get('stage'),
+                        'analyzed': bool(st.get('final_doc')), 'sub_on': bool(_read_sub(name).get('on'))}
+    data['existing'] = existing
+    host = re.sub(r'^www\.', '', (re.match(r'https?://([^/]+)', url) or [None, ''])[1])
+    data['platform'] = 'bilibili' if 'bilibili' in host else 'youtube' if 'youtu' in host else host
+    # 估价用的单价（美元）：转写按音频小时，分析按期 + 按小时，画像一次
+    data['prices'] = {'transcribe_per_hour': {'gemini35': 0.35, 'gemini': 0.19, 'qwenasr': 0.015, 'whisper': 0},
+                      'analysis_per_episode': 0.03, 'analysis_per_hour': 0.07, 'portrait': 0.12}
+    return Response(json.dumps(data, ensure_ascii=False), mimetype='application/json')
+
+
+# ===== 合集：任意一批转写（访谈 / 课程 / 会议 / 几个博主混着）当成一个「博主」来问、看立场 =====
+# 存法和博主链条完全一样（results/_chains/<id>/chain.json，kind=collection，没有 url），
+# 所以提问 / 立场 / 预测 / 原话 / 导出全都直接能用。建的时候：某期在别的博主那里抽过卡的直接复用（不花钱），
+# 没抽过的才抽；然后写综述、打标签、算向量、认说话人。
+
+COLLECTION_KINDS = ('interview', 'course', 'meeting', 'podcast', 'mixed')
+_MAX_COLLECTION_ITEMS = 300
+
+
+def _cards_by_task():
+    """所有链条里已经抽过的证据卡：task_id → 文件路径（挑卡片最多的那份）。"""
+    import glob as _glob
+    best = {}
+    for f in _glob.glob(os.path.join(CHAINS_DIR, '*', 'cards_*.json')):
+        try:
+            with open(f, 'r', encoding='utf-8') as fh:
+                d = json.load(fh)
+        except Exception:  # noqa: BLE001
+            continue
+        tid, n = d.get('task_id'), len(d.get('cards') or [])
+        if tid and n and n > best.get(tid, ('', 0))[1]:
+            best[tid] = (f, n)
+    return {k: v[0] for k, v in best.items()}
+
+
+def _collection_video(task_id, i):
+    meta = {}
+    try:
+        with open(os.path.join(config.RESULTS_FOLDER, task_id, 'meta.json'), 'r', encoding='utf-8') as f:
+            meta = json.load(f)
+    except Exception:  # noqa: BLE001
+        pass
+    return {'index': i, 'title': meta.get('ai_title') or meta.get('filename') or task_id,
+            'task_id': task_id, 'status': 'done', 'source': 'collection',
+            'video_url': meta.get('source_url') or '', 'video_id': meta.get('video_id') or '',
+            'upload_date': (meta.get('upload_date') or '').replace('-', '')[:8],
+            'creator': meta.get('creator') or ''}
+
+
+def _build_collection(state):
+    with usage.scope(ref=state['id'], chain=state['id']):
+        return _build_collection_inner(state)
+
+
+def _build_collection_inner(state):
+    import ask
+    from analyze import analyze_episode, synthesize_collection
+    cid = state['id']
+    cdir = _chain_dir(cid)
+    lock = threading.Lock()
+    try:
+        state['stage'] = 'analyzing'
+        state['analyzed_done'] = 0
+        state.pop('error', None)
+        _save_chain(state)
+        have = _cards_file_index(cdir)          # 这个合集自己已经有的
+        elsewhere = _cards_by_task()            # 别的博主 / 合集里抽过的
+        vids = [v for v in state['videos'] if v.get('task_id')]
+        fresh = [0]
+
+        def one(v):
+            try:
+                tid = v['task_id']
+                if tid in have:
+                    with open(have[tid], 'r', encoding='utf-8') as f:
+                        return json.load(f)
+                src = elsewhere.get(tid)
+                if src:                          # 复用：原样拷一份过来，不花钱
+                    with open(src, 'r', encoding='utf-8') as f:
+                        ep = json.load(f)
+                else:
+                    bad = _unusable_transcript(tid)
+                    if bad:
+                        from analyze import unusable_episode
+                        return unusable_episode(v['title'], bad)
+                    segs = _review_episode_transcript(tid, preset=state.get('analysis_preset'))
+                    if not segs:
+                        return None
+                    text = '\n'.join(f"[{s.get('timestamp', '')}] {s.get('text', '')}" for s in segs)
+                    fresh[0] += 1
+                    with _chain_analysis_sem:
+                        ep = analyze_episode(v['title'], text, v.get('creator') or state['author'],
+                                             preset=state.get('analysis_preset'), segments=segs,
+                                             duration=_task_duration(tid))
+                    ep['task_id'] = tid
+                with lock:
+                    path = _cards_path_for(cdir, v['index'], tid, have)
+                    with open(path, 'w', encoding='utf-8') as f:
+                        json.dump(ep, f, ensure_ascii=False)
+                return ep
+            except Exception as e:  # noqa: BLE001  单条失败不拖垮整个合集
+                print(f'[collection {cid[:8]}] {v.get("task_id")}: {e}')
+                return None
+            finally:
+                with lock:
+                    state['analyzed_done'] = state.get('analyzed_done', 0) + 1
+                    _save_chain(state)
+
+        with ThreadPoolExecutor(max_workers=config.CHAIN_ANALYSIS_CONCURRENCY) as pool:
+            episodes = [e for e in pool.map(usage.bound(one), vids) if e]
+        state['analyzed_ok'] = sum(1 for e in episodes if e.get('cards'))
+        state['reused'] = len(vids) - fresh[0]
+        if episodes and state.get('analyzed_ok'):
+            state['stage'] = 'synthesizing'
+            _save_chain(state)
+            _annotate_speakers(cdir, episodes)
+            md = synthesize_collection(episodes, state['author'], kind=state.get('collection_kind', 'mixed'),
+                                       preset=state.get('analysis_preset'), lang=state.get('lang', 'auto'))
+            with open(os.path.join(cdir, '总分析.md'), 'w', encoding='utf-8') as f:
+                f.write(md)
+            state['final_doc'] = '总分析.md'
+            _auto_tag(cdir)
+        state['stage'] = 'done'
+    except Exception as e:  # noqa: BLE001
+        state['stage'] = 'failed'
+        state['error'] = str(e)
+    finally:
+        state['finished_at'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        _save_chain(state)
+
+
+def _collection_members(body):
+    """请求里的成员：task_ids + 整个博主（chain_ids，展开成它已转写的每一期）。去重保序。"""
+    tids = [t for t in (body.get('task_ids') or []) if isinstance(t, str)]
+    for ch in body.get('chain_ids') or []:
+        if not _CHAIN_ID_RE.match(str(ch)):
+            continue
+        try:
+            with open(os.path.join(_chain_dir(ch), 'chain.json'), 'r', encoding='utf-8') as f:
+                st = json.load(f)
+        except Exception:  # noqa: BLE001
+            continue
+        tids += [v['task_id'] for v in st.get('videos') or [] if v.get('task_id') and v.get('status') == 'done']
+    seen, out = set(), []
+    for t in tids:
+        if t not in seen and os.path.isfile(os.path.join(config.RESULTS_FOLDER, t, 'transcript.json')):
+            seen.add(t)
+            out.append(t)
+    return out
+
+
+@app.route('/api/collections', methods=['POST'])
+def api_collection_create():
+    """body: {name, kind, task_ids?, chain_ids?}"""
+    body = request.get_json(silent=True) or {}
+    name = str(body.get('name') or '').strip()[:60]
+    kind = body.get('kind') if body.get('kind') in COLLECTION_KINDS else 'mixed'
+    if not name:
+        return jsonify({'error': 'Name the collection'}), 400
+    tids = _collection_members(body)
+    if not tids:
+        return jsonify({'error': 'Pick at least one transcript'}), 400
+    if len(tids) > _MAX_COLLECTION_ITEMS:
+        return jsonify({'error': f'At most {_MAX_COLLECTION_ITEMS} items per collection'}), 400
+    cid = uuid.uuid4().hex
+    os.makedirs(_chain_dir(cid), exist_ok=True)
+    state = {'id': cid, 'kind': 'collection', 'collection_kind': kind, 'url': '', 'author': name,
+             'engine': '', 'analyze': True, 'analysis_preset': body.get('analysis_preset') or 'gemini',
+             'lang': body.get('lang') or 'auto', 'stage': 'analyzing',
+             'created_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+             'videos': [_collection_video(t, i) for i, t in enumerate(tids)],
+             'download_total': len(tids), 'download_done': len(tids)}
+    _save_chain(state)
+    threading.Thread(target=_build_collection, args=(state,), daemon=True).start()
+    return jsonify({'ok': True, 'id': cid, 'items': len(tids)})
+
+
+@app.route('/api/collections/<cid>/add', methods=['POST'])
+def api_collection_add(cid):
+    """往合集里加内容（再跑一遍：已有的卡直接复用，只抽新加的）。"""
+    if not _chain_ok(cid):
+        return jsonify({'error': 'Not found'}), 404
+    with open(os.path.join(_chain_dir(cid), 'chain.json'), 'r', encoding='utf-8') as f:
+        state = json.load(f)
+    if state.get('kind') != 'collection':
+        return jsonify({'error': 'Not a collection'}), 400
+    if state.get('stage') not in ('done', 'failed', 'cancelled'):
+        return jsonify({'error': 'Still building'}), 409
+    have = {v['task_id'] for v in state['videos']}
+    new = [t for t in _collection_members(request.get_json(silent=True) or {}) if t not in have]
+    if len(have) + len(new) > _MAX_COLLECTION_ITEMS:
+        return jsonify({'error': f'At most {_MAX_COLLECTION_ITEMS} items per collection'}), 400
+    state['videos'] += [_collection_video(t, len(state['videos']) + i) for i, t in enumerate(new)]
+    state['download_total'] = state['download_done'] = len(state['videos'])
+    state['stage'] = 'analyzing'
+    _save_chain(state)
+    threading.Thread(target=_build_collection, args=(state,), daemon=True).start()
+    return jsonify({'ok': True, 'added': len(new)})
+
+
+@app.route('/api/transcripts/pick')
+def api_transcripts_pick():
+    """建合集时挑转写：标题 / 博主 / 时长 / 日期 / 有没有说话人，按新到旧，支持 ?q= 搜索。"""
+    import glob as _glob
+    q = (request.args.get('q') or '').strip().lower()
+    rows = []
+    for mp in _glob.glob(os.path.join(config.RESULTS_FOLDER, '*', 'meta.json')):
+        tid = os.path.basename(os.path.dirname(mp))
+        try:
+            with open(mp, 'r', encoding='utf-8') as f:
+                m = json.load(f)
+        except Exception:  # noqa: BLE001
+            continue
+        title = m.get('ai_title') or m.get('filename') or tid
+        creator = m.get('creator') or ''
+        if q and q not in (title + ' ' + creator + ' ' + (m.get('filename') or '')).lower():
+            continue
+        rows.append({'task_id': tid, 'title': title, 'creator': creator, 'date': (m.get('date') or '')[:10],
+                     'minutes': round((m.get('duration_seconds') or 0) / 60), 'engine': m.get('engine') or ''})
+    rows.sort(key=lambda r: r['date'], reverse=True)
+    return Response(json.dumps({'items': rows[:400], 'total': len(rows)}, ensure_ascii=False),
+                    mimetype='application/json')
+
+
+def _analysed_chain_dirs(include_hidden=False):
+    """有证据卡的博主 / 合集目录（按 URL 去重：同一个频道跑过几次只取卡最多的那条）。"""
+    import glob as _glob
+    hidden = set(_chain_prefs().get('hidden') or [])
+    best = {}
+    for d in _glob.glob(os.path.join(CHAINS_DIR, '*')):
+        name = os.path.basename(d)
+        if not _CHAIN_ID_RE.match(name) or (name in hidden and not include_hidden):
+            continue
+        n = len(_glob.glob(os.path.join(d, 'cards_*.json')))
+        if not n:
+            continue
+        try:
+            with open(os.path.join(d, 'chain.json'), 'r', encoding='utf-8') as f:
+                st = json.load(f)
+        except Exception:  # noqa: BLE001
+            continue
+        if st.get('kind') == 'collection':              # 合集的卡是从博主那借来的，放进来会重复计数
+            continue
+        key = st.get('url') or name
+        if key not in best or n > best[key][1]:
+            best[key] = (d, n)
+    return [v[0] for v in best.values()]
+
+
+@app.route('/api/radar', methods=['POST'])
+def api_radar():
+    """话题雷达：一个话题，所有分析过的博主 / 合集谁谈得多、看好还是看空、前后变没变。"""
+    q = str((request.get_json(silent=True) or {}).get('query') or '').strip()
+    if not q:
+        return jsonify({'error': 'Empty topic'}), 400
+    import ask
+    try:
+        with usage.scope(ref='radar'):
+            r = ask.radar(_analysed_chain_dirs(), q)
+    except Exception as e:  # noqa: BLE001
+        return jsonify({'error': str(e)[:300]}), 502
+    return Response(json.dumps(r, ensure_ascii=False), mimetype='application/json')
+
+
+@app.route('/api/leaderboard')
+def api_leaderboard():
+    import ask
+    return Response(json.dumps(ask.leaderboard(_analysed_chain_dirs()), ensure_ascii=False),
+                    mimetype='application/json')
+
+
+# ===== 原话的音频片段：本地还留着音频就直接切；没有就只下载原视频的那一小段 =====
+_CLIP_DIR = os.path.join(config.RESULTS_FOLDER, '_clips')
+_UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+_clip_locks = {}
+
+
+def _local_audio(task_id):
+    import glob as _glob
+    row = taskdb.get(task_id) or {}
+    up = row.get('upload_path') or ''
+    if up and os.path.isfile(up):
+        return up
+    hits = _glob.glob(os.path.join(config.UPLOAD_FOLDER, task_id + '.*'))
+    return hits[0] if hits else ''
+
+
+def _make_clip(task_id, start, dur):
+    os.makedirs(_CLIP_DIR, exist_ok=True)
+    out = os.path.join(_CLIP_DIR, f'{task_id}_{start}_{dur}.m4a')
+    if os.path.isfile(out) and os.path.getsize(out) > 1000:
+        return out
+    src = _local_audio(task_id)
+    tmpdir = None
+    if not src:
+        meta = {}
+        try:
+            with open(os.path.join(config.RESULTS_FOLDER, task_id, 'meta.json'), 'r', encoding='utf-8') as f:
+                meta = json.load(f)
+        except Exception:  # noqa: BLE001
+            pass
+        url = meta.get('source_url')
+        if not url:
+            raise RuntimeError('No audio kept for this transcript and no source link to fetch it from')
+        from downloader import download_one
+        import tempfile
+        tmpdir = tempfile.mkdtemp(prefix='clip_', dir=_CLIP_DIR)
+        got = download_one({'video_url': url, 'title': task_id, 'video_id': meta.get('video_id', '')},
+                           tmpdir, section=f'*{start}-{start + dur}')
+        if not got:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+            raise RuntimeError('Could not download that part of the video')
+        src, offset = got['path'], 0
+    else:
+        offset = start
+    try:
+        cmd = ['ffmpeg', '-y', '-loglevel', 'error', '-ss', str(offset), '-i', src, '-t', str(dur),
+               '-vn', '-ac', '1', '-c:a', 'aac', '-b:a', '96k', out]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        if r.returncode != 0 or not os.path.isfile(out):
+            raise RuntimeError('ffmpeg failed: ' + (r.stderr or '')[-200:])
+    finally:
+        if tmpdir:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+    return out
+
+
+@app.route('/api/clip')
+def api_clip():
+    """一句原话的音频片段。?task_id&start=秒&dur=秒[&dl=1 下载]。结果缓存在 results/_clips/。"""
+    tid = request.args.get('task_id') or ''
+    if not _UUID_RE.match(tid):
+        return jsonify({'error': 'Invalid task id'}), 400
+    try:
+        start = max(0, int(float(request.args.get('start') or 0)))
+        dur = min(90, max(3, int(float(request.args.get('dur') or 20))))
+    except ValueError:
+        return jsonify({'error': 'Invalid time'}), 400
+    key = (tid, start, dur)
+    lock = _clip_locks.setdefault(key, threading.Lock())
+    try:
+        with lock:
+            path = _make_clip(tid, start, dur)
+    except Exception as e:  # noqa: BLE001
+        return jsonify({'error': str(e)[:300]}), 502
+    name = f"{_transcript_title(tid)[:40]}_{start // 60:02d}m{start % 60:02d}s.m4a"
+    return send_file(path, mimetype='audio/mp4', as_attachment=request.args.get('dl') == '1',
+                     download_name=re.sub(r'[\\/:*?"<>|]', '_', name), conditional=True)
+
+
+@app.route('/api/export/docx', methods=['POST'])
+def api_export_docx():
+    """把带出处的 Markdown（回答 / 对比 / 立场 / 预测）转成 Word。"""
+    body = request.get_json(silent=True) or {}
+    md = str(body.get('markdown') or '')
+    if not md.strip():
+        return jsonify({'error': 'Nothing to export'}), 400
+    from exporter import markdown_to_docx
+    title = str(body.get('title') or 'Verbatim')[:80]
+    data = markdown_to_docx(md, title)
+    return Response(data, mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                    headers={'Content-Disposition': "attachment; filename*=UTF-8''" +
+                             __import__('urllib.parse').parse.quote(re.sub(r'[\\/:*?"<>|]', '_', title) + '.docx')})
+
+
+_CHAIN_PREFS = os.path.join(CHAINS_DIR, '_prefs.json')
+
+
+def _chain_prefs():
+    try:
+        with open(_CHAIN_PREFS, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+@app.route('/api/chains/hidden', methods=['POST'])
+def api_chains_hidden():
+    """博主列表里「隐藏」一条（测试跑的、不想看见的）。只记名单，数据一个字不动，随时可恢复。"""
+    body = request.get_json(silent=True) or {}
+    cid = body.get('id') or ''
+    if not _CHAIN_ID_RE.match(cid):
+        return jsonify({'error': 'Invalid chain id'}), 400
+    prefs = _chain_prefs()
+    hidden = set(prefs.get('hidden') or [])
+    (hidden.add if body.get('hidden', True) else hidden.discard)(cid)
+    prefs['hidden'] = sorted(hidden)
+    tmp = _CHAIN_PREFS + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(prefs, f, ensure_ascii=False, indent=1)
+    os.replace(tmp, _CHAIN_PREFS)
+    return jsonify({'ok': True})
+
+
+_has_cards_cache = {}
+
+
+def _cards_file_has_cards(path):
+    """这份卡片文件里真有卡吗（抽卡失败的期也会留一个空壳文件）。按修改时间缓存。"""
+    try:
+        mt = os.path.getmtime(path)
+    except OSError:
+        return False
+    hit = _has_cards_cache.get(path)
+    if hit and hit[0] == mt:
+        return hit[1]
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            ok = bool((json.load(f) or {}).get('cards'))
+    except Exception:  # noqa: BLE001
+        ok = False
+    _has_cards_cache[path] = (mt, ok)
+    return ok
+
+
 @app.route('/api/chains')
 def api_chains():
+    hidden = set(_chain_prefs().get('hidden') or [])
     entries = []
     if os.path.isdir(CHAINS_DIR):
         for name in os.listdir(CHAINS_DIR):
@@ -3153,6 +3752,18 @@ def api_chains():
                     with open(cpath, 'r', encoding='utf-8') as f:
                         state = json.load(f)
                     _ensure_raw_doc(state)      # 老链条按需补『合并原文.md』
+                    cdir = os.path.join(CHAINS_DIR, name)
+                    # 有没有证据卡（跨博主对比只列有卡的）+ 订阅状态（卡片上的「有更新」小点）
+                    names = os.listdir(cdir)
+                    # 有卡 = 至少一份卡片文件里真有卡（抽卡失败的期也会留一个空文件）
+                    state['has_cards'] = any(f.startswith('cards_') and _cards_file_has_cards(os.path.join(cdir, f))
+                                             for f in names)
+                    state['has_tags'] = 'tags.json' in names
+                    state['hidden'] = name in hidden
+                    sub = _read_sub(name)
+                    state['sub_on'] = bool(sub.get('on'))
+                    state['sub_new'] = bool((sub.get('digest') or {}).get('new_videos')
+                                            and not (sub.get('digest') or {}).get('seen'))
                     entries.append(state)
                 except Exception:
                     pass
@@ -3249,6 +3860,13 @@ def api_chain_detail(chain_id):
             p = _task_progress.get(tid)
             if p is not None:
                 v['progress'] = p
+    # 标题只是视频号（BV1xxxx，老链条抓列表时拿不到标题）的，换成那期转写的 AI 标题
+    for v in data.get('videos', []):
+        if v.get('task_id') and v.get('status') == 'done' \
+                and re.fullmatch(r'(BV[0-9A-Za-z]{10}|[A-Za-z0-9_-]{11})', v.get('title') or ''):
+            t = _transcript_title(v['task_id'])
+            if t and t != v['task_id']:
+                v['title'] = t
     data['cost'] = usage.cost_for(chain=chain_id)
     return jsonify(data)
 
@@ -3280,6 +3898,80 @@ def api_chain_reanalyze(chain_id):
     return jsonify({'ok': True})
 
 
+def _auto_tag(chain_dir):
+    """分析跑完顺手给卡片打话题标签——只在便宜的时候：新抽的卡自带原始话题（只需映射），
+    或者没标过的老卡不超过一千张（约 7 美分）。更大的老链由用户在博主页手动点。"""
+    try:
+        import ask
+        raw = ask._raw_cards(chain_dir)
+        tags = ask._read_json(os.path.join(chain_dir, 'tags.json'), {}) or {}
+        done = tags.get('cards') or {}
+        old_untagged = sum(1 for k, c in raw.items() if not c.get('topic') and k not in done)
+        if old_untagged <= 1000:
+            ask.tag_chain(chain_dir)
+        ask.embed_chain(chain_dir)          # 新卡补向量（按意思检索用），每千张约 2 美分
+        ask.build_speakers(chain_dir)       # 带说话人的转写：每张卡标上是谁说的（多人的期让便宜模型认角色）
+    except Exception as e:  # noqa: BLE001  标签是锦上添花，失败不影响链条
+        print(f'[chain] auto-tag skipped: {e}')
+
+
+def _annotate_speakers(chain_dir, episodes):
+    """写画像 / 综述之前先认说话人，并把「谁说的」挂到卡片上——不然画像会把连麦嘉宾的话算到博主头上。"""
+    try:
+        import ask
+        ask.build_speakers(chain_dir)
+        corpus = ask.load(chain_dir)
+        who = {}
+        for c in corpus['cards']:
+            if c.get('speaker'):
+                who[(corpus['episodes'][c['ep']]['task_id'], c['quote'])] = c['speaker']
+        if not who:
+            return
+        for ep in episodes:
+            for c in ep.get('cards') or []:
+                sp = who.get((ep.get('task_id'), str(c.get('quote') or '').strip()))
+                if sp:
+                    c['speaker'] = sp
+    except Exception as e:  # noqa: BLE001  认不出来就按没有说话人处理
+        print(f'[speakers] {chain_dir}: {e}')
+
+
+def _cards_file_index(chain_dir):
+    """task_id → 这期证据卡所在的文件。一轮分析开始时建一次，写新文件后调用方自己补进去。"""
+    import glob as _glob
+    out = {}
+    for f in _glob.glob(os.path.join(chain_dir, 'cards_*.json')):
+        try:
+            with open(f, 'r', encoding='utf-8') as fh:
+                tid = (json.load(fh) or {}).get('task_id')
+        except Exception:  # noqa: BLE001
+            continue
+        if tid:
+            out.setdefault(tid, f)
+    return out
+
+
+def _cards_path_for(chain_dir, index, task_id, file_index):
+    """这一期证据卡该写到哪个文件。
+
+    这期以前写过 → 还写回原文件（卡片 id = 文件编号-下标，聊天记录里的引用靠它）。
+    没写过 → 默认 cards_<期号>.json；但博主发了新视频后频道列表整体后移，同一个期号
+    可能已经是**另一期**的卡——直接覆盖就把那期的卡弄丢了、下次还得花钱重抽，
+    而且挨个往后连锁覆盖。这时改用一个没占用的新编号。
+    file_index：_cards_file_index() 的结果，本函数会把新分配的文件登记进去。
+    """
+    if task_id in file_index:
+        return file_index[task_id]
+    taken = set(file_index.values())
+    want = os.path.join(chain_dir, f"cards_{index + 1:03d}.json")
+    if want in taken:
+        nums = [int(m.group(1)) for f in taken
+                for m in [re.match(r'cards_(\d+)\.json$', os.path.basename(f))] if m]
+        want = os.path.join(chain_dir, f"cards_{max(nums + [index + 1]) + 1:03d}.json")
+    file_index[task_id] = want
+    return want
+
+
 def _load_chain_cards(chain_id):
     """从链条目录读回所有证据卡 → episodes 列表（镜头/重合成共用）。"""
     import glob
@@ -3295,19 +3987,6 @@ def _load_chain_cards(chain_id):
     return eps
 
 
-_BARE_VIDEO_ID = re.compile(r'^[A-Za-z0-9_-]{8,20}$')
-
-
-def _card_layer(layer):
-    """模型偶尔写走样（「他的主主張」），归回三档：claim / transcript / verified。"""
-    s = str(layer or '')
-    if '自证' in s:
-        return 'transcript'
-    if '核实' in s:
-        return 'verified'
-    return 'claim'
-
-
 @app.route('/api/chain/<chain_id>/cards')
 def api_chain_cards(chain_id):
     """博主页的「证据卡」墙：把逐期抽过的卡片摊平成一个列表，每张带上出处
@@ -3319,29 +3998,15 @@ def api_chain_cards(chain_id):
         return jsonify({'error': 'Not found'}), 404
     # 期信息单列一份，卡片只记期的下标：一条 160 期的链有上万张卡，每张都带一遍
     # 期名的话光重复标题就几 MB；中文也按 UTF-8 原样输出（jsonify 默认转 \uXXXX，体积×2）
-    cards = []
-    episodes = []
-    for ep in _load_chain_cards(chain_id):
-        title = (ep.get('title') or '').strip()
-        # 有的链抽卡时标题还只是视频号（BV1y1T169ELG），换成那期转写的标题
-        if ep.get('task_id') and (not title or _BARE_VIDEO_ID.match(title)):
-            title = _transcript_title(ep['task_id'])
-        idx = len(episodes)
-        n = 0
-        for c in ep.get('cards') or []:
-            if not isinstance(c, dict):
-                continue
-            quote = str(c.get('quote') or '').strip()
-            obs = str(c.get('obs') or '').strip()
-            if not quote and not obs:
-                continue
-            cards.append({'obs': obs, 'quote': quote,
-                          'timestamp': str(c.get('timestamp') or '').strip('[] '),
-                          'layer': _card_layer(c.get('layer')), 'ep': idx})
-            n += 1
-        if n:
-            episodes.append({'title': title, 'task_id': ep.get('task_id') or ''})
-    return Response(json.dumps({'episodes': episodes, 'cards': cards}, ensure_ascii=False),
+    import ask
+    corpus = ask.load(_chain_dir(chain_id))
+    episodes = [{'title': e['title'], 'task_id': e['task_id'], 'date': e['date'],
+                 'video_url': e['video_url']} for e in corpus['episodes']]
+    cards = [{'id': c['id'], 'obs': c['obs'], 'quote': c['quote'], 'timestamp': c['ts'],
+              'layer': c['layer'], 'ep': c['ep'], 'topic': c['topic'], 'stance': c['stance'],
+              'pred': c['pred'], 'speaker': c.get('speaker', '')} for c in corpus['cards']]
+    return Response(json.dumps({'episodes': episodes, 'cards': cards, 'author': corpus['author'],
+                                'rhetoric': ask.rhetoric(corpus)}, ensure_ascii=False),
                     mimetype='application/json')
 
 
@@ -3407,6 +4072,449 @@ def api_chain_lens_get(chain_id, lens):
     return jsonify({'ready': False, 'status': st or 'idle'})
 
 
+# ===== 问证据卡 / 话题时间线 / 预测记账 / 跨博主对比 / 订阅（逻辑在 ask.py）=====
+# 模型调用都记到这条链上（usage.scope chain=…），博主页的 Cost 会一起算。
+
+_card_jobs = {}   # (chain_id, kind) -> {'status': running|done|error, 'done', 'total', 'error', 'result'}
+
+
+def _chain_ok(chain_id):
+    return bool(_CHAIN_ID_RE.match(chain_id or '')) and \
+        os.path.isfile(os.path.join(_chain_dir(chain_id), 'chain.json'))
+
+
+def _start_card_job(chain_id, kind, fn):
+    """后台跑一个卡片相关的活（打标签 / 核对预测 / 补日期），同一条链同一种只跑一个。"""
+    key = (chain_id, kind)
+    if (_card_jobs.get(key) or {}).get('status') == 'running':
+        return False
+    job = {'status': 'running', 'done': 0, 'total': 0, 'error': '', 'started': time.time()}
+    _card_jobs[key] = job
+
+    def progress(done, total):
+        job['done'], job['total'] = done, total
+
+    def run():
+        try:
+            with usage.scope(ref=chain_id, chain=chain_id):
+                job['result'] = fn(progress)
+            job['status'] = 'done'
+        except Exception as e:  # noqa: BLE001
+            job['status'] = 'error'
+            job['error'] = str(e)[:300]
+    threading.Thread(target=run, daemon=True).start()
+    return True
+
+
+def _job_view(chain_id, kind):
+    j = _card_jobs.get((chain_id, kind))
+    if not j:
+        return None
+    return {k: j.get(k) for k in ('status', 'done', 'total', 'error', 'result')}
+
+
+@app.route('/api/chain/<chain_id>/ask', methods=['GET'])
+def api_chain_ask_history(chain_id):
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    import ask
+    return Response(json.dumps({'messages': ask.load_history(_chain_dir(chain_id))},
+                               ensure_ascii=False), mimetype='application/json')
+
+
+@app.route('/api/chain/<chain_id>/ask', methods=['POST'])
+def api_chain_ask(chain_id):
+    """问一个问题：只凭证据卡回答、每句带出处。body: {question, mode: about|as, topic?}"""
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    import ask
+    body = request.get_json(silent=True) or {}
+    q = str(body.get('question') or '').strip()
+    if not q:
+        return jsonify({'error': 'Empty question'}), 400
+    if len(q) > 2000:
+        return jsonify({'error': 'Question too long (max 2000 characters)'}), 400
+    mode = body.get('mode') if body.get('mode') in ('about', 'as') else 'about'
+    topic = str(body.get('topic') or '').strip() or None
+    cdir = _chain_dir(chain_id)
+    history = [] if body.get('ephemeral') else ask.load_history(cdir)
+    try:
+        ref = f'ask:{uuid.uuid4().hex[:12]}'      # 单独一个 ref 才数得出这一问花了多少
+        with usage.scope(ref=ref, chain=chain_id):
+            r = ask.answer(cdir, q, mode=mode, history=history, topic=topic,
+                           ui_lang=body.get('ui_lang'))
+        r['cost_usd'] = (usage.cost_for(ref=ref) or {}).get('cost_usd', 0)
+    except Exception as e:  # noqa: BLE001
+        return jsonify({'error': str(e)[:300]}), 502
+    at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    if body.get('ephemeral'):                  # MCP / 脚本来问：不写进网页上的聊天记录
+        r['cost_usd'] = r.get('cost_usd')
+        return Response(json.dumps({'ok': True, 'message': {'role': 'assistant', 'content': r['answer'],
+                                    'citations': r['citations'], 'coverage': r['coverage'],
+                                    'cost_usd': r['cost_usd']}}, ensure_ascii=False),
+                        mimetype='application/json')
+    user_msg = {'role': 'user', 'content': q, 'mode': mode, 'topic': topic, 'at': at}
+    bot_msg = {'role': 'assistant', 'content': r['answer'], 'mode': mode, 'topic': topic,
+               'citations': r['citations'], 'coverage': r['coverage'],
+               'dropped_citations': r['dropped_citations'], 'dropped_ids': r.get('dropped_ids'),
+               'cost_usd': r['cost_usd'], 'at': at}
+    ask.append_history(cdir, user_msg, bot_msg)
+    return Response(json.dumps({'ok': True, 'message': bot_msg}, ensure_ascii=False),
+                    mimetype='application/json')
+
+
+@app.route('/api/chain/<chain_id>/ask', methods=['DELETE'])
+def api_chain_ask_clear(chain_id):
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    import ask
+    ask.clear_history(_chain_dir(chain_id))
+    return jsonify({'ok': True})
+
+
+@app.route('/api/chain/<chain_id>/ask/starters')
+def api_chain_ask_starters(chain_id):
+    """开场问题（画像里出，中英一次生成并缓存）。演示实例只读缓存，不现生成。"""
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    import ask
+    lang = 'zh' if request.args.get('lang') == 'zh' else 'en'
+    cdir = _chain_dir(chain_id)
+    if DEMO_MODE:
+        cache = ask._read_json(os.path.join(cdir, 'chat_starters.json'), {}) or {}
+        return jsonify({'starters': cache.get(lang) or []})
+    with usage.scope(ref=chain_id, chain=chain_id):
+        return jsonify({'starters': ask.starters(cdir, lang)})
+
+
+@app.route('/api/chain/<chain_id>/topics')
+def api_chain_topics(chain_id):
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    import ask
+    cdir = _chain_dir(chain_id)
+    out = ask.topics(cdir, topic=request.args.get('topic'))
+    out['job'] = _job_view(chain_id, 'tag')
+    out['dates_job'] = _job_view(chain_id, 'dates')
+    if not out['tagged']:
+        out['status'] = ask.tag_status(cdir)
+    return Response(json.dumps(out, ensure_ascii=False), mimetype='application/json')
+
+
+@app.route('/api/chain/<chain_id>/tag', methods=['POST'])
+def api_chain_tag(chain_id):
+    """给卡片补话题/立场/预测（后台，每千张卡约 7 美分）。body: {rebuild: bool}"""
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    import ask
+    rebuild = bool((request.get_json(silent=True) or {}).get('rebuild'))
+    cdir = _chain_dir(chain_id)
+    started = _start_card_job(chain_id, 'tag',
+                              lambda p: ask.tag_chain(cdir, progress=p, rebuild=rebuild))
+    return jsonify({'ok': True, 'started': started})
+
+
+_bili_api_lock = threading.Lock()
+
+
+def _backfill_dates(chain_id, progress):
+    """老链条补上架日期。B 站走投稿列表接口一次拿全；YouTube 逐个问 yt-dlp（不下载），每个之间停 1.5 秒。"""
+    from downloader import fetch_upload_date
+    cpath = os.path.join(_chain_dir(chain_id), 'chain.json')
+    with open(cpath, 'r', encoding='utf-8') as f:
+        state = json.load(f)
+    todo = [v for v in state.get('videos') or []
+            if v.get('task_id') and v.get('video_url') and not v.get('upload_date')]
+    got = {}
+    # B站 UP 主空间：签名投稿列表接口一页 30 条、自带发布时间，几页就拿全——
+    # 比逐个视频问 yt-dlp（几百次请求，容易触发 412 被封 IP）温和得多
+    from downloader import _bili_mid, bili_space_dates
+    mid = _bili_mid(state.get('url') or '', None) if 'bilibili.com' in (state.get('url') or '') else ''
+    if mid and todo:
+        progress(0, len(todo))
+        # 同一时间只让一条链打 B 站接口：几条一起打会被风控，直接回一张 HTML 拦截页
+        with _bili_api_lock:
+            by_id = bili_space_dates(mid)
+        for v in todo:
+            if by_id.get(v.get('video_id')):
+                got[v['video_url']] = by_id[v['video_id']]
+        todo = [v for v in todo if v['video_url'] not in got]
+        if len(todo) > 20:          # 接口拿不到的（被删/隐藏的视频）只补少量，别逐个敲 B 站
+            todo = []
+
+    def flush():
+        # 重读再写：跑的这几分钟里链条可能被别的操作改过
+        with open(cpath, 'r', encoding='utf-8') as f:
+            cur = json.load(f)
+        if cur.get('stage') in ('downloading', 'transcribing', 'analyzing', 'synthesizing'):
+            raise RuntimeError('Pipeline started running — try again after it finishes')
+        for v in cur.get('videos') or []:
+            if v.get('video_url') in got and not v.get('upload_date'):
+                v['upload_date'] = got[v['video_url']]
+        _save_chain(cur)
+
+    fails = 0
+    for i, v in enumerate(todo):
+        d = fetch_upload_date(v['video_url'])
+        if d:
+            got[v['video_url']] = d
+            fails = 0
+        else:
+            fails += 1
+            if fails >= 5:              # 连着 5 个都拿不到：多半被风控了，停手
+                break
+        progress(i + 1, len(todo))
+        if (i + 1) % 20 == 0 and got:   # 边补边存：中途停了也不白跑
+            flush()
+        time.sleep(1.5)
+    if got:
+        flush()
+    return {'filled': len(got), 'asked': len(todo)}
+
+
+@app.route('/api/chain/<chain_id>/dates', methods=['POST'])
+def api_chain_dates(chain_id):
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    with open(os.path.join(_chain_dir(chain_id), 'chain.json'), 'r', encoding='utf-8') as f:
+        if json.load(f).get('stage') in ('downloading', 'transcribing', 'analyzing', 'synthesizing'):
+            return jsonify({'error': 'This pipeline is still running'}), 409
+    started = _start_card_job(chain_id, 'dates', lambda p: _backfill_dates(chain_id, p))
+    return jsonify({'ok': True, 'started': started})
+
+
+@app.route('/api/chain/<chain_id>/predictions')
+def api_chain_predictions(chain_id):
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    import ask
+    out = ask.predictions(_chain_dir(chain_id))
+    out['job'] = _job_view(chain_id, 'predict')
+    return Response(json.dumps(out, ensure_ascii=False), mimetype='application/json')
+
+
+@app.route('/api/chain/<chain_id>/predictions/check', methods=['POST'])
+def api_chain_predictions_check(chain_id):
+    """联网核对他的预测（Google 搜索 grounding）。默认只核没核过的和上次还没到期的。"""
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    import ask
+    body = request.get_json(silent=True) or {}
+    ids = body.get('ids') if isinstance(body.get('ids'), list) else None
+    recheck = bool(body.get('recheck'))
+    cdir = _chain_dir(chain_id)
+    started = _start_card_job(chain_id, 'predict', lambda p: ask.check_predictions(
+        cdir, ids=set(map(str, ids)) if ids else None, recheck=recheck, progress=p))
+    return jsonify({'ok': True, 'started': started})
+
+
+@app.route('/api/compare', methods=['POST'])
+def api_compare():
+    """跨博主：同一个问题，2~4 个博主的立场并排放，各自带原话。body: {chains: [id], question}"""
+    body = request.get_json(silent=True) or {}
+    ids = [c for c in (body.get('chains') or []) if isinstance(c, str)]
+    ids = list(dict.fromkeys(ids))
+    q = str(body.get('question') or '').strip()
+    if not q:
+        return jsonify({'error': 'Empty question'}), 400
+    if not 2 <= len(ids) <= 4 or not all(_chain_ok(c) for c in ids):
+        return jsonify({'error': 'Pick 2–4 creators'}), 400
+    import ask
+    try:
+        with usage.scope(ref='compare'):
+            r = ask.compare([_chain_dir(c) for c in ids], q)
+    except Exception as e:  # noqa: BLE001
+        return jsonify({'error': str(e)[:300]}), 502
+    for cr, cid in zip(r['creators'], ids):
+        cr['chain_id'] = cid
+    return Response(json.dumps(r, ensure_ascii=False), mimetype='application/json')
+
+
+# ---- 订阅：定时「Continue」，有新视频就增量抽卡，出一份「这次他说了什么新东西」----
+# 设置单独放 subscription.json：链条线程手里拿着整份 state，跑完会把 chain.json 整个写回，
+# 设置要是写在 chain.json 里，会被正在跑的链条悄悄冲掉。
+SUB_INTERVAL_H = float(os.environ.get('SUBSCRIPTION_INTERVAL_HOURS') or 168)   # 默认每周
+SUB_INTERVALS = (24, 168, 336, 720)          # 每天 / 每周 / 每两周 / 每月
+SYNC_PROBE_N = int(os.environ.get('SYNC_PROBE_N') or 30)   # 同步时只看频道最新这么多期
+_sub_runs = set()           # 由订阅触发的这一轮：没新视频就不重做画像（省下合成的钱）
+
+
+def _sub_path(chain_id):
+    return os.path.join(_chain_dir(chain_id), 'subscription.json')
+
+
+def _read_sub(chain_id):
+    try:
+        with open(_sub_path(chain_id), 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _write_sub(chain_id, sub):
+    tmp = _sub_path(chain_id) + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(sub, f, ensure_ascii=False, indent=1)
+    os.replace(tmp, _sub_path(chain_id))
+
+
+@app.route('/api/chain/<chain_id>/subscription', methods=['GET'])
+def api_chain_sub_get(chain_id):
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    sub = _read_sub(chain_id)
+    sub['interval_h'] = int(sub.get('interval_h') or SUB_INTERVAL_H)
+    sub['running'] = chain_id in _sub_runs
+    if sub.get('on'):
+        nxt = float(sub.get('last_run') or 0) + sub['interval_h'] * 3600
+        sub['next_run_at'] = datetime.fromtimestamp(max(nxt, time.time())).strftime('%Y-%m-%d %H:%M')
+    return Response(json.dumps(sub, ensure_ascii=False), mimetype='application/json')
+
+
+@app.route('/api/chain/<chain_id>/subscription', methods=['POST'])
+def api_chain_sub_set(chain_id):
+    """body: {on?: bool, keywords?: [str], seen?: true, run_now?: true}"""
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    body = request.get_json(silent=True) or {}
+    sub = _read_sub(chain_id)
+    if 'on' in body:
+        sub['on'] = bool(body['on'])
+        sub.setdefault('since', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+    if body.get('interval_h') is not None:
+        try:
+            iv = int(body['interval_h'])
+        except (TypeError, ValueError):
+            iv = 0
+        if iv in SUB_INTERVALS:
+            sub['interval_h'] = iv
+    if isinstance(body.get('keywords'), list):
+        sub['keywords'] = [str(k).strip()[:40] for k in body['keywords'] if str(k).strip()][:20]
+    if body.get('seen') and sub.get('digest'):
+        sub['digest']['seen'] = True
+    _write_sub(chain_id, sub)
+    if body.get('run_now'):
+        if chain_id in _sub_runs:
+            return jsonify({'ok': True, 'started': False})
+        threading.Thread(target=_subscription_run, args=(chain_id,), daemon=True).start()
+        return jsonify({'ok': True, 'started': True})
+    return jsonify({'ok': True})
+
+
+DIGEST_PROMPT = """The creator "{author}" published {n} new video(s) since the last check. Below are the evidence cards from them.
+Write a short update for a subscriber, in {lang}: what's new in what they said — main points first, anything that looks like a new position or a prediction, and anything touching the subscriber's keywords ({keywords}; say plainly if none came up).
+After every sentence, cite the supporting card ids exactly like [#3-12] — one id per bracket, several as [#3-12][#3-13]. Use only these cards. Report claims as their claims. 3–6 bullet points, no heading.
+
+Episodes:
+{episodes}
+
+Cards:
+{cards}"""
+
+
+def _subscription_run(chain_id):
+    """订阅的一轮：Continue（增量）→ 新视频的卡 → 一份更新摘要。"""
+    import ask
+    if chain_id in _sub_runs:
+        return
+    _sub_runs.add(chain_id)
+    sub = _read_sub(chain_id)
+    try:
+        cpath = os.path.join(_chain_dir(chain_id), 'chain.json')
+        with open(cpath, 'r', encoding='utf-8') as f:
+            state = json.load(f)
+        if state.get('stage') in ('downloading', 'transcribing', 'analyzing', 'synthesizing') \
+                or state.get('kind') == 'collection':
+            return
+        before = {v.get('task_id') for v in state.get('videos') or [] if v.get('task_id')}
+        _cancel_chains.discard(chain_id)
+        run_chain(state)            # 同步跑完：重新探测 → 只下/转/抽新的
+        with open(cpath, 'r', encoding='utf-8') as f:
+            state = json.load(f)
+        new_tids = [v['task_id'] for v in state.get('videos') or []
+                    if v.get('task_id') and v['task_id'] not in before and v.get('status') == 'done']
+        sub = _read_sub(chain_id)
+        sub['last_run'] = time.time()
+        sub['last_run_at'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        sub['last_error'] = state.get('error') if state.get('stage') == 'failed' else ''
+        sub['last_new'] = len(new_tids)
+        if new_tids:
+            cdir = _chain_dir(chain_id)
+            sub['digest'] = _subscription_digest(chain_id, new_tids, sub.get('keywords') or [])
+            if os.path.isfile(os.path.join(cdir, 'predictions.json')):
+                try:
+                    corpus = ask.load(cdir)
+                    ids = {c['id'] for c in corpus['cards']
+                           if c.get('pred') and corpus['episodes'][c['ep']]['task_id'] in set(new_tids)}
+                    if ids:
+                        with usage.scope(ref=chain_id, chain=chain_id):
+                            ask.check_predictions(cdir, ids=ids)
+                        sub['digest']['predictions_checked'] = len(ids)
+                except Exception as e:  # noqa: BLE001
+                    print(f'[subscription] predictions: {e}')
+        _write_sub(chain_id, sub)
+    except Exception as e:  # noqa: BLE001
+        sub = _read_sub(chain_id)
+        sub['last_run'] = time.time()
+        sub['last_error'] = str(e)[:300]
+        _write_sub(chain_id, sub)
+    finally:
+        _sub_runs.discard(chain_id)
+
+
+def _subscription_digest(chain_id, new_tids, keywords):
+    import ask
+    cdir = _chain_dir(chain_id)
+    corpus = ask.load(cdir)
+    eps = {i for i, e in enumerate(corpus['episodes']) if e['task_id'] in set(new_tids)}
+    cards = [c for c in corpus['cards'] if c['ep'] in eps]
+    kw = [k.lower() for k in keywords]
+    hits = [c['id'] for c in cards
+            if kw and any(k in (c['quote'] + ' ' + c['obs']).lower() for k in kw)]
+    out = {'at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'), 'seen': False,
+           'episodes': [{'title': corpus['episodes'][i]['title'],
+                         'task_id': corpus['episodes'][i]['task_id'],
+                         'date': corpus['episodes'][i]['date']} for i in sorted(eps)],
+           'new_videos': len(new_tids), 'cards': len(cards), 'keyword_hits': hits[:50],
+           'markdown': '', 'citations': {}}
+    if not cards:
+        return out
+    lang = 'Chinese' if ask._content_lang(corpus) == 'Chinese' else 'English'
+    try:
+        with usage.scope(ref=chain_id, chain=chain_id):
+            raw = ask._llm(DIGEST_PROMPT.format(
+                author=corpus['author'] or 'this creator', n=len(eps), lang=lang,
+                keywords=', '.join(keywords) or 'none',
+                episodes=ask._episode_lines(corpus, eps),
+                cards='\n'.join(ask._card_line(c, corpus) for c in cards[:400])), purpose='digest')
+        by_id = {c['id']: c for c in cards}
+        text, used, _ = ask.clean_citations(raw, set(by_id))
+        out['markdown'] = text.strip()
+        out['citations'] = {i: ask.card_view(by_id[i], corpus) for i in used}
+    except Exception as e:  # noqa: BLE001
+        out['error'] = str(e)[:200]
+    return out
+
+
+def _subscription_loop():
+    """每 15 分钟看一眼：到点的订阅挨个跑（一次一条，别一口气同时探测一堆频道）。"""
+    time.sleep(120)
+    while True:
+        try:
+            for d in sorted(os.listdir(CHAINS_DIR)):
+                if not _CHAIN_ID_RE.match(d):
+                    continue
+                sub = _read_sub(d)
+                if not sub.get('on'):
+                    continue
+                if time.time() - float(sub.get('last_run') or 0) < float(sub.get('interval_h') or SUB_INTERVAL_H) * 3600:
+                    continue
+                _subscription_run(d)
+        except Exception as e:  # noqa: BLE001
+            print(f'[subscription] {e}')
+        time.sleep(900)
+
+
 @app.route('/api/chain/<chain_id>/stop', methods=['POST'])
 def api_chain_stop(chain_id):
     """请求停止一条运行中的链条（协作式）：已完成的转写/分析保留，不再继续推进。"""
@@ -3445,7 +4553,25 @@ def api_chain_retry(chain_id):
         more = 0
     if more > 0:
         state['max_videos'] = min(max(more, state.get('max_videos') or 0), _MAX_CHAIN_VIDEOS)
+    # 新表单里对一个分析过的博主又挑了几期：并进原来的列表（原来的一期不少），只处理新挑的
+    picked = body.get('targets')
+    if isinstance(picked, list) and picked and state.get('kind') != 'collection':
+        have = {v.get('video_url') for v in state.get('videos') or []}
+        base = state.get('fixed_targets') or [
+            {k: v.get(k) for k in ('video_url', 'title', 'video_id', 'thumbnail', 'view_count', 'upload_date', 'duration')}
+            for v in state.get('videos') or [] if v.get('video_url')]
+        add = [{k: t.get(k) for k in ('video_url', 'title', 'video_id', 'thumbnail', 'view_count', 'upload_date', 'duration')}
+               for t in picked if isinstance(t, dict) and str(t.get('video_url') or '').startswith('http')
+               and t.get('video_url') not in have]
+        state['fixed_targets'] = (add + base)[:_MAX_CHAIN_VIDEOS]
+        state['max_videos'] = len(state['fixed_targets'])
+    for k in ('require_speakers', 'auto_predict'):
+        if k in body:
+            state[k] = bool(body[k])
     _cancel_chains.discard(chain_id)          # 清掉可能残留的取消标记
+    if state.get('kind') == 'collection':     # 合集没有链接可探测：直接重建（已有的卡复用）
+        threading.Thread(target=_build_collection, args=(state,), daemon=True).start()
+        return jsonify({'ok': True})
     # run_chain 会重新 probe + 去重复用（已转写的跳过），只有缺的会真正重下重转
     threading.Thread(target=run_chain, args=(state,), daemon=True).start()
     return jsonify({'ok': True})
@@ -4292,6 +5418,7 @@ if __name__ == '__main__':
         recover_unfinished_tasks()
         recover_unfinished_chains()
         threading.Thread(target=_backfill_source_links, daemon=True).start()
+        threading.Thread(target=_subscription_loop, daemon=True).start()   # 订阅的博主定时增量更新
         try:
             import reflect
             reflect.start_scheduler(config.RESULTS_FOLDER)   # 回顾提前算好，打开不用等

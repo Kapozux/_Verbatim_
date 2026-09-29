@@ -237,73 +237,131 @@
             <section id="tab-creators" class="tab-panel">
                 <div class="hero">
                     <h1 data-i18n="creators.title">Creators<span class="accent">.</span></h1>
-                    <p data-i18n="creators.subtitle">Paste a channel, playlist, or video — Verbatim downloads and transcribes every episode, then writes a portrait. Open a card for the portrait, then re-read it through a lens — Roast / Craft / Watchability / Quotes / Worldview.</p>
+                    <p data-i18n="creators.subtitle">Paste a channel and Verbatim transcribes every episode, pulls out what the creator actually said, and writes a portrait. Then ask anything (every answer cites the second it was said), see their stances over time, check their predictions — and keep it synced as new videos come out.</p>
                 </div>
 
-                <form class="chain-form-shell">
-                    <div class="chain-form">
+                <form class="chain-form-shell nf" onsubmit="return false">
+                    <!-- 第 0 步：粘链接，马上预览（是谁、几期、多长、之前分析过没有）-->
+                    <div class="nf-url-row">
                         <input type="url" id="chain-url" class="search-input"
                                data-i18n-placeholder="creators.urlPlaceholder"
                                placeholder="https://www.youtube.com/@creator  ·  a channel / homepage (for one video, use Transcribe)">
-                        <!-- 主行：每次都要决定的（URL 在上；这里是 谁/用什么脑/要不要分析）-->
-                        <div class="chain-form-row">
-                            <select id="chain-mode" class="search-input chain-small"
-                                    data-i18n-title="creators.modeTitle"
-                                    title="Analyze = transcribe every episode, then write a portrait. Transcribe only = download + transcribe everything and stop there (you still get every episode in the Library plus one merged full-text doc).">
-                                <option value="analyze" selected data-i18n="creators.modeAnalyze">Transcribe + analyze</option>
-                                <option value="transcribe" data-i18n="creators.modeTranscribe">Transcribe only</option>
-                            </select>
-                            <input type="text" id="chain-author" class="search-input chain-small"
-                                   data-i18n-placeholder="creators.authorPlaceholder"
-                                   placeholder="Author (optional)">
-                            <select id="chain-engine" class="search-input chain-small"
-                                    data-i18n-title="creators.engineTitle"
-                                    title="Transcription engine.">
-                                <option value="gemini35" selected data-i18n="creators.engineGemini35">Gemini 3.5 Transcribe (recommended)</option>
-                                <option value="gemini" data-i18n="creators.engineGemini">Gemini</option>
-                                <option value="whisper" data-i18n="creators.engineWhisper">Whisper (local)</option>
-                                <option value="qwenasr" data-i18n="creators.engineQwenasr">Alibaba Qwen-ASR (zh ASR · no Gemini filter)</option>
-                            </select>
-                            <select id="chain-provider" class="search-input chain-small"
-                                    data-i18n-title="creators.providerTitle"
-                                    title="Which model does the analysis. Aliyun (DeepSeek/Kimi/GLM/Qwen) reuses your DashScope key and dodges the Gemini quota — but it moderates content, so use it only for non-sensitive creators.">
-                                <option value="gemini" selected data-i18n="creators.providerGemini">Analyze: Gemini</option>
-                                <option value="opus5" data-i18n="creators.providerOpus5">Analyze: Claude Opus 5  (OpenRouter · thinking)</option>
-                                <option value="opus46" data-i18n="creators.providerOpus46">Analyze: Claude Opus 4.6  (OpenRouter · thinking)</option>
-                                <option value="deepseek" data-i18n="creators.providerDeepseek">Analyze: DeepSeek  (Alibaba)</option>
-                                <option value="kimi" data-i18n="creators.providerKimi">Analyze: Kimi  (Alibaba)</option>
-                                <option value="glm" data-i18n="creators.providerGlm">Analyze: GLM  (Alibaba)</option>
-                                <option value="qwen" data-i18n="creators.providerQwen">Analyze: Qwen  (Alibaba)</option>
-                            </select>
-                            <button id="chain-start" type="button" class="btn-primary chain-btn" data-i18n="creators.analyze">Analyze</button>
+                        <button id="nf-look" type="button" class="btn-secondary nf-look" data-i18n="nf.look">Look it up</button>
+                    </div>
+                    <p class="chain-hint nf-hint" data-i18n-html="nf.hint">Paste a YouTube channel, a Bilibili space or a playlist. You'll see who it is, how many videos, and what it would cost — before anything runs.</p>
+                    <div id="nf-preview" class="nf-preview hidden"></div>
+
+                    <div id="nf-body" class="nf-body hidden">
+                        <!-- 第 1 步：分析哪些期 -->
+                        <section class="nf-sec">
+                            <h3 class="nf-h"><span class="nf-n">1</span><span data-i18n="nf.whichTitle">Which videos</span></h3>
+                            <div class="nf-quick" id="nf-quick"></div>
+                            <div class="nf-filters">
+                                <label class="nf-field"><span data-i18n="nf.since">Published since</span>
+                                    <input type="date" id="nf-since" class="search-input"></label>
+                                <label class="nf-field nf-grow"><span data-i18n="nf.titleHas">Title contains</span>
+                                    <input type="text" id="nf-kw" class="search-input" data-i18n-placeholder="nf.titleHasPh" placeholder="e.g. interview, Q&amp;A (comma = any of)"></label>
+                            </div>
+                            <details class="nf-pick" id="nf-pick">
+                                <summary id="nf-pick-sum"></summary>
+                                <div class="nf-pick-bar">
+                                    <button type="button" class="cx-link" id="nf-all" data-i18n="nf.selectAll">Select all shown</button>
+                                    <button type="button" class="cx-link" id="nf-none" data-i18n="nf.selectNone">Clear</button>
+                                </div>
+                                <div class="nf-list" id="nf-list"></div>
+                            </details>
+                        </section>
+
+                        <div class="nf-side">
+                        <!-- 第 2 步：要做什么 -->
+                        <section class="nf-sec">
+                            <h3 class="nf-h"><span class="nf-n">2</span><span data-i18n="nf.whatTitle">What to do</span></h3>
+                            <div class="nf-goals">
+                                <label class="nf-goal"><input type="radio" name="nf-goal" value="analyze" checked>
+                                    <span><b data-i18n="nf.goalAnalyze">Full analysis (recommended)</b>
+                                    <small data-i18n="nf.goalAnalyzeD">Transcribe every video, pull out the quotes and write a portrait. Then you can ask questions, see stances and check predictions.</small></span></label>
+                                <label class="nf-goal"><input type="radio" name="nf-goal" value="transcribe">
+                                    <span><b data-i18n="nf.goalTranscribe">Transcripts only</b>
+                                    <small data-i18n="nf.goalTranscribeD">Every video transcribed plus one merged full text. No analysis — much cheaper. You can analyse later.</small></span></label>
+                            </div>
+                            <div class="nf-opts">
+                                <label class="nf-opt"><input type="checkbox" id="nf-speakers">
+                                    <span><b data-i18n="nf.speakers">It's a call-in / interview channel — tell speakers apart</b>
+                                    <small data-i18n="nf.speakersD">Uses a transcription engine that labels who is speaking, so guests’ words aren’t credited to the host.</small></span></label>
+                                <label class="nf-opt"><input type="checkbox" id="chain-prefer-subs">
+                                    <span><b data-i18n="nf.subs">Use existing subtitles when a video has them</b>
+                                    <small data-i18n="nf.subsD">Faster and free for those videos; auto-captions can be rougher than a real transcript.</small></span></label>
+                                <label class="nf-opt nf-analyze-only"><input type="checkbox" id="nf-predict">
+                                    <span><b data-i18n="nf.predict">Check predictions when done</b>
+                                    <small data-i18n="nf.predictD">Finds the checkable predictions and looks up whether they came true (web search, a few cents).</small></span></label>
+                                <label class="nf-opt"><input type="checkbox" id="nf-sync">
+                                    <span><b data-i18n="nf.sync">Keep it up to date</b>
+                                    <small data-i18n="nf.syncD">Check for new videos on a schedule and add only those — nothing already here is redone.</small></span>
+                                    <select id="nf-sync-iv" class="nf-sync-iv">
+                                        <option value="168" data-i18n="sub.f.168">Weekly</option>
+                                        <option value="336" data-i18n="sub.f.336">Every 2 weeks</option>
+                                        <option value="720" data-i18n="sub.f.720">Monthly</option>
+                                        <option value="24" data-i18n="sub.f.24">Daily</option>
+                                    </select></label>
+                            </div>
+                        </section>
+
+                        <!-- 开始：预计多少期 / 几小时 / 多少钱 / 多久 -->
+                        <div class="nf-go">
+                            <div class="nf-est" id="nf-est"></div>
+                            <button id="chain-start" type="button" class="btn-primary chain-btn nf-start" data-i18n="creators.analyze">Analyze</button>
                         </div>
-                        <!-- 折叠：默认设置 + 专家旋钮，多数人不动 -->
-                        <details class="chain-advanced">
-                            <summary data-i18n="creators.moreOptions">⚙ More options</summary>
+                        </div>
+
+                        <!-- 高级设置：引擎 / 模型 / 输出语言……默认就够好，懂的人再动 -->
+                        <details class="chain-advanced nf-adv">
+                            <summary data-i18n="nf.advanced">Advanced settings</summary>
                             <div class="chain-form-row chain-adv-row">
-                                <input type="number" id="chain-max" class="search-input chain-small"
-                                       min="1" max="600" data-i18n-placeholder="creators.maxVideos" placeholder="Max videos">
+                                <select id="chain-mode" class="hidden" aria-hidden="true">
+                                    <option value="analyze" selected>analyze</option>
+                                    <option value="transcribe">transcribe</option>
+                                </select>
+                                <input type="number" id="chain-max" class="hidden" aria-hidden="true">
+                                <label class="nf-field"><span data-i18n="nf.engine">Transcription engine</span>
+                                <select id="chain-engine" class="search-input chain-small"
+                                        data-i18n-title="creators.engineTitle" title="Transcription engine.">
+                                    <option value="gemini35" selected data-i18n="creators.engineGemini35">Gemini 3.5 Transcribe (recommended)</option>
+                                    <option value="gemini" data-i18n="creators.engineGemini">Gemini</option>
+                                    <option value="whisper" data-i18n="creators.engineWhisper">Whisper (local)</option>
+                                    <option value="qwenasr" data-i18n="creators.engineQwenasr">Alibaba Qwen-ASR (zh ASR · no Gemini filter)</option>
+                                </select></label>
+                                <label class="nf-field"><span data-i18n="nf.brain">Analysis model</span>
+                                <select id="chain-provider" class="search-input chain-small"
+                                        data-i18n-title="creators.providerTitle"
+                                        title="Which model does the analysis.">
+                                    <option value="gemini" selected data-i18n="creators.providerGemini">Analyze: Gemini</option>
+                                    <option value="opus5" data-i18n="creators.providerOpus5">Analyze: Claude Opus 5  (OpenRouter · thinking)</option>
+                                    <option value="opus46" data-i18n="creators.providerOpus46">Analyze: Claude Opus 4.6  (OpenRouter · thinking)</option>
+                                    <option value="deepseek" data-i18n="creators.providerDeepseek">Analyze: DeepSeek  (Alibaba)</option>
+                                    <option value="kimi" data-i18n="creators.providerKimi">Analyze: Kimi  (Alibaba)</option>
+                                    <option value="glm" data-i18n="creators.providerGlm">Analyze: GLM  (Alibaba)</option>
+                                    <option value="qwen" data-i18n="creators.providerQwen">Analyze: Qwen  (Alibaba)</option>
+                                </select></label>
+                                <label class="nf-field"><span data-i18n="nf.author">Name to use</span>
+                                <input type="text" id="chain-author" class="search-input chain-small"
+                                       data-i18n-placeholder="creators.authorPlaceholder" placeholder="Author (optional)"></label>
+                                <label class="nf-field"><span data-i18n="nf.outLang">Report language</span>
                                 <select id="chain-lang" class="search-input chain-small"
-                                        data-i18n-title="creators.langTitle"
-                                        title="Language of the analysis documents (portrait, per-episode notes, lenses). Auto = follow the content's language. Verbatim quotes always stay original.">
+                                        data-i18n-title="creators.langTitle" title="Language of the analysis documents.">
                                     <option value="auto" selected data-i18n="creators.langAuto">Output: Auto (follow content)</option>
                                     <option value="en" data-i18n="creators.langEn">Output: English</option>
                                     <option value="zh" data-i18n="creators.langZh">Output: 中文</option>
-                                </select>
+                                </select></label>
+                                <label class="nf-field"><span data-i18n="nf.tone">Portrait tone</span>
                                 <select id="chain-critique" class="search-input chain-small"
-                                        data-i18n-title="creators.critiqueTitle"
-                                        title="How sharp the persona portrait's judgment is. Evidence tagging is enforced at every level — only the tone changes.">
+                                        data-i18n-title="creators.critiqueTitle" title="How sharp the portrait's judgment is.">
                                     <option value="descriptive" data-i18n="creators.critiqueDescriptive">Descriptive</option>
                                     <option value="analytical" selected data-i18n="creators.critiqueAnalytical">Analytical</option>
                                     <option value="sharp" data-i18n="creators.critiqueSharp">Sharp</option>
-                                </select>
-                                <label class="chain-check" data-i18n-title="creators.preferSubsTitle" title="If a video already has captions, use them instead of downloading + transcribing the audio (much faster, no API cost). Manual subs preferred; falls back to the video's auto-captions, then to audio.">
-                                    <input type="checkbox" id="chain-prefer-subs">
-                                    <span data-i18n="creators.preferSubs">Prefer subtitles</span>
-                                </label>
+                                </select></label>
+                                <label class="nf-field"><span data-i18n="nf.subLang">Subtitle language</span>
                                 <select id="chain-sub-lang" class="search-input chain-small chain-sub-lang"
-                                        data-i18n-title="creators.subLangTitle"
-                                        title="Which subtitle language counts. Auto = the video's own language only; a specific language is required exactly — otherwise the audio is transcribed.">
+                                        data-i18n-title="creators.subLangTitle" title="Which subtitle language counts.">
                                     <option value="auto" data-i18n="subs.auto">Auto — the video's own language</option>
                                     <option value="off" data-i18n="subs.off">Off — always transcribe the audio</option>
                                     <option value="zh">中文</option>
@@ -314,32 +372,44 @@
                                     <option value="fr">Français</option>
                                     <option value="de">Deutsch</option>
                                     <option value="ru">Русский</option>
-                                </select>
-                                <label class="chain-check" data-i18n-title="creators.verifyTitle" title="Let the analysis model verify papers, models, data, and mangled entity names with live Google Search before judging them. Fixes 'confidently calls real recent things fake' — but slower and uses search quota. Worth it for time-sensitive / technical content.">
+                                </select></label>
+                                <label class="chain-check" data-i18n-title="creators.verifyTitle" title="Verify facts with live web search before judging them.">
                                     <input type="checkbox" id="chain-verify" checked>
                                     <span data-i18n="creators.verify">Verify facts (web)</span>
                                 </label>
-                                <label class="chain-check" data-i18n-title="creators.fallbackWhisperTitle" title="If the cloud engine fails (e.g. quota), fall back to local Whisper for that video instead of leaving it failed. Off by default — otherwise it just fails and you re-run on the same engine (e.g. once your quota is back).">
+                                <label class="chain-check" data-i18n-title="creators.selfVerifyTitle" title="Self-critique the portrait against the evidence.">
+                                    <input type="checkbox" id="chain-self-verify" checked>
+                                    <span data-i18n="creators.selfVerify">Self-verify</span>
+                                </label>
+                                <label class="chain-check" data-i18n-title="creators.fallbackWhisperTitle" title="Fall back to local Whisper if the cloud engine fails.">
                                     <input type="checkbox" id="chain-fallback-whisper">
                                     <span data-i18n="creators.fallbackWhisper">Whisper fallback</span>
                                 </label>
-                                <label class="chain-check" data-i18n-title="creators.summarizeTitle" title="Also write a summary for every episode. Off by default: the creator analysis only uses evidence cards, and summaries cost about 1¢ per episode. You can still summarize any single episode later from its transcript page.">
+                                <label class="chain-check" data-i18n-title="creators.summarizeTitle" title="Also write a summary for every episode (about 1¢ each).">
                                     <input type="checkbox" id="chain-summarize">
                                     <span data-i18n="creators.summarize">Episode summaries</span>
-                                </label>
-                                <label class="chain-check" data-i18n-title="creators.selfVerifyTitle" title="After building the portrait, run a self-critique pass: pull out every evaluative claim, send a skeptic per claim to refute it against the evidence cards, then cut the unsupported ones and soften the overstated ones (with a 证伪留痕 appendix). Costs extra calls; on for high-stakes reads.">
-                                    <input type="checkbox" id="chain-self-verify" checked>
-                                    <span data-i18n="creators.selfVerify">Self-verify</span>
                                 </label>
                             </div>
                         </details>
                     </div>
-                    <p class="chain-hint" data-i18n-html="creators.hint">YouTube tip: use <code>channel/videos</code>. Bilibili &amp; other
-                       yt-dlp sites work too. <b>Prefer subtitles</b> skips download + transcription when a
-                       video already has captions.</p>
                 </form>
 
+                <div class="creators-tools">
+                    <h2 class="cr-h"><span data-i18n="creators.yours">Your creators</span> <span id="creators-count" class="cr-count"></span></h2>
+                    <input id="creators-search" class="cr-search" type="search" data-i18n-placeholder="creators.search" placeholder="Find a creator…">
+                    <button id="radar-open" class="btn-secondary creators-compare" type="button" data-i18n="radar.open">Topic radar</button>
+                    <button id="lb-open" class="btn-secondary creators-compare" type="button" data-i18n="lb.open">Prediction ranking</button>
+                    <button id="compare-open" class="btn-secondary creators-compare" type="button" data-i18n="cmp.open">Compare creators</button>
+                    <button id="collection-open" class="btn-primary creators-compare" type="button" data-i18n="col.open">New collection</button>
+                </div>
+                <div id="collections-block" class="hidden">
+                    <h3 class="cr-sub" data-i18n="col.section">Collections</h3>
+                    <div id="collections-grid" class="creators-grid"></div>
+                    <h3 class="cr-sub" data-i18n="col.creatorsSection">Creators</h3>
+                </div>
                 <div id="creators-grid" class="creators-grid"></div>
+                <details id="creators-unfinished" class="cr-fold hidden"><summary></summary><div class="creators-grid"></div></details>
+                <details id="creators-hidden" class="cr-fold hidden"><summary></summary><div class="creators-grid"></div></details>
                 <p id="creators-empty" class="history-empty hidden" data-i18n="creators.empty">No creators yet — paste a link above to analyze one.</p>
                 <p id="creators-bangumi-note" class="creators-note hidden"></p>
             </section>
@@ -457,12 +527,28 @@
                 <span id="chain-detail-title" class="detail-title"></span>
             </div>
             <div id="chain-detail-meta" class="detail-meta"></div>
-            <div id="chain-detail-info"></div>
-            <section id="chain-cards" class="cc-wall hidden"></section>
-            <button id="chain-episodes-toggle" class="episodes-toggle" type="button">
-                <span data-i18n="chainDetail.episodes">Episodes</span> <span id="chain-episodes-count"></span> <span class="ep-arrow">▸</span>
-            </button>
-            <div id="chain-detail-grid" class="video-grid hidden"></div>
+            <header id="chain-detail-info" class="cp-head"></header>
+            <div id="cx-digest"></div>
+            <section id="chain-explore" class="cx">
+                <div class="cx-tabs" role="tablist">
+                    <button class="cx-tab" type="button" role="tab" data-cx="read" data-i18n="cx.tab.read">Read</button>
+                    <button class="cx-tab" type="button" role="tab" data-cx="ask" data-i18n="cx.tab.ask">Ask</button>
+                    <button class="cx-tab" type="button" role="tab" data-cx="topics" data-i18n="cx.tab.topics">Topics</button>
+                    <button class="cx-tab" type="button" role="tab" data-cx="predictions" data-i18n="cx.tab.predictions">Predictions</button>
+                    <button class="cx-tab" type="button" role="tab" data-cx="cards" data-i18n="cx.tab.cards">Evidence cards</button>
+                    <button class="cx-tab" type="button" role="tab" data-cx="episodes"><span data-i18n="chainDetail.episodes">Episodes</span> <span id="chain-episodes-count" class="cx-tab-n"></span></button>
+                </div>
+                <p class="cx-tab-desc" id="cx-tab-desc"></p>
+                <div class="cx-panel" id="cx-read" data-cx-panel="read"></div>
+                <div class="cx-panel hidden" id="cx-ask" data-cx-panel="ask"></div>
+                <div class="cx-panel hidden" id="cx-topics" data-cx-panel="topics"></div>
+                <div class="cx-panel hidden" id="cx-preds" data-cx-panel="predictions"></div>
+                <section id="chain-cards" class="cx-panel cc-wall hidden" data-cx-panel="cards"></section>
+                <div class="cx-panel hidden" id="cx-episodes" data-cx-panel="episodes">
+                    <div id="cx-ep-bar" class="cx-ep-bar"></div>
+                    <div id="chain-detail-grid" class="video-grid"></div>
+                </div>
+            </section>
         </div>
 
         <!-- ===== Analysis Doc Reading View ===== -->
@@ -483,6 +569,92 @@
 
     </div>
     </div><!-- /.app -->
+
+    <!-- ===== 跨博主对比 ===== -->
+    <div id="compare-overlay" class="settings-overlay hidden">
+        <div class="cx-modal" role="dialog" aria-modal="true" aria-labelledby="cmp-title">
+            <button class="settings-x" type="button" data-close data-i18n-aria-label="common.close" aria-label="Close">×</button>
+            <h2 id="cmp-title" class="cx-modal-title" data-i18n="cmp.title">Compare creators</h2>
+            <p class="cx-muted" data-i18n="cmp.sub">Pick 2–4 creators and ask one question. Each gets a paragraph built only from their own evidence cards, with the quotes.</p>
+            <div id="cmp-pick" class="cmp-pick"></div>
+            <form id="cmp-form" class="cx-input-row">
+                <input id="cmp-q" class="search-input" type="text" maxlength="500" data-i18n-placeholder="cmp.placeholder" placeholder="e.g. How do they think AI will change work?">
+                <button class="btn-primary cx-send" type="submit" data-i18n="cmp.go">Compare</button>
+            </form>
+            <div id="cmp-out" class="cmp-out"></div>
+        </div>
+    </div>
+
+    <!-- ===== 合集：新建 / 加内容 ===== -->
+    <div id="collection-overlay" class="settings-overlay hidden">
+        <div class="cx-modal" role="dialog" aria-modal="true" aria-labelledby="col-title">
+            <button class="settings-x" type="button" data-close data-i18n-aria-label="common.close" aria-label="Close">×</button>
+            <h2 id="col-title" class="cx-modal-title">New collection</h2>
+            <p class="cx-muted" data-i18n="col.sub">Put any recordings together — interviews, lectures, meetings, several creators — and ask, compare stances and export them as one.</p>
+            <form id="col-form">
+                <div id="col-meta" class="col-meta">
+                    <input id="col-name" class="search-input" type="text" maxlength="60" data-i18n-placeholder="col.namePh" placeholder="Name, e.g. User interviews · September">
+                    <select id="col-kind" class="search-input">
+                        <option value="interview" data-i18n="col.k.interview">Interviews</option>
+                        <option value="course" data-i18n="col.k.course">Lectures / course</option>
+                        <option value="meeting" data-i18n="col.k.meeting">Meetings</option>
+                        <option value="podcast" data-i18n="col.k.podcast">Podcast / shows</option>
+                        <option value="mixed" data-i18n="col.k.mixed">Mixed</option>
+                    </select>
+                </div>
+                <div class="col-bar">
+                    <div class="cx-seg"><button type="button" class="col-tab on" data-t="transcripts" data-i18n="col.tabTranscripts">Transcripts</button>
+                        <button type="button" class="col-tab" data-t="chains" data-i18n="col.tabCreators">Whole creators</button></div>
+                    <input id="col-q" class="cr-search" type="search" data-i18n-placeholder="col.searchPh" placeholder="Search titles…">
+                </div>
+                <div id="col-list" class="col-list"></div>
+                <div class="col-foot">
+                    <span id="col-count" class="cx-muted"></span>
+                    <span class="cx-muted col-cost" data-i18n="col.cost">Anything already analysed is reused for free; new recordings cost about 5¢ each.</span>
+                    <span id="col-msg" class="cx-err"></span>
+                    <button class="btn-primary cx-send" type="submit" data-i18n="col.create">Build collection</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- ===== 话题雷达 ===== -->
+    <div id="radar-overlay" class="settings-overlay hidden">
+        <div class="cx-modal cx-modal-wide" role="dialog" aria-modal="true" aria-labelledby="radar-title">
+            <button class="settings-x" type="button" data-close data-i18n-aria-label="common.close" aria-label="Close">×</button>
+            <h2 id="radar-title" class="cx-modal-title" data-i18n="radar.title">Topic radar</h2>
+            <p class="cx-muted" data-i18n="radar.intro">One topic, every creator: who talks about it most, whether they're for or against it, and whether that changed over time.</p>
+            <form id="radar-form" class="cx-input-row">
+                <input id="radar-q" class="search-input" type="text" maxlength="200" data-i18n-placeholder="radar.ph" placeholder="e.g. house prices, AI replacing jobs, studying abroad">
+                <button class="btn-primary cx-send" type="submit" data-i18n="radar.go">Scan</button>
+            </form>
+            <div id="radar-out" class="radar-out"></div>
+        </div>
+    </div>
+
+    <!-- ===== 预测排行 ===== -->
+    <div id="lb-overlay" class="settings-overlay hidden">
+        <div class="cx-modal cx-modal-wide" role="dialog" aria-modal="true" aria-labelledby="lb-title">
+            <button class="settings-x" type="button" data-close data-i18n-aria-label="common.close" aria-label="Close">×</button>
+            <h2 id="lb-title" class="cx-modal-title" data-i18n="lb.title">Prediction ranking</h2>
+            <p class="cx-muted" data-i18n="lb.intro">Of each creator's predictions that can already be judged, how many came true.</p>
+            <div id="lb-out"></div>
+        </div>
+    </div>
+
+    <!-- ===== 证据卡分享图 ===== -->
+    <div id="share-overlay" class="settings-overlay hidden">
+        <div class="cx-modal cx-share" role="dialog" aria-modal="true" aria-labelledby="share-title">
+            <button class="settings-x" type="button" data-close data-i18n-aria-label="common.close" aria-label="Close">×</button>
+            <h2 id="share-title" class="cx-modal-title" data-i18n="share.title">Share this quote</h2>
+            <canvas id="share-canvas" width="1080" height="1080"></canvas>
+            <div class="share-actions">
+                <button id="share-download" class="btn-primary cx-send" type="button" data-i18n="share.download">Download image</button>
+                <button id="share-copy" class="btn-secondary cx-send" type="button" data-i18n="share.copyLink">Copy link to the moment</button>
+                <span id="share-msg" class="cx-muted"></span>
+            </div>
+        </div>
+    </div>
 
     <!-- ===== Settings modal (two-pane, Claude-style) ===== -->
     <div id="settings-overlay" class="settings-overlay hidden">
@@ -763,8 +935,10 @@
         </div>
     </div>
 
-    <script>window.VERBATIM_DEMO = {{ 'true' if demo else 'false' }};</script>
+    <script>window.VERBATIM_DEMO = {{ 'true' if demo else 'false' }}; window.VERBATIM_DEMO_ASK = {{ 'true' if demo_ask else 'false' }};</script>
     <script src="/static/i18n.js?v={{ static_version }}"></script>
     <script src="/static/app.js?v={{ static_version }}"></script>
+    <script src="/static/explore.js?v={{ static_version }}"></script>
+    <script src="/static/tools.js?v={{ static_version }}"></script>
 </body>
 </html>

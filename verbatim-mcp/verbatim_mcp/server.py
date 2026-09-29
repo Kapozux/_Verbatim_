@@ -34,6 +34,8 @@ server = MCPServer(
         "转写和分析都是长任务：提交类工具会立刻返回一个 id，你需要之后用对应的 "
         "check_* 工具轮询状态，不要假设提交完就有结果了。一段几分钟的音频通常 "
         "十几秒到一分钟，一小时的视频可能要几分钟。\n\n"
+        "分析过的博主 / 合集可以直接提问（ask_creator）：只凭他视频里的原话回答，每句带出处。"
+        "先用 list_creators 拿 chain_id。一个话题想横向看所有博主用 topic_radar。\n\n"
         "如果所有工具都报连不上，说明用户本机的 Verbatim 没在跑，让用户先启动它。"
     ),
 )
@@ -307,6 +309,177 @@ async def get_analysis_file(chain_id: str, name: str, full: bool = False) -> dic
         "length": len(text),
         "content": text if full else _trim(text, 8000),
     }
+
+
+# ---------- 问博主 / 合集（只凭原话回答、带出处）----------
+
+def _cite_list(citations: dict, limit: int = 40) -> list:
+    """出处精简成 agent 好用的样子：原话 + 谁说的 + 哪一期 + 时间点 + 原视频链接。"""
+    out = []
+    for cid, c in list((citations or {}).items())[:limit]:
+        out.append({
+            "id": cid, "quote": c.get("quote"), "speaker": c.get("speaker") or None,
+            "creator": c.get("creator") or None, "episode": c.get("episode"), "date": c.get("date") or None,
+            "time": c.get("ts"), "video_url": c.get("video_url") or None, "task_id": c.get("task_id"),
+        })
+    return out
+
+
+@server.tool(
+    description=(
+        "列出分析过的博主和合集（能提问 / 看立场的那些）。返回 id、名字、类型、期数、"
+        "有没有话题标签。后面几个工具的 chain_id 从这里拿。"
+    )
+)
+async def list_creators(include_transcript_only: bool = False) -> dict:
+    chains = await _request("GET", "/api/chains")
+    seen, out = set(), []
+    for c in chains if isinstance(chains, list) else []:
+        if c.get("hidden") or (not c.get("has_cards") and not include_transcript_only):
+            continue
+        key = c.get("url") or c.get("id")
+        if key in seen:
+            continue
+        seen.add(key)
+        vids = c.get("videos") or []
+        out.append({
+            "chain_id": c.get("id"), "name": c.get("author"),
+            "kind": "collection" if c.get("kind") == "collection" else "creator",
+            "episodes": sum(1 for v in vids if v.get("status") == "done"),
+            "can_ask": bool(c.get("has_cards")), "has_topics": bool(c.get("has_tags")),
+            "url": c.get("url") or None,
+        })
+    return {"count": len(out), "creators": out}
+
+
+@server.tool(
+    description=(
+        "向一个博主或合集提问。只凭从他视频里摘出的原话回答，每句话带出处（原话、哪一期、"
+        "时间点、原视频链接）；他没谈过的会直说没谈过。mode='about' 第三人称（默认），"
+        "mode='as' 模拟他本人口吻回答（AI 模拟，仍然附真实原话）。topic 可限定在某个话题里问。"
+        "不会写进网页上的聊天记录。一次约 5 秒、不到 1 美分。"
+    )
+)
+async def ask_creator(chain_id: str, question: str, mode: str = "about", topic: str = "") -> dict:
+    body: dict[str, Any] = {"question": question, "mode": mode, "ephemeral": True}
+    if topic:
+        body["topic"] = topic
+    payload = await _request("POST", f"/api/chain/{chain_id}/ask", json=body)
+    m = payload.get("message") or {}
+    cov = m.get("coverage") or {}
+    return {
+        "answer": m.get("content"),
+        "sources": _cite_list(m.get("citations") or {}),
+        "searched": {"cards": cov.get("pool_cards"), "episodes": cov.get("pool_episodes"),
+                     "read": cov.get("cards_used"), "mode": cov.get("mode")},
+        "note": "answer 里的 [#3-12] 对应 sources 里同 id 的原话。",
+    }
+
+
+@server.tool(
+    description=(
+        "一个博主 / 合集的话题表：每个话题多少条原话、覆盖几期、看好 / 看空 / 两面 / 中立各多少。"
+        "想看某个话题下的具体原话用 topic_quotes。"
+    )
+)
+async def creator_topics(chain_id: str) -> dict:
+    p = await _request("GET", f"/api/chain/{chain_id}/topics")
+    return {
+        "tagged_cards": p.get("tagged"), "total_cards": p.get("cards_total"), "has_dates": p.get("has_dates"),
+        "topics": [{"topic": t.get("topic"), "quotes": t.get("count"), "episodes": t.get("episodes"),
+                    "stances": t.get("stances")} for t in p.get("topics") or []],
+    }
+
+
+@server.tool(
+    description=(
+        "某个话题下的原话，按时间先后排（能看出立场怎么变的）。stance 可筛 pro / con / mixed / neutral。"
+    )
+)
+async def topic_quotes(chain_id: str, topic: str, stance: str = "", limit: int = 40) -> dict:
+    p = await _request("GET", f"/api/chain/{chain_id}/topics", params={"topic": topic})
+    hit = next((t for t in p.get("topics") or [] if t.get("topic") == topic), None)
+    if not hit:
+        return {"error": f"没有这个话题：{topic}。用 creator_topics 看有哪些。"}
+    cards = [c for c in hit.get("cards") or [] if not stance or c.get("stance") == stance]
+    return {
+        "topic": topic, "total": len(cards),
+        "quotes": [{"quote": c.get("quote"), "summary": c.get("obs"), "stance": c.get("stance"),
+                    "speaker": c.get("speaker") or None, "episode": c.get("episode"), "date": c.get("date"),
+                    "time": c.get("ts"), "video_url": c.get("video_url") or None}
+                   for c in cards[:max(1, min(limit, 200))]],
+    }
+
+
+@server.tool(
+    description=(
+        "一个博主的预测对账：他说过哪些可核对的预测、联网核对后说中 / 没说中 / 待定。"
+        "verdict 可筛 true / false / pending / unclear。"
+    )
+)
+async def creator_predictions(chain_id: str, verdict: str = "", limit: int = 50) -> dict:
+    p = await _request("GET", f"/api/chain/{chain_id}/predictions")
+    items = [i for i in p.get("items") or [] if ((i.get("check") or {}).get("verdict") or "unchecked") != "na"]
+    if verdict:
+        items = [i for i in items if ((i.get("check") or {}).get("verdict") or "unchecked") == verdict]
+    return {
+        "counts": p.get("counts"), "hit_rate": p.get("hit_rate"), "resolved": p.get("resolved"),
+        "predictions": [{"quote": i.get("quote"), "summary": i.get("obs"), "date_said": i.get("date"),
+                         "verdict": (i.get("check") or {}).get("verdict") or "unchecked",
+                         "why": (i.get("check") or {}).get("why"), "source": (i.get("check") or {}).get("source"),
+                         "video_url": i.get("video_url")} for i in items[:max(1, min(limit, 300))]],
+    }
+
+
+@server.tool(
+    description=(
+        "把 2~4 个博主放在一起，问同一个问题：每人一段，只用他自己的原话，最后说共识与分歧。"
+    )
+)
+async def compare_creators(chain_ids: list[str], question: str) -> dict:
+    p = await _request("POST", "/api/compare", json={"chains": chain_ids, "question": question})
+    return {"answer": p.get("answer"), "creators": p.get("creators"), "sources": _cite_list(p.get("citations") or {}, 60)}
+
+
+@server.tool(
+    description=(
+        "话题雷达：一个话题，扫一遍所有分析过的博主——谁谈得多、总体看好还是看空、前期到近期变没变、"
+        "代表性原话。按意思匹配，不只是关键词。"
+    )
+)
+async def topic_radar(topic: str) -> dict:
+    p = await _request("POST", "/api/radar", json={"query": topic})
+    return {
+        "topic": topic,
+        "creators": [{"chain_id": r.get("chain_id"), "name": r.get("author"), "quotes": r.get("cards"),
+                      "episodes": r.get("episodes"), "stances": r.get("stances"),
+                      "overall": r.get("net"), "earlier": r.get("early"), "later": r.get("late"),
+                      "first_date": r.get("first") or None, "last_date": r.get("last") or None,
+                      "sample_quotes": [b.get("quote") for b in r.get("best") or []]}
+                     for r in p.get("rows") or []],
+        "note": "overall / earlier / later = (看好 − 看空) / 表态原话数，-1 到 1。",
+    }
+
+
+@server.tool(description="预测排行：每个博主核对过的预测里说中了几成（有结果不足 5 条的不排名）。")
+async def prediction_leaderboard() -> dict:
+    return await _request("GET", "/api/leaderboard")
+
+
+@server.tool(
+    description=(
+        "新建合集：把任意一批转写（task_ids，从 list_transcripts / search_transcripts 拿）和 / 或整个博主"
+        "（chain_ids）放在一起，之后就能对整批提问、看立场、导出。kind: interview / course / meeting / "
+        "podcast / mixed。已分析过的内容直接复用，新的每条约 5 美分、一两分钟。返回 chain_id，用 "
+        "check_analysis 查进度，建好后用 ask_creator 提问。"
+    )
+)
+async def create_collection(name: str, task_ids: list[str] | None = None, chain_ids: list[str] | None = None,
+                            kind: str = "mixed") -> dict:
+    p = await _request("POST", "/api/collections", json={
+        "name": name, "kind": kind, "task_ids": task_ids or [], "chain_ids": chain_ids or []})
+    return {"chain_id": p.get("id"), "items": p.get("items"),
+            "next_step": "用 check_analysis(chain_id) 查进度，stage=done 后用 ask_creator 提问。"}
 
 
 # ---------- 杂项 ----------

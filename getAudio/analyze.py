@@ -38,7 +38,10 @@ CARDS_PROMPT = """你的任务是**中立抽取证据卡**：不评价、不判�
     {{"obs": "一条原子观察（他的一个主张／一个修辞手法／一个叙事框架，客观描述，不带评价词）",
       "quote": "支撑它的逐字原话（照抄转写，别改写）",
       "timestamp": "该原话的时间戳（从转写行首 [MM:SS] 取，取不到留空）",
-      "layer": "转写自证 | 他的主张 | 外部核实"}}
+      "layer": "转写自证 | 他的主张 | 外部核实",
+      "topic": "这张卡谈的话题，2~6 个词的短语（如 AI 与就业 / 房价 / 冷启动获客）",
+      "stance": "pro | con | mixed | neutral | none",
+      "prediction": false}}
   ],
   "metrics": {{
     "hype":     {{"count": 0, "examples": ["最高级/军备竞赛类原话，如 碾压/秒杀/新王/无敌/彻底取代/判死刑"]}},
@@ -52,6 +55,10 @@ CARDS_PROMPT = """你的任务是**中立抽取证据卡**：不评价、不判�
 - layer：修辞/叙事/措辞观察 = 转写自证；他下的事实/性能/预测判断 = 他的主张；只有你确凿的外部事实核对才 = 外部核实（默认几乎不用）。
 - 卡片里**不许出现评价词**（不写"浮夸/严谨/高明/盲区"），只客观描述 + 引文。评价是合并层的事。
 - quote 必须是转写里的逐字原话，能让人点回原文。
+- **语言跟随转写**：obs、topic 用转写内容本身的语言写——英文视频就写英文，中文视频写中文。（这段说明是中文，不代表输出要用中文。）
+- topic：同一期里谈同一件事的卡用同一个 topic 写法；纯修辞/叙事手法的卡也填它服务的话题。
+- stance：他在这张卡里对该话题的态度——pro 看好/支持、con 看空/反对、mixed 两面都说、neutral 只描述不表态、none 不是观点（修辞、格式、寒暄）。
+- prediction：只有**对外部世界可在日后核对的预测**才填 true（某市场/技术/公司/政策/趋势将会怎样）；给观众的建议、对"你"会怎样的警告、对现状或过去的描述（包括讲故事时的"接下来几年他付出了代价"）、反问、假设、比喻、转述别人的计划、研究结论，一律 false。拿不准填 false。
 - metrics：hype/hedge 的 count = 出现次数，examples 放几条代表原话；tradeoff 的 tech_count = 他介绍了几个技术，with_tradeoff = 其中几个提了代价。
 - asr_suspects：只放疑似识别错误的**实体名**——这是转写质量问题，不是他的语言风格。
 - 今天是 {today}，不认识的新词照抄，别判真假、别猜"正确写法"。
@@ -141,6 +148,7 @@ PORTRAIT_PROMPT = """你会收到「{author}」{n} 期的**证据卡 + 修辞指
 - 区分"他个人的选择性回避"与"这个体裁天生不做的事"，后者别算进他的盲区。
 - 跨语境的态度不一致，如实描述为"不一致"（如"对开源项目 hedge、对闭源项目浮夸"）；**不许**升级成"双重标准/知行不一/虚伪"这类道德指控——证据只支撑到不一致，支撑不到诛心。
 - 修辞结论用给到的 hype/hedge/tradeoff 跨期分布支撑；**不要**输出"客观性/可信度"这类合成总分，只用可数分项。
+- 卡片带 speaker 字段的，说明这句话是谁说的：连麦嘉宾 / 采访者 / 听众的话**不许**当成{author}本人的观点。
 - 疑似 ASR 误识的实体名属于转写质量，放最后的「转写质量说明」里，**不许**当成他的语言风格。
 
 # {author}：人物解读（基于 {n} 期）
@@ -283,7 +291,10 @@ def _call_gemini(prompt, grounded=False, model=None, purpose='analysis'):
                 s = str(e)
                 transient = any(k in s for k in (
                     '429', 'RESOURCE_EXHAUSTED', '503', 'UNAVAILABLE',
-                    'overloaded', 'deadline', 'timeout'))
+                    'overloaded', 'deadline', 'timeout',
+                    # 网络断连（代理切换、SSL 握手被掐）：换模型也没用，等一下重试
+                    'EOF occurred', 'SSL', 'Connection reset', 'RemoteProtocolError',
+                    'Server disconnected'))
                 if not transient:
                     break            # 模型名错/安全拦截等：别耗重试，直接换下一个模型
                 if attempt < _MAX_ATTEMPTS:
@@ -883,3 +894,88 @@ def xhs_report(note_dirs, title='小红书调研报告', on_progress=None, lang=
         n=len(extractions), title=title, digest=digest,
         lang_line=_lang_line(lang)), purpose='xhs')
     return report, extractions
+
+
+# ---- 合集综述：合集不是一个人，写「这批材料讲了什么、各方怎么看」----
+COLLECTION_PROMPT = """你会收到合集「{name}」（类型：{kind}）里 {n} 条录音 / 视频抽出的**证据卡**（原话 + 时间点 + 说话人，若有）。写一份综述（Markdown）。
+
+{lang_line}（下面的小标题是示例，请按输出语言翻译。）
+
+{rules}
+
+【硬约束】
+- 每条概括都要能点回某张卡的原话；点不回的不许写。
+- 区分不同说话人 / 不同期的观点，别把某一个人的话说成「大家都认为」。
+- 只转述、归纳，不替任何一方下对错判断。
+
+# {name}：综述（基于 {n} 条）
+
+## 这批材料在讲什么
+主要话题，每个一两句，按分量排。
+
+## 各方怎么看
+按话题列出不同说话人 / 不同期的立场，有分歧就把分歧摆出来，各挂一两句原话。
+
+## 共识与分歧
+哪些点几乎一致，哪些点对立。
+
+## 值得记住的原话
+5~10 句最有代表性的原话（原样引用，注明出自哪一期）。
+
+## 还没谈到的
+从材料看明显缺席、值得追问的问题（写成问题）。
+
+证据卡（JSON）：
+{digest}"""
+
+KIND_LABEL = {'interview': '访谈', 'course': '课程', 'meeting': '会议', 'podcast': '播客', 'mixed': '混合'}
+
+
+def synthesize_collection(episodes, name, kind='mixed', preset=None, lang='auto'):
+    good = [e for e in episodes if e and e.get('cards')]
+    if not good:
+        raise RuntimeError('没有可综合的证据卡')
+    provider, extract_model, synth_model = resolve_analysis(preset)
+    digest = _build_digest(good, name, provider, extract_model)
+    return _llm(COLLECTION_PROMPT.format(
+        name=name, kind=KIND_LABEL.get(kind, kind), n=len(good), rules=_rules(),
+        lang_line=_lang_line(lang), digest=digest), provider, synth_model, purpose='synth')
+
+
+# ---- 定期同步：画像增量更新（在原画像上并入新几期，原有结论不动，除非被新证据推翻）----
+UPDATE_PORTRAIT_PROMPT = """下面是「{author}」已有的人物画像，以及这次同步新增的 {m} 期的**证据卡**。把新内容并进画像。
+
+{lang_line}
+
+{rules}
+
+【怎么改】
+- 保留原画像的结构、小节和已有结论；原文能不动就不动。
+- 新期里出现的新主张、新话题，并入对应小节；和原结论矛盾的，写清「此前…，最近一期…」，不要悄悄删掉旧结论。
+- 标题里的期数改成 {total}。
+- 在「综合印象」之前加（或更新）一节「## 近期变化（{today} 同步，新增 {m} 期）」：新几期里值得注意的新说法、立场变化、新预测，每条挂证据层标签，能点回新卡的原话。
+- 新增的结论同样必须挂〔转写自证〕/〔他的主张〕/〔外部核实〕并能点回新卡引文；点不回的不许写。
+- 卡片带 speaker 字段的，嘉宾 / 连麦者的话不许当成{author}本人的观点。
+
+输出完整的新画像（Markdown），不要解释你改了什么。
+
+【原画像】
+{portrait}
+
+【新增 {m} 期的证据卡（JSON）】
+{digest}"""
+
+
+def update_portrait(old_md, new_episodes, author, total, preset=None, lang='auto'):
+    provider, extract_model, synth_model = resolve_analysis(preset)
+    good = [e for e in new_episodes if e.get('cards')]
+    if not good:
+        return old_md
+    out = _llm(UPDATE_PORTRAIT_PROMPT.format(
+        author=author, m=len(good), total=total, today=datetime.now().strftime('%Y-%m-%d'),
+        lang_line=_lang_line(lang), rules=_rules(), portrait=old_md[:60000],
+        digest=_digest(good, _digest_budget(provider))), provider, synth_model, purpose='synth')
+    # 模型偶尔只回一小段：太短就当失败，交给调用方整份重写
+    if not out or len(out) < len(old_md) * 0.5:
+        raise RuntimeError('update too short')
+    return out

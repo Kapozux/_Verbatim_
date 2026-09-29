@@ -1368,7 +1368,8 @@ const chainMode = document.getElementById('chain-mode');
 function syncChainMode() {
     if (!chainMode) return;
     const onlyTx = chainMode.value === 'transcribe';
-    chainStartBtn.textContent = T(onlyTx ? 'creators.transcribeAll' : 'creators.analyze');
+    if (typeof nf !== 'undefined' && nf.data) nfEstimate();          // 新表单：按钮文案带期数，由预估那里定
+    else chainStartBtn.textContent = T(onlyTx ? 'creators.transcribeAll' : 'creators.analyze');
     ['chain-provider', 'chain-critique', 'chain-lang', 'chain-verify', 'chain-self-verify']
         .forEach(id => {
             const el = document.getElementById(id);
@@ -1444,87 +1445,263 @@ function stageLabel(stage) {
 
 let chainPollTimer = null;
 
+// ========== 新建博主：粘链接 → 预览 → 挑期 → 选目的 → 看预计费用 → 开始 ==========
+let nf = { url: '', data: null, loading: false, quick: 30, picked: new Set(), since: '', kw: '' };
 let chainSubmitting = false;
-chainStartBtn.addEventListener('click', async () => {
-    if (chainSubmitting) return;               // 防连点重复建链（每条都烧钱）
+
+function nfFmtHours(sec) {          // → 「6.4 小时」/「25 分钟」
+    const h = sec / 3600;
+    if (h >= 1) return T('nf.hUnit', { n: h >= 10 ? Math.round(h) : h.toFixed(1) });
+    return T('nf.mUnit', { n: Math.max(1, Math.round(sec / 60)) });
+}
+
+async function nfPreview(force) {
     const url = (chainUrl.value || '').trim();
-    if (!url) { chainUrl.focus(); return; }
-
-    // 这个博主之前跑过 → 直接接着那条，不再开新的、也不多问一句。
-    // 转写本来就跨链条去重，但**证据卡缓存在各自的链条目录里**：另开一条 =
-    // 分析的钱全部重花一遍，还在博主库里留下两张同名卡片。
-    const prior = await findChainByUrl(url);
-
-    // 花钱确认：按当前模式说实话——只转写就别再吓唬人说要合成人物画像
-    {
-        const onlyTx = !!chainMode && chainMode.value === 'transcribe';
-        const body = onlyTx
-            ? T('confirm.chainTranscribeOnly', {
-                extra: T(chainEngine.value === 'whisper'
-                    ? 'confirm.chainTranscribeLocalExtra'
-                    : 'confirm.chainTranscribeCloudExtra'),
-            })
-            : T('confirm.chainStart', {
-                extra: chainVerify.checked ? T('confirm.chainStartVerifyExtra') : '',
-            });
-        const head = prior
-            ? T('confirm.chainMergePrefix', {
-                author: chainDisplayName(prior),
-                n: (prior.videos || []).filter(v => v.status === 'done').length,
-            })
-            : '';
-        if (!confirm(head + body)) {
-            return;
-        }
-    }
-    const onlyTranscribe = !!chainMode && chainMode.value === 'transcribe';
-
-    if (prior && !['done', 'failed', 'cancelled'].includes(prior.stage)) {
-        chainUrl.value = '';          // 那条还在跑：直接带你过去看，什么都不用点
-        navigate('chain/' + prior.id);
+    const box = document.getElementById('nf-preview');
+    if (!/^https?:\/\//.test(url)) { if (url) { box.classList.remove('hidden'); box.innerHTML = `<p class="cx-err">${T('nf.badUrl')}</p>`; } return; }
+    if (!force && nf.url === url && nf.data) return;
+    nf = { url, data: null, loading: true, quick: 30, picked: new Set(), since: '', kw: '' };
+    document.getElementById('nf-since').value = '';
+    document.getElementById('nf-kw').value = '';
+    box.classList.remove('hidden');
+    box.innerHTML = `<div class="cx-thinking">${T('nf.looking')}</div>`;
+    document.getElementById('nf-body').classList.add('hidden');
+    let d;
+    try {
+        const r = await fetch('/api/chain/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url, refresh: !!force }) });
+        d = await r.json();
+        if (!r.ok) throw new Error(d.error || r.status);
+    } catch (e) {
+        nf.loading = false;
+        box.innerHTML = `<p class="cx-err">${T('nf.lookFailed', { e: escapeHtml(String(e.message || e).slice(0, 200)) })}</p>`;
         return;
     }
+    if ((chainUrl.value || '').trim() !== url) return;        // 等的时候换了链接
+    nf.data = d;
+    nf.loading = false;
+    const n = d.videos.length;
+    nf.quick = n <= 30 ? 'all' : 30;
+    // YouTube 的频道列表不带发布日期（B站的带）：没有日期就别给一个按了没反应的日期筛选
+    const dated = d.videos.filter(v => v.upload_date).length;
+    const since = document.getElementById('nf-since');
+    since.disabled = dated < n / 2;
+    since.closest('.nf-field').title = since.disabled ? T('nf.noDates') : '';
+    since.closest('.nf-field').classList.toggle('is-muted', since.disabled);
+    nfApplyQuick();
+    nfRenderPreview();
+    document.getElementById('nf-body').classList.remove('hidden');
+    nfRenderQuick();
+    nfRenderList();
+    nfEstimate();
+}
 
+function nfRenderPreview() {
+    const d = nf.data, box = document.getElementById('nf-preview');
+    const ch = d.channel || {};
+    const name = ch.name || T('chainDetail.creatorFallback');
+    const hrs = d.videos.reduce((a, v) => a + (v.duration || 0), 0);
+    const done = d.videos.filter(v => v.transcribed).length;
+    const ex = d.existing;
+    const avatar = isRealAvatar(ch.avatar)
+        ? `<img src="${escapeHtml(ch.avatar)}" alt="" referrerpolicy="no-referrer" onerror="this.remove()">` : '';
+    box.innerHTML = `
+        <div class="nf-card">
+            <div class="creator-face nf-face"><span>${escapeHtml(name.slice(0, 1))}</span>${avatar}</div>
+            <div class="nf-who">
+                <div class="nf-name">${escapeHtml(name)} <span class="nf-plat">${escapeHtml(d.platform || '')}</span></div>
+                <div class="cx-muted">${T('nf.stats', { n: d.total, h: nfFmtHours(hrs) })}${done ? ' · ' + T('nf.alreadyTx', { n: done }) : ''}</div>
+            </div>
+            <button type="button" class="cx-link" id="nf-refresh">${T('nf.refresh')}</button>
+        </div>
+        ${ex ? `<div class="nf-exist">
+            <span>${T(ex.analyzed ? 'nf.existAnalyzed' : 'nf.existTx', { n: ex.episodes })}</span>
+            <button type="button" class="btn-secondary cp-btn" onclick="navigate('chain/${ex.chain_id}')">${T('nf.open')}</button>
+            ${ex.analyzed ? `<button type="button" class="btn-secondary cp-btn" id="nf-sync-now">${T('nf.syncNew')}</button>` : ''}
+            <span class="cx-muted nf-exist-note">${T('nf.existNote')}</span>
+        </div>` : ''}`;
+    box.querySelector('#nf-refresh').onclick = () => nfPreview(true);
+    const sn = box.querySelector('#nf-sync-now');
+    if (sn) sn.onclick = async () => {
+        await fetch(`/api/chain/${ex.chain_id}/subscription`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ run_now: true }) });
+        showToast(T('nf.syncStarted'));
+        navigate('chain/' + ex.chain_id);
+    };
+}
+
+// 先按日期 / 标题筛，再按「最新 N 期」取；手动勾选另算
+function nfFiltered() {
+    const kws = nf.kw.split(/[,，]/).map(x => x.trim().toLowerCase()).filter(Boolean);
+    const since = nf.since.replace(/-/g, '');
+    return nf.data.videos.filter(v => (!since || !v.upload_date || v.upload_date >= since)
+        && (!kws.length || kws.some(k => (v.title || '').toLowerCase().includes(k))));
+}
+
+function nfApplyQuick() {
+    if (nf.quick === 'custom') return;
+    const list = nfFiltered();
+    nf.picked = new Set((nf.quick === 'all' ? list : list.slice(0, nf.quick)).map(v => v.video_url));
+}
+
+function nfRenderQuick() {
+    const n = nf.data.videos.length;
+    const opts = [10, 30, 100].filter(k => k < n).map(k => [k, T('nf.latest', { n: k })]);
+    opts.push(['all', T('nf.all', { n })]);
+    opts.push(['custom', T('nf.custom')]);
+    document.getElementById('nf-quick').innerHTML = `<div class="cx-seg">${opts.map(([k, l]) =>
+        `<button type="button" data-q="${k}" class="${String(nf.quick) === String(k) ? 'on' : ''}">${l}</button>`).join('')}</div>`;
+    document.querySelectorAll('#nf-quick button').forEach(b => b.onclick = () => {
+        nf.quick = b.dataset.q === 'all' || b.dataset.q === 'custom' ? b.dataset.q : +b.dataset.q;
+        if (nf.quick === 'custom') document.getElementById('nf-pick').open = true;
+        nfApplyQuick(); nfRenderQuick(); nfRenderList(); nfEstimate();
+    });
+}
+
+function nfRenderList() {
+    const list = nfFiltered();
+    const shown = list.slice(0, 400);
+    document.getElementById('nf-list').innerHTML = shown.map(v => `<label class="col-item">
+        <input type="checkbox" data-u="${escapeHtml(v.video_url)}" ${nf.picked.has(v.video_url) ? 'checked' : ''}>
+        <span class="col-t">${escapeHtml(v.title || v.video_id || '')}</span>
+        <span class="cx-muted tnum">${[v.upload_date ? v.upload_date.replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3') : '',
+            v.duration ? nfFmtHours(v.duration) : '', v.transcribed ? T('nf.txShort') : ''].filter(Boolean).join(' · ')}</span>
+    </label>`).join('') + (list.length > shown.length ? `<p class="cx-muted nf-more">${T('nf.moreHidden', { n: list.length - shown.length })}</p>` : '')
+        || `<p class="cx-muted nf-more">${T('col.none')}</p>`;
+    document.querySelectorAll('#nf-list input').forEach(i => i.onchange = () => {
+        i.checked ? nf.picked.add(i.dataset.u) : nf.picked.delete(i.dataset.u);
+        nf.quick = 'custom'; nfRenderQuick(); nfEstimate();
+    });
+    document.getElementById('nf-pick-sum').textContent = T('nf.pickSum', { n: nf.picked.size, m: list.length });
+}
+
+function nfSelected() {
+    return nf.data ? nf.data.videos.filter(v => nf.picked.has(v.video_url)) : [];
+}
+
+function nfEstimate() {
+    const box = document.getElementById('nf-est');
+    if (!nf.data || !box) return;
+    const sel = nfSelected();
+    const analyze = document.querySelector('input[name="nf-goal"]:checked').value === 'analyze';
+    chainMode.value = analyze ? 'analyze' : 'transcribe';
+    document.querySelectorAll('.nf-analyze-only').forEach(el => el.classList.toggle('is-muted', !analyze));
+    const known = sel.filter(v => v.duration);
+    const avg = known.length ? known.reduce((a, v) => a + v.duration, 0) / known.length : 1800;
+    const secs = sel.reduce((a, v) => a + (v.duration || avg), 0);
+    // 要区分说话人：以前的转写多半没有说话人标记，得用能分说话人的引擎重新转
+    const speakers = document.getElementById('nf-speakers').checked;
+    const newTx = speakers ? sel : sel.filter(v => !v.transcribed);
+    const txSecs = newTx.reduce((a, v) => a + (v.duration || avg), 0);
+    const p = nf.data.prices;
+    const engine = speakers && chainEngine.value !== 'gemini35' ? 'qwenasr' : chainEngine.value;
+    let cost = (txSecs / 3600) * (p.transcribe_per_hour[engine] ?? 0.3);
+    if (analyze && sel.length) {
+        cost += sel.length * p.analysis_per_episode + (secs / 3600) * p.analysis_per_hour + p.portrait;
+        if (chainSelfVerify.checked) cost += 0.1;
+        if (document.getElementById('nf-predict').checked) cost += sel.length * 0.006;
+    }
+    if (chainSummarize.checked) cost += sel.length * 0.012;
+    // 时间：下载 + 转写并行（按经验 50 倍速、4 路），分析并行 4 路
+    const mins = Math.round(2 + newTx.length * 0.25 + (txSecs / 60) / 50 / 4 * 6 + (analyze ? sel.length * 0.4 : 0));
+    const time = mins >= 90 ? T('nf.hours', { n: (mins / 60).toFixed(1) }) : T('nf.minutes', { n: Math.max(2, mins) });
+    const subsNote = chainPreferSubs.checked ? ' ' + T('nf.subsLess') : '';
+    box.innerHTML = sel.length ? `
+        <div class="nf-est-main">${T('nf.estMain', { n: sel.length, h: nfFmtHours(secs) })}</div>
+        <div class="nf-est-sub">${T('nf.estCost', { c: fmtUsd(cost < 0.01 ? 0.01 : cost), t: time })}${
+            sel.length - newTx.length ? ' · ' + T('nf.estReuse', { n: sel.length - newTx.length }) : ''}${subsNote}</div>`
+        : `<div class="nf-est-main">${T('nf.pickSome')}</div>`;
+    chainStartBtn.disabled = !sel.length || chainSubmitting;
+    chainStartBtn.textContent = T(analyze ? 'nf.startAnalyze' : 'nf.startTx', { n: sel.length });
+    nf.cost = cost;
+}
+
+async function nfStart() {
+    if (chainSubmitting) return;                              // 防连点重复建链（每条都烧钱）
+    if (!nf.data || nf.url !== (chainUrl.value || '').trim()) { await nfPreview(); return; }
+    const sel = nfSelected();
+    if (!sel.length) return;
+    if (nf.cost > 5 && !confirm(T('nf.bigConfirm', { c: fmtUsd(nf.cost), n: sel.length }))) return;
+    const analyze = chainMode.value !== 'transcribe';
+    const speakers = document.getElementById('nf-speakers').checked;
+    const syncOn = document.getElementById('nf-sync').checked;
+    const body = {
+        url: nf.url,
+        author: chainAuthor.value.trim() || (nf.data.channel || {}).name || '',
+        avatar: (nf.data.channel || {}).avatar || '', followers: (nf.data.channel || {}).followers || 0,
+        targets: sel.map(v => ({ video_url: v.video_url, title: v.title, video_id: v.video_id, thumbnail: v.thumbnail,
+                                 view_count: v.view_count, upload_date: v.upload_date, duration: v.duration })),
+        engine: speakers && chainEngine.value !== 'gemini35' ? 'qwenasr' : chainEngine.value,
+        require_speakers: speakers,
+        analyze, auto_predict: analyze && document.getElementById('nf-predict').checked,
+        sync_interval_h: syncOn ? +document.getElementById('nf-sync-iv').value : 0,
+        prefer_subs: chainPreferSubs.checked && !speakers,       // 字幕没有说话人：要区分说话人就只能转写音频
+        sub_lang: (document.getElementById('chain-sub-lang') || {}).value || 'auto',
+        fallback_whisper: chainFallbackWhisper.checked,
+        summarize: !!(chainSummarize && chainSummarize.checked),
+        verify: chainVerify.checked && analyze, self_verify: chainSelfVerify.checked && analyze,
+        lang: (document.getElementById('chain-lang') || {}).value || 'auto',
+        critique_level: chainCritique.value, analysis_preset: chainProvider.value,
+    };
     chainSubmitting = true;
     chainStartBtn.disabled = true;
-    if (prior) {                      // 接着旧的跑，不新建
-        try { await continueExistingChain(prior.id); }
-        finally { chainSubmitting = false; chainStartBtn.disabled = false; }
-        return;
-    }
     try {
-        const resp = await fetch('/api/chain', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                url,
-                author: chainAuthor.value.trim(),
-                max_videos: parseInt(chainMax.value, 10) || 0,
-                engine: chainEngine.value,
-                analyze: !chainMode || chainMode.value !== 'transcribe',
-                prefer_subs: chainPreferSubs.checked,
-                sub_lang: (document.getElementById('chain-sub-lang') || {}).value || 'auto',
-                fallback_whisper: chainFallbackWhisper.checked,
-                summarize: !!(chainSummarize && chainSummarize.checked),
-                // 只转写模式下这几个旋钮是禁用的，别把"勾着但根本不生效"的状态存进链条
-                verify: chainVerify.checked && !onlyTranscribe,
-                self_verify: chainSelfVerify.checked && !onlyTranscribe,
-                lang: (document.getElementById('chain-lang') || {}).value || 'auto',
-                critique_level: chainCritique.value,
-                analysis_preset: chainProvider.value,
-            }),
-        });
-        const data = await resp.json();
-        if (!resp.ok) throw new Error(data.error || T('creators.failedToCreate'));
+        const ex = nf.data.existing;
+        let id;
+        if (ex) {                                             // 分析过：并进原来那条，不新开（原话缓存在那条里）
+            const r = await (await fetch(`/api/chain/${ex.chain_id}/retry`, { method: 'POST',
+                headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
+            if (r && r.ok === false && r.error) throw new Error(r.error);
+            id = ex.chain_id;
+            if (syncOn) await fetch(`/api/chain/${id}/subscription`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ on: true, interval_h: body.sync_interval_h }) });
+        } else {
+            const resp = await fetch('/api/chain', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body) });
+            const data = await resp.json();
+            if (!resp.ok) throw new Error(data.error || T('creators.failedToCreate'));
+            id = data.chain_id;
+        }
         chainUrl.value = '';
-        loadChains();
+        nf = { url: '', data: null, loading: false, quick: 30, picked: new Set(), since: '', kw: '' };
+        document.getElementById('nf-preview').classList.add('hidden');
+        document.getElementById('nf-body').classList.add('hidden');
+        cxStore('cx.tab', 'episodes');
+        navigate('chain/' + id);
     } catch (err) {
         alert(T('alert.failedToStartAnalysis', { message: err.message }));
     } finally {
         chainSubmitting = false;
         chainStartBtn.disabled = false;
     }
-});
+}
+
+(function wireNewCreator() {
+    chainStartBtn.addEventListener('click', nfStart);
+    document.getElementById('nf-look').addEventListener('click', () => nfPreview(false));
+    chainUrl.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); nfPreview(false); } });
+    chainUrl.addEventListener('paste', () => setTimeout(() => nfPreview(false), 50));
+    let t = null;
+    const refilter = () => { clearTimeout(t); t = setTimeout(() => {
+        nf.since = document.getElementById('nf-since').value;
+        nf.kw = document.getElementById('nf-kw').value;
+        if (!nf.data) return;
+        if (nf.quick !== 'custom') nfApplyQuick();
+        nfRenderList(); nfEstimate();
+    }, 150); };
+    document.getElementById('nf-since').addEventListener('input', refilter);
+    document.getElementById('nf-kw').addEventListener('input', refilter);
+    document.getElementById('nf-all').addEventListener('click', () => {
+        nfFiltered().forEach(v => nf.picked.add(v.video_url)); nf.quick = 'custom'; nfRenderQuick(); nfRenderList(); nfEstimate();
+    });
+    document.getElementById('nf-none').addEventListener('click', () => {
+        nf.picked.clear(); nf.quick = 'custom'; nfRenderQuick(); nfRenderList(); nfEstimate();
+    });
+    ['nf-speakers', 'chain-prefer-subs', 'nf-predict', 'nf-sync', 'chain-engine', 'chain-self-verify', 'chain-summarize']
+        .forEach(id => { const el = document.getElementById(id); if (el) el.addEventListener('change', nfEstimate); });
+    document.querySelectorAll('input[name="nf-goal"]').forEach(r => r.addEventListener('change', nfEstimate));
+    document.addEventListener('langchange', () => { if (nf.data) { nfRenderPreview(); nfRenderQuick(); nfRenderList(); nfEstimate(); } });
+})();
 
 function chainProgressText(c) {
     const vids = c.videos || [];
@@ -1613,6 +1790,7 @@ function shortChainError(e) {
     if (/429|quota|rate.?limit|RESOURCE_EXHAUSTED/i.test(s)) return T('err.quota');
     if (/PROHIBITED|RECITATION|SAFETY|拦截|安全过滤/i.test(s)) return T('err.blocked');
     if (/api.?key|401|403|unauthor/i.test(s)) return T('err.apiKey');
+    if (/could not parse link|unsupported url|no downloadable videos/i.test(s)) return T('err.badLink');
     const head = s.split(/[:：(（\n]/)[0].trim();
     return (head || T('stage.failed')).slice(0, 60);
 }
@@ -1644,16 +1822,20 @@ function buildChainCard(c) {
     // 卡面只有一种形状：一枚圆头像。以前是"视频封面当横幅 + 头像压角"，方的圆的
     // 混在一起看着乱，而且封面尺寸不一让整行高低参差。现在统一——拿不到真头像
     // （番剧、探测失败）就露名字首字，那也是同一个圆。
-    const face = isRealAvatar(c.avatar) ? c.avatar : '';
+    const isCol = c.kind === 'collection';
+    const face = !isCol && isRealAvatar(c.avatar) ? c.avatar : '';
     const initial = escapeHtml(String(author).trim().slice(0, 1).toUpperCase() || '?');
     // referrerpolicy="no-referrer" 是必须的：B站 CDN 见到非 bilibili 的 Referer
     // 一律 403，不去掉 Referer 的话 B站博主全都只剩首字。
-    const thumb = `<div class="creator-thumb">
-        <div class="creator-face"><span>${initial}</span>${face
+    const thumb = `<div class="creator-thumb${isCol ? ' creator-thumb-col' : ''}">
+        <div class="creator-face${isCol ? ' creator-face-col' : ''}"><span>${isCol ? '❖' : initial}</span>${face
             ? `<img src="${escapeHtml(face)}" alt="" loading="lazy"
                  referrerpolicy="no-referrer" onerror="this.remove()">` : ''}</div>
       </div>`;
-    const name = `<div class="creator-name">${escapeHtml(String(author).slice(0, 60))}</div>`;
+    // 订阅：有没看过的更新 → 珊瑚小点；只是在关注 → 小铃铛
+    const subMark = c.sub_new ? `<span class="creator-new" title="${T('sub.newBadge')}">${T('sub.newShort')}</span>`
+        : c.sub_on ? `<span class="creator-bell" title="${T('sub.following')}">↻</span>` : '';
+    const name = `<div class="creator-name">${escapeHtml(String(author).slice(0, 60))}${subMark}</div>`;
 
     let body;
     if (active) {
@@ -1661,9 +1843,19 @@ function buildChainCard(c) {
         body = `<div class="creator-meta">${escapeHtml(prog)}</div>
             <div class="creator-progressbar"><i style="width:${chainPercent(c)}%"></i></div>`
             + (c.current ? `<div class="creator-current">${escapeHtml(c.current.slice(0, 60))}</div>` : '');
-    } else if (c.stage === 'done' && c.final_doc) {
+    } else if (c.final_doc || c.has_cards) {
         const nEp = vids.filter(v => v.status === 'done').length || vids.length;
-        body = `<div class="creator-meta">${nEp} episode${nEp === 1 ? '' : 's'} · ${brainLabel(c.analysis_preset)}</div>`;
+        // 能做什么一眼看到：有画像 / 能问 / 有话题
+        const chips = [c.final_doc ? T('creators.chipPortrait') : '', c.has_cards ? T('creators.chipAsk') : '',
+            c.has_tags ? T('creators.chipTopics') : ''].filter(Boolean);
+        // 内容都在、只是最近一次运行没跑完：不当失败处理，给一行小字 + 继续
+        const stale = c.stage !== 'done'
+            ? `<div class="creator-stale">${T(c.stage === 'failed' ? 'creators.lastRunFailed' : 'creators.lastRunStopped')} ·
+                 <a href="#" onclick="continueChain('${c.id}', event);return false;">${T('creators.continue')}</a></div>` : '';
+        const metaLine = isCol ? T('col.cardMeta', { kind: T('col.k.' + (c.collection_kind || 'mixed')), n: nEp })
+            : `${T('creators.nEpisodes', { n: nEp })} · ${escapeHtml(brainLabel(c.analysis_preset))}`;
+        body = `<div class="creator-meta">${metaLine}</div>
+            <div class="creator-chips">${chips.map(x => `<span>${x}</span>`).join('')}</div>${stale}`;
     } else if (c.stage === 'done' && c.analyze === false) {
         // 只转写：没有画像是预期结果，别掉进下面那个「中断」分支
         const nEp = vids.filter(v => v.status === 'done').length || vids.length;
@@ -1680,10 +1872,33 @@ function buildChainCard(c) {
             <button class="btn-secondary btn-small creator-retry"
                 onclick="continueChain('${c.id}', event)">${T('creators.continue')}</button>`;
     }
+    // 隐藏 / 恢复：只改名单，不动数据
+    const hideBtn = active ? '' : `<button type="button" class="creator-hide" title="${T(c.hidden ? 'creators.unhide' : 'creators.hide')}"
+        aria-label="${T(c.hidden ? 'creators.unhide' : 'creators.hide')}"
+        onclick="event.stopPropagation();hideChain('${c.id}', ${!c.hidden})">${c.hidden ? '↺' : '×'}</button>`;
     return `<div class="creator-card ${active ? 'creator-running' : ''}"
         onclick="navigate('chain/${c.id}')" title="${escapeHtml(author)}">
-        ${thumb}<div class="creator-body">${name}${body}</div></div>`;
+        ${hideBtn}${thumb}<div class="creator-body">${name}${body}</div></div>`;
 }
+
+let lastChains = [];
+
+async function hideChain(id, hide) {
+    try {
+        await fetch('/api/chains/hidden', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id, hidden: hide }) });
+    } catch { return; }
+    const c = lastChains.find(x => x.id === id);
+    if (c) c.hidden = hide;
+    renderChains(lastChains);
+    showToast(T(hide ? 'creators.hiddenToast' : 'creators.unhiddenToast'));
+}
+
+(function wireCreatorSearch() {
+    const el = document.getElementById('creators-search');
+    let t = null;
+    if (el) el.addEventListener('input', () => { clearTimeout(t); t = setTimeout(() => renderChains(lastChains), 120); });
+})();
 
 function renderChains(chains) {
     const grid = document.getElementById('creators-grid');
@@ -1693,20 +1908,53 @@ function renderChains(chains) {
     // 挑哪一条：正在跑的 > 有画像的 > 最新的——只按"最新"挑会让一条中断的空跑
     // 盖住之前花钱做出来的画像。旧 run 的文档仍在 Library → Analyses。
     const active = c => !['done', 'failed', 'cancelled'].includes(c.stage);
-    const rank = c => (active(c) ? 2 : 0) + (c.final_doc ? 1 : 0);
+    const rank = c => (active(c) ? 4 : 0) + (c.final_doc ? 2 : 0) + (c.has_cards ? 1 : 0);
     const best = new Map();
     let bangumiN = 0;
     for (const c of chains) {
         if (c.merged_into) continue;          // 已并入别条：不出卡片
         if (isBangumiUrl(c.url)) { bangumiN++; continue; }   // 番剧不算博主
+        if (c.kind === 'collection') continue;   // 合集另外放
         const key = normalizeChainUrl(c.url);
         const cur = best.get(key);
         // /api/chains 已按 created_at 倒序 → 同分时先来的（更新的）胜出
         if (!cur || rank(c) > rank(cur)) best.set(key, c);
     }
+    lastChains = chains;
     const latest = [...best.values()];
+    // 分三堆：正常的博主（进行中的排前面）/ 没跑出东西的（失败、中断、0 期）/ 你隐藏的
+    const q = (document.getElementById('creators-search') || {}).value || '';
+    const match = c => !q || (chainDisplayName(c) + ' ' + (c.url || '')).toLowerCase().includes(q.trim().toLowerCase());
+    const nDone = c => (c.videos || []).filter(v => v.status === 'done').length;
+    // 「没跑完」= 手里什么都没有的（失败 / 中断且一期没转成、也没卡片没画像）；有内容的留在主列表
+    const unfinished = c => !active(c) && !c.final_doc && !c.has_cards && (c.stage === 'failed' || !nDone(c));
+    // 合集单独一栏放在最上面（没有 url，按 id 各算各的，不参与上面的按 URL 去重）
+    const cols = chains.filter(c => c.kind === 'collection' && !c.hidden && match(c));
+    const colBlock = document.getElementById('collections-block');
+    if (colBlock) {
+        colBlock.classList.toggle('hidden', !cols.length);
+        document.getElementById('collections-grid').innerHTML = cols.map(buildChainCard).join('');
+    }
+    const hidden = latest.filter(c => c.hidden && match(c));
+    const unf = latest.filter(c => !c.hidden && unfinished(c) && match(c));
+    // 进行中的最前；然后是分析过（有画像 / 证据卡）的；只转写的放后面。各堆里保持新的在前
+    const weight = c => (active(c) ? 2 : 0) + (c.final_doc || c.has_cards ? 1 : 0);
+    const main = latest.filter(c => !c.hidden && !unfinished(c) && match(c))
+        .sort((a, b) => weight(b) - weight(a));
     if (empty) empty.classList.toggle('hidden', latest.length > 0);
-    grid.innerHTML = latest.map(buildChainCard).join('');
+    grid.innerHTML = main.map(buildChainCard).join('')
+        || (q ? `<p class="history-empty">${T('creators.noMatch')}</p>` : '');
+    const cnt = document.getElementById('creators-count');
+    if (cnt) cnt.textContent = latest.filter(c => !c.hidden && !unfinished(c)).length || '';
+    const fold = (id, list, label) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.classList.toggle('hidden', !list.length);
+        el.querySelector('summary').textContent = T(label, { n: list.length });
+        el.querySelector('.creators-grid').innerHTML = list.map(buildChainCard).join('');
+    };
+    fold('creators-unfinished', unf, 'creators.unfinished');
+    fold('creators-hidden', hidden, 'creators.hiddenN');
     // 被滤掉的番剧给一行说明，别让链条看起来凭空消失了
     const note = document.getElementById('creators-bangumi-note');
     if (note) {
@@ -1734,8 +1982,12 @@ function videoStatusOf(status) {
 let chainDetailId = null;
 let chainDetailTimer = null;
 
+let lastChainDetail = null;   // 最近一次拉到的博主数据：explore.js 晚加载时靠它补上
+
 async function openChainDetail(id) {
     chainDetailId = id;
+    // 直接打开博主页链接时，侧栏和「返回」都该落在博主这一栏，而不是默认的转写
+    if (![...navTabs].some(b => b.dataset.tab === 'creators' && b.classList.contains('active'))) switchTab('creators');
     mainView.classList.add('hidden');
     // 浏览器「后退」从某一期转写 / 报告回到这里时不走它们的返回按钮，得自己把它们收起来，
     // 不然两页叠着显示（点证据卡进转写再后退，最常见）
@@ -1745,12 +1997,8 @@ async function openChainDetail(id) {
     }
     if (docView) docView.classList.add('hidden');
     chainDetailView.classList.remove('hidden');
-    // 分集网格默认展开：这一页的主体就是每一期，收起来的话整页只剩一张卡
-    //（网格按视窗定高、在容器内滚，299 期也不会把页面撑爆）
-    chainDetailGrid.classList.remove('hidden');
-    const tg = document.getElementById('chain-episodes-toggle');
-    if (tg) tg.classList.add('open');
     window.scrollTo({ top: 0 });
+    if (typeof exploreOpen === 'function') exploreOpen(id);   // 标签页复位（解读/问/话题/预测/证据卡/分集）
     renderMergeBar();   // 购物车里有跨博主选的期 → 进来就显操作条
     loadChainCards(id); // 证据卡单独一个容器，不跟着 4 秒轮询重绘
     await refreshChainDetail();
@@ -1758,14 +2006,14 @@ async function openChainDetail(id) {
 
 // ===== 证据卡墙：逐期抽过的卡片直接摆出来（原话 + 出处，点开跳回那一秒）=====
 const CC_PAGE = 12;
+const SHARE_ICON = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="M7 8l5-5 5 5"/><path d="M5 13v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6"/></svg>';
 let chainCards = { id: null, all: [], episodes: 0, layer: 'all', q: '', shown: CC_PAGE };
 
 async function loadChainCards(id) {
     const box = document.getElementById('chain-cards');
     if (!box) return;
-    box.classList.add('hidden');
     box.innerHTML = '';
-    chainCards = { id, all: [], episodes: 0, layer: 'all', q: '', shown: CC_PAGE };
+    chainCards = { id, all: [], episodes: 0, layer: 'all', q: '', spk: '', shown: CC_PAGE };
     let r;
     try {
         const resp = await fetch(`/api/chain/${id}/cards`);
@@ -1773,13 +2021,20 @@ async function loadChainCards(id) {
         r = await resp.json();
     } catch { return; }
     if (chainCards.id !== id || chainDetailId !== id) return;   // 加载期间切到别的博主了
-    if (!r.cards || !r.cards.length) return;                    // 没跑过分析：整块不出现
+    if (!r.cards || !r.cards.length) {                          // 没跑过分析：问/话题/预测/证据卡不出现
+        if (typeof cxSetAvail === 'function') cxSetAvail({ cards: false });
+        return;
+    }
     const eps = r.episodes || [];
     r.cards.forEach(c => {                                      // 卡片只带期下标，这里接回出处
         const ep = eps[c.ep] || {};
         c.episode = ep.title || '';
         c.task_id = ep.task_id || '';
+        c.date = ep.date || '';
+        c.video_url = ep.video_url || '';
+        c.ep_no = c.ep + 1;
     });
+    chainCards.author = r.author || '';
     // 默认顺序按期轮流取（每期第 1 张、再每期第 2 张……），第一屏就能看到不同的期，
     // 不会前 12 张全是同一期
     const byEp = new Map();
@@ -1802,6 +2057,10 @@ async function loadChainCards(id) {
 
     const counts = {};
     r.cards.forEach(c => { counts[c.layer] = (counts[c.layer] || 0) + 1; });
+    // 说话人筛选：带说话人的转写才有（连麦 / 访谈），按张数排
+    const spkCount = {};
+    r.cards.forEach(c => { if (c.speaker) spkCount[c.speaker] = (spkCount[c.speaker] || 0) + 1; });
+    const spkOpts = Object.entries(spkCount).sort((a, b) => b[1] - a[1]).slice(0, 30);
     const chips = [['all', T('cards.all'), r.cards.length]]
         .concat(['claim', 'transcript', 'verified'].filter(k => counts[k])
             .map(k => [k, T('cards.layer.' + k), counts[k]]));
@@ -1816,6 +2075,9 @@ async function loadChainCards(id) {
         <div class="cc-controls">
             <div class="cc-chips">${chips.map(([k, label, n]) =>
                 `<button type="button" class="cc-chip${k === 'all' ? ' on' : ''}" data-layer="${k}">${label} <span>${n}</span></button>`).join('')}</div>
+            ${spkOpts.length > 1 ? `<select class="cc-spk" aria-label="${T('cards.speaker')}">
+                <option value="">${T('cards.allSpeakers')}</option>
+                ${spkOpts.map(([k, n]) => `<option value="${escapeHtml(k)}">${escapeHtml(k)} · ${n}</option>`).join('')}</select>` : ''}
             <input class="cc-search" type="search" placeholder="${T('cards.search')}">
         </div>
         <div class="cc-grid"></div>
@@ -1827,6 +2089,12 @@ async function loadChainCards(id) {
         chainCards.shown = CC_PAGE;
         renderChainCards();
     }));
+    const spkSel = box.querySelector('.cc-spk');
+    if (spkSel) spkSel.addEventListener('change', () => {
+        chainCards.spk = spkSel.value;
+        chainCards.shown = CC_PAGE;
+        renderChainCards();
+    });
     let t = null;
     box.querySelector('.cc-search').addEventListener('input', e => {
         clearTimeout(t);
@@ -1849,16 +2117,18 @@ async function loadChainCards(id) {
         chainCards.shown += CC_PAGE * 2;
         renderChainCards();
     });
-    box.classList.remove('hidden');
     renderChainCards();
+    // 问 / 话题 / 预测 / 证据卡 四个标签页（explore.js）
+    if (typeof exploreInit === 'function') exploreInit(id, r);
 }
 
 function renderChainCards() {
     const box = document.getElementById('chain-cards');
     if (!box) return;
-    const { layer, q } = chainCards;
+    const { layer, q, spk } = chainCards;
     const list = chainCards.all.filter(c => (layer === 'all' || c.layer === layer)
-        && (!q || (c.quote + ' ' + c.obs + ' ' + c.episode).toLowerCase().includes(q)));
+        && (!spk || c.speaker === spk)
+        && (!q || (c.quote + ' ' + c.obs + ' ' + c.episode + ' ' + (c.speaker || '')).toLowerCase().includes(q)));
     const page = list.slice(0, chainCards.shown);
     box.querySelector('.cc-grid').innerHTML = page.map(c => {
         // 统一成 MM:SS（不到一小时的 00:01:56 去掉前导 00:），和转写页的时间戳一个样
@@ -1876,8 +2146,10 @@ function renderChainCards() {
             ${obs}
             <div class="cc-foot">
                 <span class="cc-layer cc-l-${c.layer}">${T('cards.layer.' + c.layer)}</span>
+                ${c.speaker ? `<span class="cc-who" title="${escapeHtml(c.speaker)}">🎙 ${escapeHtml(c.speaker)}</span>` : ''}
                 <span class="cc-ep">${escapeHtml(c.episode || '')}</span>
                 ${ts ? `<span class="cc-ts">${ts}</span>` : ''}
+                ${c.quote ? `<button class="cc-share" type="button" data-cid="${escapeHtml(c.id || '')}" title="${T('share.title')}" aria-label="${T('share.title')}">${SHARE_ICON}</button>` : ''}
             </div>
         </div>`;
     }).join('') || `<p class="history-empty">${T('cards.none')}</p>`;
@@ -1886,18 +2158,19 @@ function renderChainCards() {
         el.addEventListener('click', go);
         el.addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
     });
+    box.querySelectorAll('.cc-share').forEach(b => b.addEventListener('click', e => {
+        e.stopPropagation();                                    // 别触发整张卡的跳转
+        const c = chainCards.all.find(x => x.id === b.dataset.cid);
+        if (c && typeof openShareCard === 'function') {
+            openShareCard({ ...c, ts: (String(c.timestamp || '').match(/\d+:\d{2}(?::\d{2})?/) || [''])[0]
+                .replace(/^0{1,2}:(?=\d{2}:\d{2}$)/, ''), author: chainCards.author });
+        }
+    }));
     const more = box.querySelector('.cc-more');
     const left = list.length - page.length;
     more.classList.toggle('hidden', left <= 0);
     more.textContent = T('cards.more', { n: left });
 }
-
-// Episodes 折叠开关
-const episodesToggle = document.getElementById('chain-episodes-toggle');
-if (episodesToggle) episodesToggle.addEventListener('click', () => {
-    const open = chainDetailGrid.classList.toggle('hidden');
-    episodesToggle.classList.toggle('open', !open);
-});
 
 async function refreshChainDetail() {
     if (!chainDetailId) return;
@@ -1910,91 +2183,101 @@ async function refreshChainDetail() {
         chainDetailGrid.innerHTML = `<p class="history-empty">${T('common.couldNotLoad')}</p>`;
         return;
     }
-    chainDetailTitle.textContent = T('nav.creators');   // 顶栏只当面包屑，名字在下面的封面里
-    chainDetailMeta.textContent = '';          // 卡片已含状态，别重复这行灰字
+    chainDetailTitle.textContent = T('nav.creators');   // 顶栏只当面包屑，名字在下面的档案头里
+    chainDetailMeta.textContent = '';
 
     const vids = c.videos || [];
     const chainTerminal = ['done', 'failed', 'cancelled'].includes(c.stage);
+    const author = chainDisplayName(c);
+    const doneN = vids.filter(v => v.status === 'done').length;
 
-    // ===== Info 面板：设置 / 模型（含降级留痕）/ 操作 =====
-    const onoff = b => b ? T('common.on') : T('common.off');
+    // ===== 运行详情与操作：收进右上角的下拉，别占主区 =====
     const fell = vids.filter(v => v.status === 'done' && v.engine_used
         && v.engine_used !== c.engine).length;
-    const fellNote = fell
-        ? `<div class="cd-alert">⚠ ${T('chainDetail.fellBack', { n: fell })}</div>` : '';
+    const fellNote = fell ? `<div class="cd-alert">⚠ ${T('chainDetail.fellBack', { n: fell })}</div>` : '';
+    // 报错只在这次真的失败时当回事；已完成的链条上残留的是之前某次运行的报错，灰着放在运行详情里
+    const failedNow = c.stage === 'failed';
     const err = c.error
-        ? `<div class="cd-alert">⚠ ${String(c.error).replace(/</g, '&lt;').slice(0, 180)}</div>` : '';
-    const actions = chainTerminal
+        ? (failedNow ? `<div class="cd-alert">⚠ ${escapeHtml(String(c.error).slice(0, 180))}</div>`
+            : `<div class="cp-old-err"><b>${T('chainDetail.lastError')}</b> ${escapeHtml(String(c.error).slice(0, 180))}</div>`) : '';
+    const actions = chainTerminal && c.kind === 'collection'
+        ? `<button class="btn-primary ci-btn" onclick="openCollectionModal({addTo: '${c.id}'})">${T('col.add')}</button>
+           <button class="btn-secondary ci-btn" onclick="continueChain('${c.id}')">${T('col.rebuild')}</button>
+           <button class="btn-secondary ci-btn btn-danger" onclick="deleteChain('${c.id}', true)">${T('common.delete')}</button>
+           <p class="ci-hint">${T('col.actionsHint')}</p>`
+        : chainTerminal
         ? `<button class="btn-primary ci-btn" onclick="continueChain('${c.id}')">${T('creators.continue')}</button>
            <button class="btn-secondary ci-btn" onclick="reanalyzeChain('${c.id}')">${T('creators.reanalyze')}</button>
            <button class="btn-secondary ci-btn" onclick="closeChainDetail();navigate('tab/library/docs')">${T('creators.episodeDocs')}</button>
            <button class="btn-secondary ci-btn btn-danger" onclick="deleteChain('${c.id}', true)">${T('common.delete')}</button>
-           <span class="ci-hint">${T('chainDetail.actionsHint')}</span>`
+           <p class="ci-hint">${T('chainDetail.actionsHint')}</p>`
         : `<button class="btn-secondary ci-btn" onclick="stopChain('${c.id}')">${T('creators.stop')}</button>`;
-    // ===== 布局原则：主角是「这个博主 + 读他的解读」；运维细节全部折叠 =====
-    const author = chainDisplayName(c);
-    const doneN = vids.filter(v => v.status === 'done').length;
-    // 主 CTA：读画像 / 合并原文（核心内容，做大）
-    let ctas = '';
-    if (c.final_doc) ctas += `<button class="btn-primary cd-cta"
-        onclick="navigate('chain/${c.id}/doc/${encodeURIComponent(c.final_doc)}')">${T('creators.report')}</button>`;
-    if (c.raw_doc) ctas += `<button class="btn-secondary cd-cta"
-        onclick="navigate('chain/${c.id}/doc/${encodeURIComponent(c.raw_doc)}')">${T('creators.fullTranscript')}</button>`;
-    // 镜头：核心动作，大 chip
-    const LENSES = ['roast', 'craft', 'fun', 'quotes', 'worldview'].map(k => [k, T('lens.' + k)]);
-    const lensBlock = (chainTerminal && c.analyze !== false)
-        ? `<div class="cd-lens-title">${T('chainDetail.lensTitle')} <span class="ci-hint">${T('chainDetail.lensHint')}</span></div>
-           <div class="cd-lens-row">`
-          + LENSES.map(([k, label]) =>
-              `<button class="lens-btn" onclick="runLens('${c.id}','${k}')">${label}</button>`).join('')
-          + `</div>`
-        : '';
-    // 运维细节 + 次要操作：折叠（活跃时展开显进度）
-    const opsOpen = chainTerminal ? '' : ' open';
-    // 真头像（取不到/加载失败 → 名字首字的珊瑚章）+ 真数据条
-    const ch = (author || c.url || '?').trim().slice(0, 1) || '?';
-    const avatarHtml = `<div class="cd-avatar">${ch}${c.avatar
-        ? `<img class="cd-avatar-img" src="${escapeHtml(c.avatar || '')}" alt=""
-             referrerpolicy="no-referrer" onerror="this.remove()">`
-        : ''}</div>`;
-    const totalViews = vids.reduce((s, v) => s + (v.view_count || 0), 0);
-    const stats = [`<div class="cd-stat"><div class="n">${doneN}</div><div class="l">${T('chainDetail.episodesRead')}</div></div>`];
-    if (c.followers) stats.push(`<div class="cd-stat"><div class="n">${fmtCount(c.followers)}</div><div class="l">${T('chainDetail.followers')}</div></div>`);
-    if (totalViews) stats.push(`<div class="cd-stat"><div class="n">${fmtCount(totalViews)}</div><div class="l">${T('chainDetail.totalPlays')}</div></div>`);
-    stats.push(`<div class="cd-stat"><div class="n">${brainLabel(c.analysis_preset)}</div><div class="l">${T('chainDetail.analysisModel')}</div></div>`);
-    if (c.cost && c.cost.cost_usd > 0) stats.push(`<div class="cd-stat"><div class="n">${fmtUsd(c.cost.cost_usd)}</div><div class="l">${T('chainDetail.cost')}</div></div>`);
-    document.getElementById('chain-detail-info').innerHTML = `
-        <div class="cd-cover">
-            <div class="cd-cover-top">
-                ${avatarHtml}
-                <div class="cd-id">
-                    <div class="cd-eyebrow">${T('chainDetail.eyebrow', { n: doneN })}</div>
-                    <div class="cd-name">${escapeHtml(String(author).slice(0, 60))}</div>
-                    <div class="cd-sub">${stageLabel(c.stage)}${c.finished_at ? ' · ' + c.finished_at : ''}</div>
-                </div>
-            </div>
-            <div class="cd-stats">${stats.join('')}</div>
-            <div class="cd-body">
-                <div class="cd-ctas">${ctas}</div>
-                ${lensBlock}
-            </div>
-        </div>
-        ${fellNote}
-        <details class="chain-ops"${opsOpen}>
-            <summary>⚙ ${T('chainDetail.runDetails')}${err ? ' · <span class="ops-flag">' + T('chainDetail.hasErrors') + '</span>' : ''}</summary>
-            <div class="chain-info">
-                ${err}
-                <div class="ci-row"><span class="ci-k">${T('chainDetail.source')}</span>
-                    <span class="ci-v"><a href="${safeUrl(c.url)}" target="_blank" rel="noopener">${escapeHtml((c.url || '').slice(0, 80))}</a></span></div>
-                <div class="ci-row"><span class="ci-k">${T('settings.title')}</span>
-                    <span class="ci-v">${settingsLine(c)}</span></div>
-                <div class="ci-row"><span class="ci-k">${T('chainDetail.progress')}</span>
-                    <span class="ci-v">${chainProgressText(c)}</span></div>
-                <div class="ci-actions">${actions}</div>
-            </div>
-        </details>`;
+    // 已完成的链条上挂着历史报错时只在按钮上点个小红点，失败的链条才把报错摆到头部
+    const opsDot = failedNow && c.error ? '<i class="cp-dot" aria-hidden="true"></i>' : '';
+    const opsWasOpen = !!document.querySelector('#chain-detail-info .cp-ops[open]');
+    const ops = `<details class="chain-ops cp-ops"${opsWasOpen ? ' open' : ''}>
+        <summary class="btn-secondary cp-btn">⋯ ${T('chainDetail.runDetails')}${opsDot}</summary>
+        <div class="cp-ops-panel">
+            ${err}${fellNote}
+            ${c.kind === 'collection' ? '' : `<div class="ci-row"><span class="ci-k">${T('chainDetail.source')}</span>
+                <span class="ci-v"><a href="${safeUrl(c.url)}" target="_blank" rel="noopener">${escapeHtml((c.url || '').slice(0, 80))}</a></span></div>
+            <div class="ci-row"><span class="ci-k">${T('settings.title')}</span>
+                <span class="ci-v">${settingsLine(c)}</span></div>`}
+            <div class="ci-row"><span class="ci-k">${T('chainDetail.progress')}</span>
+                <span class="ci-v">${chainProgressText(c)}</span></div>
+            <div class="ci-actions">${actions}</div>
+        </div></details>`;
 
-    document.getElementById('chain-episodes-count').textContent = `(${vids.length})`;
+    // ===== 档案头：头像 + 名字 + 状态 + 全部数据（含修辞三指标，由 explore.js 填进 #cp-rh）=====
+    const ch = c.kind === 'collection' ? '❖' : ((author || c.url || '?').trim().slice(0, 1) || '?');
+    const avatarHtml = `<div class="cd-avatar cp-avatar${c.kind === 'collection' ? ' creator-face-col' : ''}">${escapeHtml(ch)}${c.avatar && c.kind !== 'collection'
+        ? `<img class="cd-avatar-img" src="${escapeHtml(c.avatar || '')}" alt=""
+             referrerpolicy="no-referrer" onerror="this.remove()">` : ''}</div>`;
+    const totalViews = vids.reduce((s, v) => s + (v.view_count || 0), 0);
+    const stat = (n, l, extra = '') => `<div class="cp-stat"${extra}><div class="n">${n}</div><div class="l">${l}</div></div>`;
+    const stats = [stat(doneN, T('chainDetail.episodesRead'))];
+    if (c.followers) stats.push(stat(fmtCount(c.followers), T('chainDetail.followers')));
+    if (totalViews) stats.push(stat(fmtCount(totalViews), T('chainDetail.totalPlays')));
+    const tail = [];
+    if (c.analyze !== false) tail.push(stat(escapeHtml(brainLabel(c.analysis_preset)), T('chainDetail.analysisModel')));
+    if (c.cost && c.cost.cost_usd > 0) tail.push(stat(fmtUsd(c.cost.cost_usd), T('chainDetail.cost')));
+    const running = !chainTerminal
+        ? `<div class="cp-run"><div class="creator-progressbar"><i style="width:${chainPercent(c)}%"></i></div>
+             <span>${escapeHtml(chainProgressText(c) || stageLabel(c.stage))}</span></div>` : '';
+    // 失败了但手里有内容（卡片 / 画像）：一行提示就够，别把整个档案头染红；什么都没有才用大红框
+    const hasContent = !!(c.final_doc || c.analyzed_ok);
+    const failed = !(failedNow && c.error) ? ''
+        : hasContent ? `<div class="cp-fail cp-fail-soft">⚠ ${T('creators.lastRunFailed')}：${escapeHtml(shortChainError(c.error))} ·
+              <a href="#" onclick="continueChain('${c.id}');return false;">${T('creators.continue')}</a></div>`
+        : `<div class="cp-fail">${err}</div>`;
+    const host = (() => { try { return new URL(c.url).hostname.replace(/^www\./, ''); } catch { return ''; } })();
+    document.getElementById('chain-detail-info').innerHTML = `
+        <div class="cp-top">
+            ${avatarHtml}
+            <div class="cp-id">
+                <div class="cd-eyebrow">${c.kind === 'collection'
+                    ? T('col.eyebrow', { kind: T('col.k.' + (c.collection_kind || 'mixed')), n: vids.length })
+                    : T(c.analyze === false ? 'chainDetail.eyebrowTranscripts' : 'chainDetail.eyebrow', { n: doneN })}</div>
+                <h1 class="cp-name">${escapeHtml(String(author).slice(0, 60))}</h1>
+                <div class="cd-sub">${stageLabel(c.stage)}${c.finished_at ? ' · ' + escapeHtml(c.finished_at) : ''}${host
+                    ? ` · <a class="cp-src" href="${safeUrl(c.url)}" target="_blank" rel="noopener">${escapeHtml(host)} ↗</a>` : ''}</div>
+                ${running}
+            </div>
+            <div class="cp-actions"><div id="cp-sub"></div>${ops}</div>
+        </div>
+        ${failed}
+        <div class="cp-stats">${stats.join('')}<div id="cp-rh" class="cp-rh"></div>${tail.join('')}</div>`;
+    lastChainDetail = c;
+    if (typeof cxFillHead === 'function') cxFillHead(c);   // 修辞指标 + 订阅按钮（explore.js 缓存着，轮询重绘后补回去）
+
+    document.getElementById('chain-episodes-count').textContent = vids.length || '';
+    // 分集页顶栏：几期转写完了 + 整合的完整转写 + 勾选合并的提示
+    const epBar = document.getElementById('cx-ep-bar');
+    if (epBar) epBar.innerHTML = `
+        <span class="cx-muted">${T('chainDetail.epBar', { done: doneN, total: vids.length })}</span>
+        ${c.raw_doc ? `<button class="btn-secondary cp-btn" type="button"
+            onclick="navigate('chain/${c.id}/doc/${encodeURIComponent(c.raw_doc)}')">${T('creators.fullTranscript')} ↗</button>` : ''}
+        <span class="cx-muted cx-ep-hint">${T('chainDetail.mergeHint')}</span>`;
 
     chainDetailGrid.innerHTML = vids.map((v, idx) => {
         const st = videoStatusOf(v.status);
@@ -2036,6 +2319,7 @@ async function refreshChainDetail() {
 
 function closeChainDetail() {
     clearTimeout(chainDetailTimer);
+    if (typeof cxClearTimers === 'function') cxClearTimers();
     chainDetailId = null;
     chainDetailView.classList.add('hidden');
     mainView.classList.remove('hidden');
@@ -2067,6 +2351,7 @@ function renderMergeBar() {
     bar.innerHTML = `
         <span class="merge-bar-count">${T('chainDetail.selectedCount', { n })}</span>
         <button class="btn-secondary btn-small" onclick="clearMergeCart()">${T('common.clear')}</button>
+        <button class="btn-secondary btn-small" onclick="collectionFromCart()">❖ ${T('col.fromCart')}</button>
         <button class="btn-primary btn-small" onclick="runMergeTranscripts()">📄 ${T('chainDetail.merge')}</button>`;
 }
 
