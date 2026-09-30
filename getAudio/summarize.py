@@ -9,10 +9,11 @@ import re
 
 import usage
 from config import (
-    GEMINI_API_KEY, GEMINI_MODEL,
-    DASHSCOPE_API_KEY, DASHSCOPE_LLM_MODEL,
+    GEMINI_MODEL,
+    DASHSCOPE_LLM_MODEL,
     make_gemini_client,
 )
+import config
 
 SUMMARY_PROMPT = """你是一个专业的内容分析助手。请对以下音频/视频转录文本进行总结分析。
 
@@ -73,7 +74,7 @@ def summarize_transcript(full_text, use_qwen=False):
 
 def _call_gemini(prompt):
     """Call Gemini API and return raw response text."""
-    api_key = GEMINI_API_KEY or os.environ.get('GEMINI_API_KEY', '')
+    api_key = config.gemini_key()
     if not api_key:
         return None
 
@@ -91,7 +92,7 @@ def _call_gemini(prompt):
 
 def _call_qwen(prompt):
     """Call Qwen via DashScope OpenAI-compatible API."""
-    api_key = DASHSCOPE_API_KEY or os.environ.get('DASHSCOPE_API_KEY', '')
+    api_key = config.dashscope_key()
     if not api_key:
         return None
 

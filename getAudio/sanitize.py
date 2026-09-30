@@ -19,7 +19,6 @@ ASR（Whisper / Gemini）在静音、杂乱、低置信处有三种通病：
 
 import os
 import re
-import shutil
 import subprocess
 from collections import Counter
 import config

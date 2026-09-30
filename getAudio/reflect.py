@@ -23,8 +23,9 @@ from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
 from datetime import datetime, timedelta
 
-from config import (GEMINI_API_KEY, GEMINI_ENRICH_MODEL, OPENROUTER_COMPAT_BASE,
+from config import (GEMINI_ENRICH_MODEL, OPENROUTER_COMPAT_BASE,
                     REFLECT_MODEL, REFLECT_OPENROUTER_MODEL, make_gemini_client)
+import config
 from enrich import _parse_json_obj
 import usage
 
@@ -289,7 +290,7 @@ def _openrouter_text(prompt):
 
 def _gemini_text(prompt):
     """flash-lite 写不出来（限流 / 模型下架）就退一档到 enrich 那个 flash。"""
-    g_key = GEMINI_API_KEY or os.environ.get('GEMINI_API_KEY', '')
+    g_key = config.gemini_key()
     if not g_key:
         return None
     client = make_gemini_client(g_key)
@@ -416,12 +417,25 @@ def _bg_job(results_dir, range_key):
             _INFLIGHT.discard(range_key)
 
 
+_LAST_BG = {}                  # range_key → 上次后台重算开始的时间（monotonic）
+MIN_BG_INTERVAL_SEC = 600      # 同一时段后台重算最多 10 分钟一次
+
+
 def schedule_regenerate(results_dir, range_key):
-    """把某个时段丢到后台重算；已经在排队/在跑就不重复。返回是否新排了任务。"""
+    """把某个时段丢到后台重算；已经在排队/在跑、或 10 分钟内算过，就不重复。返回是否新排了任务。
+
+    节流的原因：链条转写期间条目每几秒就变一次，面板开着时每 6 秒一次的轮询
+    每次都判「过期」→ 排一次重算。2026-09-27 零点那一小时这样烧了 1501 次调用。
+    手动刷新（build(refresh=True)）不走这里，不受限制。"""
+    import time
+    now = time.monotonic()
     with _INFLIGHT_LOCK:
         if range_key in _INFLIGHT:
             return False
+        if now - _LAST_BG.get(range_key, float('-inf')) < MIN_BG_INTERVAL_SEC:
+            return False
         _INFLIGHT.add(range_key)
+        _LAST_BG[range_key] = now
     _BG.submit(_bg_job, results_dir, range_key)
     return True
 
@@ -480,7 +494,7 @@ def start_scheduler(results_dir):
 
 # ---------- 对外 ----------
 
-def build(results_dir, range_key='1m', lang='zh', refresh=False):
+def build(results_dir, range_key='1m', lang='zh', refresh=False, generate=True):
     """算统计 + 取叙事。
 
     refresh=True（手动点刷新）：同步重算，等结果。
@@ -501,7 +515,7 @@ def build(results_dir, range_key='1m', lang='zh', refresh=False):
     elif fresh:
         text = hit['text']
     else:
-        if data['_items']:
+        if data['_items'] and generate:     # generate=False：演示实例，只读缓存不调模型
             schedule_regenerate(results_dir, range_key)
         text = hit['text'] if hit else None
         stale = bool(hit)

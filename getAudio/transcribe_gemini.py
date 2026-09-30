@@ -13,7 +13,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_EXCEPTION
 from google import genai
 from google.genai import types
-from config import GEMINI_API_KEY, GEMINI_MODEL, GEMINI_INLINE_LIMIT, make_gemini_client
+from config import GEMINI_MODEL, GEMINI_INLINE_LIMIT, make_gemini_client
 import config
 import usage
 
@@ -83,8 +83,11 @@ def _diagnose_empty_response(response):
 
 
 def _is_rate_limit_error(err):
+    # 不能只找 'rate'：generateContent、generation、separate 里都有，普通报错会被当限流退避 ×3
     msg = str(err).lower()
-    return '429' in msg or 'resource_exhausted' in msg or 'quota' in msg or 'rate' in msg
+    return ('429' in msg or 'resource_exhausted' in msg or 'quota' in msg
+            or 'rate limit' in msg or 'rate_limit' in msg or 'ratelimit' in msg
+            or 'too many requests' in msg)
 
 
 def transcribe_audio(filepath, progress_callback=None):
@@ -98,10 +101,10 @@ def transcribe_audio(filepath, progress_callback=None):
     Returns:
         List of segment dicts with keys: timestamp (str), text (str).
     """
-    api_key = GEMINI_API_KEY or os.environ.get('GEMINI_API_KEY', '')
+    api_key = config.gemini_key()
     if not api_key:
         raise RuntimeError(
-            "Gemini API Key not set. Please set GEMINI_API_KEY environment variable."
+            "Gemini API Key not set. Add it in Settings (or set GEMINI_API_KEY in .env)."
         )
 
     # 给底层 HTTP 调用设 10 分钟超时，防止代理 / Gemini 侧 socket 挂起后永远不 return。
@@ -141,9 +144,11 @@ def transcribe_audio(filepath, progress_callback=None):
                 return None
             return end - start
 
+        stop = threading.Event()     # 有一块失败了：其余块别再开跑、别再重试
+
         def _one(idx):
             chunk_path, start_offset_seconds = chunk_files[idx]
-            text = _transcribe_single_file(client=client, filepath=chunk_path)
+            text = _transcribe_single_file(client=client, filepath=chunk_path, stop=stop)
             merged_text_parts[idx] = shift_timestamps(
                 text, start_offset_seconds, chunk_seconds=_chunk_len(idx)).strip()
             if progress_callback:
@@ -164,15 +169,19 @@ def transcribe_audio(filepath, progress_callback=None):
             # 各块互相独立，并行转写；保序靠索引回填。
             # 任一块失败（含内容拦截）→ 取消还没开跑的块，抛出让整条任务按原逻辑失败/兜底。
             width = max(1, min(config.GEMINI_CHUNK_CONCURRENCY, total_chunks))
-            with ThreadPoolExecutor(max_workers=width) as pool:
+            # 不用 with：它退出时 shutdown(wait=True)，一块失败了还要等其它在跑的块
+            # 跑完（照样计费）才报错。这里失败就立刻返回，在跑的块看到 stop 不再重试。
+            pool = ThreadPoolExecutor(max_workers=width)
+            try:
                 _one_bound = usage.bound(_one)       # 记账归属跟进子线程
                 futures = [pool.submit(_one_bound, i) for i in range(total_chunks)]
                 wait(futures, return_when=FIRST_EXCEPTION)
                 failed = next((f for f in futures if f.done() and f.exception()), None)
                 if failed is not None:
-                    for f in futures:
-                        f.cancel()
+                    stop.set()
                     raise failed.exception()
+            finally:
+                pool.shutdown(wait=False, cancel_futures=True)
 
         full_text = "\n".join(part for part in merged_text_parts if part)
         if progress_callback:
@@ -184,7 +193,11 @@ def transcribe_audio(filepath, progress_callback=None):
             shutil.rmtree(temp_dir, ignore_errors=True)
 
 
-def _transcribe_single_file(client, filepath, progress_callback=None):
+class _Stopped(RuntimeError):
+    pass
+
+
+def _transcribe_single_file(client, filepath, progress_callback=None, stop=None):
     """Transcribe one audio file with Gemini and return raw timestamped text.
 
     使用非流式 generate_content：比流式更抗代理/网络抖动。
@@ -192,10 +205,12 @@ def _transcribe_single_file(client, filepath, progress_callback=None):
     整个过程（上传 + 生成 + 重试）占一个全局在飞名额，见 _inflight。
     """
     with _inflight:
-        return _transcribe_single_file_inner(client, filepath, progress_callback)
+        if stop is not None and stop.is_set():
+            raise _Stopped('同一任务的另一块已失败')
+        return _transcribe_single_file_inner(client, filepath, progress_callback, stop)
 
 
-def _transcribe_single_file_inner(client, filepath, progress_callback=None):
+def _transcribe_single_file_inner(client, filepath, progress_callback=None, stop=None):
     file_size = os.path.getsize(filepath)
 
     # Determine MIME type from extension
@@ -243,6 +258,8 @@ def _transcribe_single_file_inner(client, filepath, progress_callback=None):
 
     last_err = None
     for attempt in range(1, MAX_ATTEMPTS + 1):
+        if stop is not None and stop.is_set():
+            raise _Stopped('同一任务的另一块已失败')
         try:
             if progress_callback:
                 # 本次尝试的进度区间：30 -> 95。重试会从 30 重新开始，体现"再试一次"

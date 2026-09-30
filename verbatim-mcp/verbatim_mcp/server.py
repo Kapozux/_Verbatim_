@@ -103,8 +103,8 @@ async def transcribe_urls(
 ) -> dict:
     """
     urls: 一个或多个链接，换行或逗号分隔（一次最多 20 行）
-    engine: whisper（本机，免费，慢）/ gemini / dashscope（云端，快，要 API key）
-    max_videos: 合集类链接最多展开多少个视频，1-300
+    engine: whisper（本机，免费，要插电，慢）/ gemini35（Gemini 3.5 Transcribe，网页端默认，带说话人）/ gemini / qwenasr（阿里云 Qwen-Audio，带说话人）/ dashscope / precise（Gemini + 阿里云说话人合并，最慢最准）。云端引擎要在 Verbatim Settings 里填对应 key
+    max_videos: 合集类链接最多展开多少个视频，1-600
     """
     payload = await _request(
         "POST", "/api/transcribe_urls",
@@ -129,7 +129,7 @@ async def transcribe_urls(
 async def transcribe_file(path: str, engine: str = "whisper") -> dict:
     """
     path: 本机绝对路径，如 /Users/me/Movies/talk.mp4
-    engine: whisper / gemini / dashscope
+    engine: whisper（本机，免费，要插电，慢）/ gemini35（Gemini 3.5 Transcribe，网页端默认，带说话人）/ gemini / qwenasr（阿里云 Qwen-Audio，带说话人）/ dashscope / precise（Gemini + 阿里云说话人合并，最慢最准）。云端引擎要在 Verbatim Settings 里填对应 key
     """
     payload = await _request(
         "POST", "/api/transcribe_local",
@@ -231,14 +231,14 @@ async def list_transcripts(limit: int = 30, source: str = "all") -> dict:
 async def analyze_creator(
     url: str,
     max_videos: int = 0,
-    engine: str = "gemini",
+    engine: str = "gemini35",
     author: str = "",
     lang: str = "auto",
 ) -> dict:
     """
     url: 博主主页 / 频道 / 合集链接
     max_videos: 最多分析几个视频，0 表示不限
-    engine: 转写引擎 gemini / whisper / dashscope
+    engine: 转写引擎，默认 gemini35（和网页端一致）；可选同 transcribe_urls
     author: 博主名字（留空则自动探测）
     lang: 输出语言，auto / zh / en
     """
@@ -259,7 +259,7 @@ async def analyze_creator(
 @server.tool(
     description=(
         "查博主分析的进度。stage 字段是当前阶段"
-        "（starting / transcribing / analyzing / done / failed / cancelled），"
+        "（starting / downloading / transcribing / analyzing / synthesizing / done / failed / cancelled），"
         "videos 里是每个视频各自的状态。"
     )
 )
@@ -428,6 +428,27 @@ async def creator_predictions(chain_id: str, verdict: str = "", limit: int = 50)
                          "verdict": (i.get("check") or {}).get("verdict") or "unchecked",
                          "why": (i.get("check") or {}).get("why"), "source": (i.get("check") or {}).get("source"),
                          "video_url": i.get("video_url")} for i in items[:max(1, min(limit, 300))]],
+    }
+
+
+@server.tool(
+    description=(
+        "一个博主的核心信念：同一个主张在至少 3 期里反复出现，每条带全部原话出处。"
+        "还没找过时 beliefs 为空，built_at 为 null——在网页博主页「立场」里点一下生成（约几美分），"
+        "这里不替用户花钱。"
+    )
+)
+async def creator_beliefs(chain_id: str, limit: int = 20) -> dict:
+    p = await _request("GET", f"/api/chain/{chain_id}/beliefs")
+    return {
+        "built_at": p.get("built_at"),
+        "beliefs": [{"belief": b.get("belief"), "topic": b.get("topic"), "stance": b.get("stance") or None,
+                     "episodes": b.get("episodes"), "first_said": b.get("first") or None,
+                     "last_said": b.get("last") or None,
+                     "quotes": [{"quote": c.get("quote"), "episode": c.get("episode"), "date": c.get("date"),
+                                 "time": c.get("ts"), "video_url": c.get("video_url") or None}
+                                for c in (b.get("cards") or [])[:8]]}
+                    for b in (p.get("items") or [])[:max(1, min(limit, 100))]],
     }
 
 

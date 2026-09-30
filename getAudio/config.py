@@ -17,6 +17,9 @@ def _resolve_data_dir():
     if override:
         return os.path.abspath(override)
     if getattr(sys, 'frozen', False):
+        if sys.platform == 'win32':
+            base = os.environ.get('APPDATA') or os.path.expanduser('~\\AppData\\Roaming')
+            return os.path.join(base, 'Verbatim')
         return os.path.expanduser('~/Library/Application Support/Verbatim')
     return os.path.dirname(os.path.abspath(__file__))
 
@@ -41,10 +44,14 @@ def _find_binary(name):
         if os.path.isfile(bundled):
             return bundled
     import shutil as _shutil
+    homebrew = f'/opt/homebrew/bin/{name}'
+    # yt-dlp 要 Homebrew 版优先：激活 venv 后 PATH 里可能先碰到 pip 装的旧版
+    # （py3.9 锁在旧版本），旧版会被 YouTube 反爬挡掉
+    if name == 'yt-dlp' and os.path.isfile(homebrew):
+        return homebrew
     found = _shutil.which(name)
     if found:
         return found
-    homebrew = f'/opt/homebrew/bin/{name}'
     return homebrew if os.path.isfile(homebrew) else name
 
 
@@ -94,7 +101,11 @@ YTDLP_LANG = 'zh-CN'
 # 从浏览器借 cookies 给 yt-dlp（用登录态绕过 B站 412 风控、抬高 YouTube 限额）。
 # 值为浏览器名（chrome/edge/firefox/brave…）；置空则不带 cookies。
 # 注意：仅本机、读你自己的浏览器 cookie；换机器或没装该浏览器时设为 '' 关闭。
-YTDLP_COOKIES_FROM_BROWSER = os.environ.get('YTDLP_COOKIES_BROWSER', 'chrome')
+# 借浏览器登录态（绕 B 站 412、抬 YouTube 限额）。源码直跑默认用 Chrome；
+# 打包版默认不借：收件人电脑可能没装 Chrome（yt-dlp 直接报错、下载全挂），
+# 装了也会弹钥匙串授权框，Windows 新版 Chrome 的 cookie 还解不开。要借就设 YTDLP_COOKIES_BROWSER。
+YTDLP_COOKIES_FROM_BROWSER = os.environ.get(
+    'YTDLP_COOKIES_BROWSER', '' if getattr(sys, 'frozen', False) else 'chrome')
 
 # B站登录态 cookie（SESSDATA）：yt-dlp 的 space 列表探测（BilibiliSpaceVideo）被 412
 # 风控封锁、且退避重试也扛不过时，probe() 会退回用 bilibili-api-python + 这个登录态
@@ -124,7 +135,16 @@ WHISPER_CPU_THREADS = int(os.environ.get('WHISPER_CPU_THREADS') or 3)
 WHISPER_LANGUAGE = os.environ.get('WHISPER_LANGUAGE') or None
 
 # Gemini
-GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
+GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')   # 启动时的快照，只给老脚本用；调用时请用 gemini_key()
+
+
+def gemini_key():
+    """调用时现读。Settings 里保存的 key 在 config 被 import 之后才写进 os.environ
+    （app.py 的 _apply_settings_to_env），模块级常量读不到——打包版没有 .env，
+    默认引擎会一直报「未设置」；源码版则是 .env 的旧 key 压过 Settings 里的新 key。"""
+    return (os.environ.get('GEMINI_API_KEY') or '').strip()
+
+
 GEMINI_MODEL = os.environ.get('GEMINI_TRANSCRIBE_MODEL') or 'gemini-2.5-flash'
 # 分析/综合/核实层的模型。分层后事实判断已交给 grounding（核实模式）而非模型记忆，
 # 所以默认用 2.5-pro（便宜、够用）；想要更晚的知识截止可用环境变量切到 3.x-pro。
@@ -198,8 +218,14 @@ CLOUD_AUDIO_BITRATE = os.environ.get('CLOUD_AUDIO_BITRATE') or '48k'
 GEMINI_CHUNK_CONCURRENCY = int(os.environ.get('GEMINI_CHUNK_CONCURRENCY') or 4)
 
 # DashScope (阿里云百炼)
-DASHSCOPE_API_KEY = os.environ.get('DASHSCOPE_API_KEY', '')
-# 阿里云 ASR 统一走 Qwen-Audio-3.0（2026-08 起）。paraformer-v2 已被阿里官方标为
+DASHSCOPE_API_KEY = os.environ.get('DASHSCOPE_API_KEY', '')   # 同上，调用时用 dashscope_key()
+
+
+def dashscope_key():
+    return (os.environ.get('DASHSCOPE_API_KEY') or '').strip()
+
+
+# 阿里云 ASR 走 Qwen-Audio（2026-08 起 3.0，2026-09-23 起 3.1）。paraformer-v2 已被阿里官方标为
 # 上一代并建议迁移；实测同一段真人录音，paraformer 会把「AI」听成「悲哀」、
 # 「语音识别」听成「原因识别」，Qwen 则准确，说话人分离两者相当（都正确分出 2 人）。
 # 两代接口完全一致（同异步端点、同 diarization_enabled/speaker_count 参数、

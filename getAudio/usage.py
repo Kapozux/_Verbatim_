@@ -272,10 +272,13 @@ def _sum_rows(rows):
     return out
 
 
+# ../ephemeris 借用了这个模块记账（purpose 以 ephemeris 开头），不是 Verbatim 的花费，Costs 里不算
+_OWN = "purpose NOT LIKE 'ephemeris%'"
+
 _GROUP_SQL = '''SELECT {col} AS k, COUNT(*) AS n, SUM(input_tokens) AS i, SUM(output_tokens) AS o,
                        SUM(audio_seconds) AS a, SUM(cost_usd) AS c,
                        SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END) AS u
-                FROM calls WHERE ts >= ? GROUP BY {col} ORDER BY c DESC'''
+                FROM calls WHERE ts >= ? AND ''' + _OWN + ''' GROUP BY {col} ORDER BY c DESC'''
 
 
 def summary():
@@ -288,10 +291,10 @@ def summary():
             r = c.execute('''SELECT COUNT(*) n, SUM(cost_usd) c,
                                     SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END) u,
                                     SUM(input_tokens) i, SUM(output_tokens) o
-                             FROM calls WHERE ts >= ?''', (since,)).fetchone()
+                             FROM calls WHERE ts >= ? AND ''' + _OWN, (since,)).fetchone()
             return {'calls': r['n'], 'cost_usd': round(r['c'] or 0, 6), 'unpriced': r['u'] or 0,
                     'input_tokens': r['i'] or 0, 'output_tokens': r['o'] or 0}
-        first = c.execute('SELECT MIN(ts) FROM calls').fetchone()[0]
+        first = c.execute('SELECT MIN(ts) FROM calls WHERE ' + _OWN).fetchone()[0]
         groups = {}
         for col in ('provider', 'purpose', 'model'):
             groups[col] = {
@@ -300,9 +303,9 @@ def summary():
             }
         daily = [{'date': r['d'], 'cost_usd': round(r['c'] or 0, 6), 'calls': r['n']}
                  for r in c.execute('''SELECT substr(ts,1,10) d, SUM(cost_usd) c, COUNT(*) n
-                                       FROM calls WHERE ts >= ? GROUP BY d ORDER BY d''', (d30,))]
+                                       FROM calls WHERE ts >= ? AND ''' + _OWN + ''' GROUP BY d ORDER BY d''', (d30,))]
         unpriced_models = [r[0] for r in c.execute(
-            'SELECT DISTINCT model FROM calls WHERE cost_usd IS NULL ORDER BY model')]
+            'SELECT DISTINCT model FROM calls WHERE cost_usd IS NULL AND ' + _OWN + ' ORDER BY model')]
     return {'since': first, 'month': total(month_start), 'all': total('0000'),
             'by': groups, 'daily': daily, 'unpriced_models': unpriced_models,
             'prices_path': PRICES_PATH}

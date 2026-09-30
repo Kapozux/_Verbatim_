@@ -29,7 +29,7 @@ import time
 
 import requests
 
-from config import GEMINI_API_KEY, make_gemini_client
+from config import make_gemini_client
 from transcribe_gemini import split_audio_file, _get_audio_duration_seconds
 import config
 import usage
@@ -86,12 +86,13 @@ def transcribe_audio(filepath, progress_callback=None, speaker_count=None):
     （不像 DashScope 那样能传 speaker_count 改善聚类），保留这个形参只是为了
     跟其它引擎的 transcribe_audio(...) 签名保持一致，方便 app.py 统一调用。
     """
-    if not GEMINI_API_KEY:
+    api_key = config.gemini_key()
+    if not api_key:
         raise RuntimeError('GEMINI_API_KEY 未设置（Gemini 3.5 Transcribe 需要）')
 
     chunks, temp_dir = split_audio_file(filepath, _MAX_CHUNK_SECONDS)
     try:
-        client = make_gemini_client(GEMINI_API_KEY)
+        client = make_gemini_client(api_key)
         total = len(chunks)
 
         # 每块自己的长度：下一块的起点减自己的起点；最后一块用音频总长。
@@ -128,8 +129,12 @@ def transcribe_audio(filepath, progress_callback=None, speaker_count=None):
                 progress_callback(min(99, int(n / total * 100)))
 
         width = max(1, min(3, config.GEMINI_CHUNK_CONCURRENCY, total))
-        with ThreadPoolExecutor(max_workers=width) as pool:
+        # 不用 with（退出时要等所有在跑的块跑完、照样计费）：一块失败就取消没开跑的、立刻抛出
+        pool = ThreadPoolExecutor(max_workers=width)
+        try:
             list(pool.map(usage.bound(_one), range(total)))   # list() 让第一个异常在这里抛出
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
         all_segments = []
         for segs in results:
             all_segments.extend(segs or [])
@@ -169,7 +174,7 @@ def _call_with_retry(client, uploaded, chunk_path, offset_sec, chunk_seconds):
         try:
             resp = requests.post(
                 _INTERACTIONS_URL,
-                headers={'x-goog-api-key': GEMINI_API_KEY, 'Content-Type': 'application/json'},
+                headers={'x-goog-api-key': config.gemini_key(), 'Content-Type': 'application/json'},
                 json={
                     'model': MODEL_NAME,
                     'input': [{

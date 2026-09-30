@@ -14,6 +14,7 @@ YouTube 的反爬会让旧版直接解析失败。
 import asyncio
 import json
 import os
+import sys
 import time
 import re
 import shutil
@@ -49,10 +50,30 @@ def _ffmpeg_location_args():
     return ['--ffmpeg-location', os.path.dirname(config.FFMPEG_BIN)]
 
 
+# 各浏览器的 profile 目录（macOS / Windows）。不在就别让 yt-dlp 去读——读不到它会直接报错，整次下载失败
+_BROWSER_DIRS = {
+    'chrome': ('~/Library/Application Support/Google/Chrome', r'%LOCALAPPDATA%\Google\Chrome\User Data'),
+    'chromium': ('~/Library/Application Support/Chromium', r'%LOCALAPPDATA%\Chromium\User Data'),
+    'edge': ('~/Library/Application Support/Microsoft Edge', r'%LOCALAPPDATA%\Microsoft\Edge\User Data'),
+    'brave': ('~/Library/Application Support/BraveSoftware/Brave-Browser',
+              r'%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data'),
+    'firefox': ('~/Library/Application Support/Firefox', r'%APPDATA%\Mozilla\Firefox'),
+}
+
+
+def _browser_present(name):
+    dirs = _BROWSER_DIRS.get((name or '').split(':')[0].split('+')[0].lower())
+    if not dirs:
+        return True          # 不认识的浏览器（safari、带 profile 的写法等）：照用户说的传
+    path = dirs[1] if sys.platform == 'win32' else dirs[0]
+    return os.path.isdir(os.path.expandvars(os.path.expanduser(path)))
+
+
 def _cookie_args():
     # 借浏览器登录态：绕过 B站 412 风控、抬高 YouTube 限额
-    return (['--cookies-from-browser', YTDLP_COOKIES_FROM_BROWSER]
-            if YTDLP_COOKIES_FROM_BROWSER else [])
+    if not YTDLP_COOKIES_FROM_BROWSER or not _browser_present(YTDLP_COOKIES_FROM_BROWSER):
+        return []
+    return ['--cookies-from-browser', YTDLP_COOKIES_FROM_BROWSER]
 
 
 def _proxy_args():
@@ -508,7 +529,11 @@ def probe(url, max_videos=None, enrich=True):
         # 请求签名（bilibili-api-python 的 WBI 接口），试一次，不行就老实报错，
         # 交给上层（有缓存的话）接住。
         mid = _bili_mid(url, {})
-        if mid and 'space.bilibili.com' in url:
+        # 这条兜底拉的是 UP 主的全部投稿。合集 / 系列链接（带 sid）走它会悄悄变成
+        # 「整个频道」，宁可报错让用户知道，也别转一堆不相干的视频
+        low = url.lower()
+        is_list = 'sid=' in low or 'collectiondetail' in low or 'seriesdetail' in low or '/lists' in low
+        if mid and 'space.bilibili.com' in url and not is_list:
             via_api = _probe_bili_space_via_api(mid, max_videos)
             if via_api:
                 targets, channel = via_api

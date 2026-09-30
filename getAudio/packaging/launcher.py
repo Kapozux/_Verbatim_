@@ -20,6 +20,37 @@ import time
 import webbrowser
 
 
+def _system_is_zh():
+    """系统首选语言是不是中文：菜单和弹窗跟着系统走（App 发给别人用，不一定看得懂中文）。"""
+    try:
+        if sys.platform == 'darwin':
+            import subprocess
+            out = subprocess.run(['defaults', 'read', '-g', 'AppleLanguages'],
+                                 capture_output=True, text=True, timeout=3).stdout
+            first = next((l.strip(' ",()') for l in out.splitlines() if l.strip(' ",()')), '')
+            return first.lower().startswith('zh')
+        import locale
+        return (locale.getdefaultlocale()[0] or '').lower().startswith('zh')
+    except Exception:  # noqa: BLE001
+        return False
+
+
+_ZH = _system_is_zh()
+_TXT = {
+    'open': ('在浏览器中打开', 'Open in Browser'),
+    'quit': ('退出 Verbatim', 'Quit Verbatim'),
+    'running_t': ('Verbatim 已经在运行', 'Verbatim is already running'),
+    'running_m': ('已经有一份服务在跑，直接给你打开浏览器了。', 'It’s already running — opened it in your browser.'),
+    'fail_t': ('Verbatim 启动失败', 'Verbatim couldn’t start'),
+    'fail_timeout': ('服务在 60 秒内没能启动，不确定原因。', 'The service didn’t start within 60 seconds.'),
+    'fail_port': ('服务进程起来了，但端口 {port} 一直连不上。', 'The service started but port {port} never answered.'),
+}
+
+
+def _t(key, **kw):
+    return _TXT[key][0 if _ZH else 1].format(**kw)
+
+
 def _port():
     return int(os.environ.get('PORT', 5001))
 
@@ -46,10 +77,9 @@ def _run_flask(ready_flag, error_box):
     异常默认只会打到 stderr，GUI 应用没有终端，用户会以为它卡死了）。"""
     try:
         import app as flask_app  # noqa: PLC0415  # import 时触发 app.py 顶层初始化（taskdb.init() 等）
-        # app.py 里这两个恢复调用原本包在 `if __name__ == '__main__'` 里，
-        # 只有直接 `python app.py` 跑才会触发；这里是当模块 import，得手动补上。
-        flask_app.recover_unfinished_tasks()
-        flask_app.recover_unfinished_chains()
+        # 恢复任务和后台调度（同步 / 回顾 / 备份）原本只在 `python app.py` 的
+        # `__main__` 里启动；这里是当模块 import，得手动调一次。
+        flask_app.start_background()
         ready_flag.set()
         flask_app.app.run(host='127.0.0.1', port=_port(), debug=False,
                            threaded=True, use_reloader=False)
@@ -75,10 +105,10 @@ def _run_mac(port):
 
     class VerbatimMenuBar(rumps.App):
         def __init__(self):
-            super().__init__('Verbatim', title='◉ Verbatim', quit_button='退出 Verbatim')
-            self.menu = ['在浏览器中打开']
+            super().__init__('Verbatim', title='◉ Verbatim', quit_button=_t('quit'))
+            self.menu = [_t('open')]
 
-        @rumps.clicked('在浏览器中打开')
+        @rumps.clicked(_t('open'))
         def open_browser(self, _sender):
             webbrowser.open(f'http://127.0.0.1:{port}')
 
@@ -101,8 +131,8 @@ def _run_windows(port):
         icon.stop()
 
     menu = pystray.Menu(
-        pystray.MenuItem('在浏览器中打开', open_browser, default=True),
-        pystray.MenuItem('退出 Verbatim', quit_app),
+        pystray.MenuItem(_t('open'), open_browser, default=True),
+        pystray.MenuItem(_t('quit'), quit_app),
     )
     pystray.Icon('Verbatim', image, 'Verbatim', menu).run()
 
@@ -114,7 +144,7 @@ def main():
     # 同端口第二次 bind 会直接失败——只开浏览器指过去。
     if _port_reachable(port):
         webbrowser.open(f'http://127.0.0.1:{port}')
-        _fatal('Verbatim 已经在运行', '已经有一份服务在跑，直接给你打开浏览器了。')
+        _fatal(_t('running_t'), _t('running_m'))
         return
 
     ready = threading.Event()
@@ -122,12 +152,12 @@ def main():
     threading.Thread(target=_run_flask, args=(ready, error_box), daemon=True).start()
 
     if not ready.wait(timeout=60) or error_box.get('error'):
-        detail = str(error_box.get('error') or '服务在 60 秒内没能启动，不确定原因。')
-        _fatal('Verbatim 启动失败', detail)
+        detail = str(error_box.get('error') or _t('fail_timeout'))
+        _fatal(_t('fail_t'), detail)
         sys.exit(1)
 
     if not _wait_for_port(port, timeout=15):
-        _fatal('Verbatim 启动失败', f'服务进程起来了，但端口 {port} 一直连不上。')
+        _fatal(_t('fail_t'), _t('fail_port', port=port))
         sys.exit(1)
 
     webbrowser.open(f'http://127.0.0.1:{port}')

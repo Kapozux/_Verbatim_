@@ -28,7 +28,6 @@ const batchList = document.getElementById('batch-list');
 const batchProgress = document.getElementById('batch-progress');
 
 const errorSection = document.getElementById('error-section');
-const errorText = document.getElementById('error-text');
 
 const clearHistoryBtn = document.getElementById('clear-history-btn');
 const historyList = document.getElementById('history-list');
@@ -59,8 +58,11 @@ let batchTotal = 0;
 let batchFinished = 0;
 
 // ========== Helpers ==========
+// 引擎的用户可读名；字典里没有的（未来的新引擎）原样返回，调用方负责 escapeHtml
 function engineLabel(engine) {
-    return STRINGS.en['engine.' + engine] ? T('engine.' + engine) : (engine || 'Unknown');
+    const k = 'engine.' + (engine || 'unknown');
+    const t = T(k);
+    return t !== k ? t : engine;
 }
 
 function formatDuration(seconds) {
@@ -112,7 +114,7 @@ function updateFileLabel() {
     let totalSize = 0;
     for (const f of intakeFiles) totalSize += f.size;
     fileLabelText.textContent = intakeFiles.length === 1
-        ? intakeFiles[0].name : `${intakeFiles.length} files added`;
+        ? intakeFiles[0].name : T('transcribe.filesAdded', { n: intakeFiles.length });
     fileInfo.textContent = formatFileSize(totalSize);
     fileLabel.classList.add('has-file');
 }
@@ -209,7 +211,7 @@ function updateSubmitBtn() {
     if (intakeSubmitting) { submitBtn.disabled = true; return; }
     const n = intakeValidCount();
     submitBtn.textContent = n > 0
-        ? T('transcribe.submitCount', { n, itemWord: n === 1 ? 'item' : 'items' })
+        ? (n === 1 ? T('transcribe.submitCountOne') : T('transcribe.submitCount', { n }))
         : T('transcribe.submit');
     submitBtn.disabled = n === 0;
 }
@@ -702,7 +704,7 @@ function onTaskFinished() {
 }
 
 function updateBatchProgress() {
-    batchProgress.textContent = `${batchFinished} / ${batchTotal} done`;
+    batchProgress.textContent = T('transcribe.batchDone', { done: batchFinished, total: batchTotal });
 }
 
 // ========== Segment rendering (shared with detail view) ==========
@@ -748,7 +750,7 @@ function appendSegment(seg, container, player) {
     const ts = document.createElement('span');
     ts.className = 'timestamp clickable';
     ts.textContent = seg.timestamp;
-    ts.title = 'Jump to this point';
+    ts.title = T('detail.jumpHere');
     ts.addEventListener('click', () => {
         if (!player.src) return;
         player.currentTime = parseTimestampToSeconds(seg.timestamp);
@@ -783,11 +785,6 @@ function focusDetailAt(sec) {
         if (detailAudioPlayer.readyState >= 1) seek();
         else detailAudioPlayer.addEventListener('loadedmetadata', seek, { once: true });
     }
-}
-
-function showError(message) {
-    errorSection.classList.remove('hidden');
-    errorText.textContent = message;
 }
 
 function renderSummary(section, overviewEl, sectionsEl, data) {
@@ -1296,21 +1293,6 @@ detailSummarizeBtn.addEventListener('click', async () => {
     }
 });
 
-function closeDetailView() {
-    detailView.classList.add('hidden');
-    mainView.classList.remove('hidden');
-    detailAudioPlayer.pause();
-    detailAudioPlayer.src = '';
-    detailSegmentsContainer.innerHTML = '';
-    detailSummaryOverview.textContent = '';
-    detailSummarySections.innerHTML = '';
-    detailSummarySection.classList.add('hidden');
-    detailSegments = [];
-    detailRecord = null;
-    detailSyncState.last = null;
-    window.scrollTo({ top: 0 });
-}
-
 detailBackBtn.addEventListener('click', () => navigate(detailReturnTo));
 
 clearHistoryBtn.addEventListener('click', async () => {
@@ -1418,17 +1400,20 @@ async function continueExistingChain(id) {
 // 看着「web-verify 开」会以为在烧搜索配额，其实这条链条压根不跑分析。
 function settingsLine(c) {
     const onoff = b => b ? T('common.on') : T('common.off');
-    const bits = [`engine <b>${escapeHtml(c.engine || '-')}</b>`,
-                  `mode <b>${T(c.analyze === false ? 'creators.modeTranscribe' : 'creators.modeAnalyze')}</b>`];
+    const kv = (k, v) => `${T('chainSet.' + k)} <b>${v}</b>`;
+    const level = c.critique_level || 'analytical';
+    const levelKey = 'creators.critique' + level.charAt(0).toUpperCase() + level.slice(1);
+    const bits = [kv('engine', escapeHtml(c.engine ? engineLabel(c.engine) : '-')),
+                  kv('mode', T(c.analyze === false ? 'creators.modeTranscribe' : 'creators.modeAnalyze'))];
     if (c.analyze !== false) {
-        bits.push(`model <b>${escapeHtml(brainLabel(c.analysis_preset))}</b>`,
-                  `level <b>${escapeHtml(c.critique_level || 'analytical')}</b>`,
-                  `web-verify <b>${onoff(c.verify)}</b>`,
-                  `self-verify <b>${onoff(c.self_verify)}</b>`);
+        bits.push(kv('model', escapeHtml(brainLabel(c.analysis_preset))),
+                  kv('level', escapeHtml(T(levelKey) !== levelKey ? T(levelKey) : level)),
+                  kv('webVerify', onoff(c.verify)),
+                  kv('selfVerify', onoff(c.self_verify)));
     }
-    bits.push(`subs-first <b>${onoff(c.prefer_subs)}</b>`);
-    bits.push(`summaries <b>${onoff(c.summarize)}</b>`);
-    if (c.engine !== 'whisper') bits.push(`whisper-fallback <b>${onoff(c.fallback_whisper)}</b>`);
+    bits.push(kv('subsFirst', onoff(c.prefer_subs)));
+    bits.push(kv('summaries', onoff(c.summarize)));
+    if (c.engine !== 'whisper') bits.push(kv('whisperFallback', onoff(c.fallback_whisper)));
     return bits.join(' · ');
 }
 
@@ -2283,7 +2268,7 @@ async function refreshChainDetail() {
         const st = videoStatusOf(v.status);
         const clickable = v.status === 'done' && v.task_id;
         const thumb = v.thumbnail
-            ? `<img class="vg-thumb" src="${v.thumbnail}" loading="lazy" alt=""
+            ? `<img class="vg-thumb" src="${escapeHtml(safeUrl(v.thumbnail))}" loading="lazy" alt=""
                  referrerpolicy="no-referrer" onerror="this.style.display='none'">`
             : '<div class="vg-thumb vg-noimg">▷</div>';
         // 转写中且有进度 → 封面上盖珊瑚半透明板 + 大号百分比
@@ -2295,7 +2280,7 @@ async function refreshChainDetail() {
             ? ` onclick="navigate('detail/${v.task_id}')" title="${T('chainDetail.viewTranscript')}"` : '';
         // 降级留痕：这期实际用的引擎和链条引擎不同（如 gemini 链落了 whisper）
         const engBadge = (v.engine_used && v.engine_used !== c.engine)
-            ? `<span class="vg-eng" title="${T('chainDetail.engineFellBack', { engine: v.engine_used })}">${v.engine_used}</span>` : '';
+            ? `<span class="vg-eng" title="${escapeHtml(T('chainDetail.engineFellBack', { engine: engineLabel(v.engine_used) }))}">${escapeHtml(engineLabel(v.engine_used))}</span>` : '';
         // 只有完成的分集能加入合并购物车；勾选框吞掉点击，不触发打开转写
         const pick = clickable
             ? `<label class="vg-pick" onclick="event.stopPropagation()" title="${T('chainDetail.addToMerge')}">
@@ -2312,7 +2297,7 @@ async function refreshChainDetail() {
     clearTimeout(chainDetailTimer);
     // 链条在跑、或有单个视频在重转中 → 继续轮询刷新
     const anyBusy = vids.some(v => ['downloading', 'transcribing'].includes(v.status));
-    if ((!chainTerminal || anyBusy) && !document.hidden) {
+    if ((!chainTerminal || anyBusy) && !document.hidden && !chainDetailView.classList.contains('hidden')) {
         chainDetailTimer = setTimeout(refreshChainDetail, 4000);
     }
 }
@@ -2378,13 +2363,17 @@ async function runMergeTranscripts() {
         // 复用现成的内存文档视图（和小红书报告同一条路）——这个视图不接路由：
         // 内容只存在于这一次 POST 响应里，没有可重新拉取的地方；刷新页面丢失是
         // 已知的、可接受的局限（跟合并购物车本身一样只活在内存里）。
-        currentDoc = { chainId: null, name: r.filename || '合并转写.md', raw: r.markdown };
+        const fromChain = (chainDetailView && !chainDetailView.classList.contains('hidden') && chainDetailId)
+            ? chainDetailId : null;
+        // chainId 记来源博主（返回用）；merged 标记这是不接路由的内存文档（没有 /file 可拉）
+        currentDoc = { chainId: fromChain, merged: true, mergedCount: r.count,
+                       name: r.filename || '合并转写.md', raw: r.markdown };
         docTitle.textContent = T('chainDetail.mergedTitle', { count: r.count });
         docContent.innerHTML = renderMarkdown(r.markdown);
-        docReturnTo = (chainDetailView && !chainDetailView.classList.contains('hidden'))
-            ? 'chainDetail' : 'main';
+        docReturnTo = fromChain ? 'chainDetail' : 'main';
         mainView.classList.add('hidden');
         if (chainDetailView) chainDetailView.classList.add('hidden');
+        clearTimeout(chainDetailTimer);   // 博主详情藏起来了，别在后台每 4 秒重绘
         docView.classList.remove('hidden');
         window.scrollTo({ top: 0 });
         if (r.missing) showToast(T('chainDetail.mergeSkipped', { n: r.missing }));
@@ -2429,11 +2418,15 @@ document.addEventListener('visibilitychange', () => {
         clearTimeout(xhsAnTimer);
     } else {
         loadChains();
-        if (chainDetailId) refreshChainDetail();
+        if (chainDetailId && !chainDetailView.classList.contains('hidden')) refreshChainDetail();
         if (enrichWasPolling) { enrichWasPolling = false; pollEnrichStatus(); }
         // XHS：仅在上次已知有活跃任务时恢复（各自查一次，idle 就地停，不空转）
         if (activeTasks['xhs-scrape'].length) pollXhs();
         if (activeTasks['xhs-analyze'].length) pollXhsAnalyze();
+        // Settings → Storage 的三个进度轮询：后台时停在半路的，回来接着轮
+        if (compressWasPolling) { compressWasPolling = false; pollCompress(); }
+        if (backupWasPolling) { backupWasPolling = false; loadBackup(); }
+        if (purgeWasPolling) { purgeWasPolling = false; pollPurge(); }
     }
 });
 
@@ -2568,7 +2561,7 @@ async function pollXhsAnalyze() {
     if (btn) btn.disabled = false;
     if (s.error) {
         box.classList.remove('hidden');
-        box.innerHTML = `<span class="xhs-done">${T('xhs.analysisFailed', { message: String(s.error).replace(/</g, '&lt;') })}</span>`;
+        box.innerHTML = `<span class="xhs-done">${T('xhs.analysisFailed', { message: escapeHtml(s.error) })}</span>`;
     } else if (s.has_report) {
         box.classList.remove('hidden');
         box.innerHTML = `<span class="xhs-done">✓ ${T('xhs.reportReady')}</span>
@@ -2868,17 +2861,6 @@ async function openDocView(chainId, encName) {
     }
 }
 
-function closeDocView() {
-    docView.classList.add('hidden');
-    if (docReturnTo === 'chainDetail' && chainDetailView) {
-        chainDetailView.classList.remove('hidden');   // 回到博主详情，不是回主页
-    } else {
-        mainView.classList.remove('hidden');
-    }
-    docContent.innerHTML = '';
-    window.scrollTo({ top: 0 });
-}
-
 // 换个角度看博主：拿现成证据卡跑一个镜头 → 后台生成 → 轮询 → 用 openDocView 展示
 async function runLens(chainId, lens) {
     const open = () => navigate(`chain/${chainId}/doc/${encodeURIComponent(`镜头_${lens}.md`)}`);
@@ -2904,11 +2886,16 @@ async function runLens(chainId, lens) {
     } catch { showToast(T('chainDetail.generationFailedGeneric')); }
 }
 
-if (docBackBtn) docBackBtn.addEventListener('click', () =>
-    navigate(docReturnTo === 'chainDetail' ? 'chain/' + currentDoc.chainId : 'tab/library'));
+if (docBackBtn) docBackBtn.addEventListener('click', () => {
+    const target = (docReturnTo === 'chainDetail' && currentDoc.chainId)
+        ? 'chain/' + currentDoc.chainId : 'tab/library';
+    // 合并文档不接路由，URL 还停在来源页上：目标 hash 没变就不会触发 hashchange，直接重放路由
+    if (location.hash === '#/' + target) applyRoute();
+    else navigate(target);
+});
 if (docDownloadBtn) docDownloadBtn.addEventListener('click', () => {
     if (currentDoc.raw) {
-        downloadFile(currentDoc.raw, currentDoc.name || 'document.md',
+        downloadFile(currentDoc.raw, currentDoc.name || T('doc.defaultName'),
             'text/markdown;charset=utf-8');
         showToast(T('doc.downloaded'));
     }
@@ -3045,7 +3032,7 @@ function reflectHour(h) {
 function reflectDate(iso) {
     const [y, m, d] = iso.split('-').map(Number);
     if (currentLang === 'zh') return `${y}年${m}月${d}日`;
-    const M = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const M = T('date.monthsShort').split(',');
     return `${M[m - 1]} ${d} ${y}`;
 }
 
@@ -3083,7 +3070,7 @@ function niceCeil(v) {
 }
 
 function reflectChart(series, prevSeries, metric) {
-    const W = 900, H = 270, L = 44, R = 12, T = 18, B = 34;
+    const W = 900, H = 270, L = 44, R = 12, Tp = 18, B = 34;
     const val = p => metric === 'hours' ? p.minutes / 60 : p.count;
     const cur = series.map(val);
     const prev = prevSeries.map(val);
@@ -3091,7 +3078,7 @@ function reflectChart(series, prevSeries, metric) {
 
     const maxV = niceCeil(Math.max(...cur, ...prev, metric === 'hours' ? 0.5 : 1));
     const X = i => L + i / (cur.length - 1) * (W - L - R);
-    const Y = v => H - B - v / maxV * (H - T - B);
+    const Y = v => H - B - v / maxV * (H - Tp - B);
     const xs = cur.map((_, i) => X(i));
     const prevXs = prev.map((_, i) => X(i + (cur.length - prev.length)));
 
@@ -3215,13 +3202,6 @@ const libraryBody = document.getElementById('library-body');
 let libraryData = null;
 let libraryTagLang = 'zh';   // 关注领域标签：'zh' | 'en'
 
-function engineLabel(key) {
-    const k = 'engine.' + key;
-    const t = T(k);
-    if (t !== k) return t;
-    return { subtitle: currentLang === 'zh' ? '字幕直取' : 'Subtitles', unknown: currentLang === 'zh' ? '未知' : 'Unknown' }[key] || key;
-}
-
 // 累计小时折线：x 为自然日铺满，y 为累计小时
 function libraryChart(timeline) {
     if (!timeline || timeline.length < 2) return `<div class="reflect-empty">${T('stats.notEnoughData')}</div>`;
@@ -3289,9 +3269,9 @@ function speedTable(speed) {
         .sort((a, b) => (a[1].min_per_hour ?? 1e9) - (b[1].min_per_hour ?? 1e9));
     if (!rows.length) return `<div class="reflect-empty">${T('library.speedEmpty')}</div>`;
     const body = rows.map(([k, v]) => v.n
-        ? `<tr><td>${escapeHtml(engineLabel(k))}</td><td>${fmtMinutes(v.min_per_hour)} min</td>
+        ? `<tr><td>${escapeHtml(engineLabel(k))}</td><td>${fmtMinutes(v.min_per_hour)} ${T('common.minUnit')}</td>
                <td>${v.speed_x ? v.speed_x + '×' : '—'}</td><td>${v.n}</td></tr>`
-        : `<tr class="approx"><td>${escapeHtml(engineLabel(k))}</td><td>≈ ${fmtMinutes(v.approx.min_per_hour)} min</td>
+        : `<tr class="approx"><td>${escapeHtml(engineLabel(k))}</td><td>≈ ${fmtMinutes(v.approx.min_per_hour)} ${T('common.minUnit')}</td>
                <td>—</td><td>${v.approx.n}<i>${T('library.speedApprox')}</i></td></tr>`).join('');
     return `<table class="speed-table"><thead><tr><th></th><th>${T('library.speedPerHour')}</th>
         <th>${T('library.speedX')}</th><th>${T('library.speedRuns')}</th></tr></thead><tbody>${body}</tbody></table>`;
@@ -3452,10 +3432,12 @@ function costLabel(kind, k) {
     const s = T(key);
     return (!s || s === key) ? k : s;
 }
+let costsData = null;   // 上次拉到的汇总；切换界面语言时直接重绘，不再请求
 async function loadCosts() {
     const body = document.getElementById('costs-body');
     try {
         const d = await (await fetch('/api/costs')).json();
+        costsData = d;
         renderCosts(d);
     } catch {
         body.innerHTML = `<div class="reflect-empty">${T('costs.loadFailed')}</div>`;
@@ -3511,6 +3493,7 @@ function fmtBytes(n) {
 }
 
 let compressPollTimer = null;
+let compressWasPolling = false, backupWasPolling = false, purgeWasPolling = false;
 
 async function loadStorage() {
     const sizeEl = document.getElementById('storage-size');
@@ -3542,7 +3525,9 @@ async function pollCompress() {
         if (s.running) {
             res.className = 'test-res testing';
             res.textContent = T('settings.compressing', { done: s.done, total: s.total, saved: fmtBytes(s.saved) });
-            if (!document.hidden) compressPollTimer = setTimeout(pollCompress, 2000);
+            // 页面在后台就先停，visibilitychange 回前台时凭这个标记接着轮询
+            if (document.hidden) compressWasPolling = true;
+            else compressPollTimer = setTimeout(pollCompress, 2000);
         } else {
             btn.disabled = false;
             if (s.total > 0) {
@@ -3601,7 +3586,8 @@ async function loadBackup() {
             : b.error || !b.dest_available ? T('settings.backupFailed')
             : b.last_ok ? T('settings.backupOk') : T('settings.backupNever');
         btn.disabled = !!b.running;
-        if (b.running && !document.hidden) backupPollTimer = setTimeout(loadBackup, 2000);
+        if (b.running && document.hidden) backupWasPolling = true;
+        else if (b.running) backupPollTimer = setTimeout(loadBackup, 2000);
         else if (!b.running && b.last_run && document.getElementById('backup-res').dataset.waiting) {
             const res = document.getElementById('backup-res');
             res.dataset.waiting = '';
@@ -3630,7 +3616,8 @@ async function pollPurge() {
         if (s.running) {
             btn.disabled = true;
             res.textContent = T('settings.purging', { done: s.done, total: s.total, freed: fmtBytes(s.freed) });
-            if (!document.hidden) purgePollTimer = setTimeout(pollPurge, 2000);
+            if (document.hidden) purgeWasPolling = true;
+            else purgePollTimer = setTimeout(pollPurge, 2000);
         } else {
             btn.disabled = false;
             if (s.total) {
@@ -3747,7 +3734,7 @@ function navigate(hash, { replace = false } = {}) {
 }
 
 // 回到主 Tab 视图前，把三个可能叠在上面的顶层视图统一隐藏——
-// closeDetailView/closeChainDetail/closeDocView 各自也有类似逻辑，这里是路由层的统一入口。
+// 这里是路由层的统一入口（closeChainDetail 也有类似逻辑）。
 function _showMain() {
     mainView.classList.remove('hidden');
     detailView.classList.add('hidden');
@@ -3758,6 +3745,8 @@ function _showMain() {
 function applyRoute() {
     const parts = (location.hash.replace(/^#\/?/, '') || (IS_DEMO ? 'tab/creators' : 'tab/transcribe'))
         .split('/').map(decodeURIComponent);
+    // 离开转写详情（返回、侧栏、后退）时把播放器停掉，别在后台继续放
+    if (parts[0] !== 'detail' && detailAudioPlayer) detailAudioPlayer.pause();
     // 演示里转写 / 小红书两个入口收起来了（会花钱），直接落到博主页
     if (IS_DEMO && parts[0] === 'tab' && ['transcribe', 'xhs'].includes(parts[1])) {
         navigate('tab/creators', { replace: true });
@@ -3795,11 +3784,18 @@ if (uiLangToggle) {
     });
 }
 document.addEventListener('langchange', () => {
-    applyRoute();
+    if (docView && !docView.classList.contains('hidden') && currentDoc.merged) {
+        // 合并文档不接路由（URL 还停在来源页），重放路由会把它关掉；只换标题语言
+        docTitle.textContent = T('chainDetail.mergedTitle', { count: currentDoc.mergedCount });
+    } else {
+        applyRoute();
+    }
     syncChainMode();          // 按钮文案被 applyStaticI18n 重置回「分析」了，按当前模式再刷一遍
     if (!settingsOverlay.classList.contains('hidden')) {
         if (activeSettingsPane === 'reflect') { reflectData = null; loadReflect(); }
         if (activeSettingsPane === 'library') renderLibrary();
+        if (activeSettingsPane === 'costs' && costsData) renderCosts(costsData);
+        if (activeSettingsPane === 'storage') loadBackup();   // 备份状态文字由 JS 写入
     }
 });
 syncChainMode();              // 首次加载：按当前模式摆好按钮文案和禁用状态

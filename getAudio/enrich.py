@@ -10,7 +10,8 @@ import json
 import os
 import re
 
-from config import GEMINI_API_KEY, GEMINI_ENRICH_MODEL, make_gemini_client
+from config import GEMINI_ENRICH_MODEL, make_gemini_client
+import config
 import usage
 
 ENRICH_PROMPT = """根据下面这条音频转写的信息，生成用于列表卡片展示的元数据。
@@ -38,7 +39,7 @@ filename_meaningful 的判断标准：上面的文件名（去掉后缀和 [视�
 
 def generate_card_meta(filename, content):
     """生成 {title, one_line, tags}；失败返回 None（调用方自行兜底）。"""
-    api_key = GEMINI_API_KEY or os.environ.get('GEMINI_API_KEY', '')
+    api_key = config.gemini_key()
     if not api_key or not content or len(content.strip()) < 10:
         return None
 
@@ -74,7 +75,7 @@ def _parse_json_obj(raw):
         return None
 
 
-def translate_tags(tags, cache_path):
+def translate_tags(tags, cache_path, offline=False):
     """把中文标签批量译成简短英文，结果持久化缓存到 cache_path(JSON)。
 
     返回 {原标签: 英文}。已缓存的标签不再调模型；无 key / 调用失败时，
@@ -93,7 +94,7 @@ def translate_tags(tags, cache_path):
         cache = {}
 
     missing = [t for t in tags if t not in cache]
-    if missing:
+    if missing and not offline:
         added = _gemini_translate(missing)
         if added:
             cache.update(added)
@@ -108,7 +109,7 @@ def translate_tags(tags, cache_path):
 
 def _gemini_translate(tags):
     """一次性把一批标签译成英文；返回 {中文: English} 或 None。"""
-    api_key = GEMINI_API_KEY or os.environ.get('GEMINI_API_KEY', '')
+    api_key = config.gemini_key()
     if not api_key:
         return None
     prompt = (
@@ -238,7 +239,7 @@ FILENAME_JUDGE_PROMPT = """下面是一批音视频文件名（已去掉后缀�
 
 def judge_filenames(names):
     """一次判断一批文件名是否"有意义"；返回 {name: bool}，失败返回 None。"""
-    api_key = GEMINI_API_KEY or os.environ.get('GEMINI_API_KEY', '')
+    api_key = config.gemini_key()
     if not api_key or not names:
         return None
     try:

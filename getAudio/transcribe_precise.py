@@ -21,7 +21,8 @@ import usage
 from google import genai
 from google.genai import types
 
-from config import GEMINI_API_KEY, GEMINI_MODEL, make_gemini_client
+from config import GEMINI_MODEL, make_gemini_client
+import config
 from transcribe_gemini import parse_timestamped_text
 
 # 合并按时间窗口分段做：一次只喂一段给 Gemini，避免长音频（几小时）
@@ -73,7 +74,7 @@ def _format_b(gemini_segments):
 
 
 def _make_client():
-    api_key = GEMINI_API_KEY or os.environ.get('GEMINI_API_KEY', '')
+    api_key = config.gemini_key()
     if not api_key:
         raise RuntimeError("Gemini API Key 未设置，无法执行精准模式的合并步骤。")
     return make_gemini_client(api_key)
@@ -92,7 +93,7 @@ def _ts_to_seconds(ts):
     return 0
 
 
-_TS_RE = re.compile(r'\[(\d{1,2}:\d{2}(?::\d{2})?)\]')
+_TS_RE = re.compile(r'\[(\d{1,3}:\d{2}(?::\d{2})?)\]')   # 分钟可能三位（>100 分钟的 MM:SS）
 
 
 def _window_ts_ok(text, win):

@@ -16,6 +16,11 @@ cards from every episode, and builds a portrait of the creator from those cards.
 on a file, that file falls back to local Whisper automatically. It works with YouTube, Bilibili, and
 local audio/video files.
 
+Each analysed creator gets a workspace you can keep coming back to: ask questions answered only from
+their own words (every sentence cites the episode and second), see how their stance on a topic moves
+over time, check their past predictions against the web, and find the claims they repeat across
+episodes. New videos can be picked up on a schedule. See [Creators](docs/creators.md).
+
 ## Why I built it
 
 I can't sit through an hour-long video, but I still want to know what was said. Existing tools were
@@ -23,6 +28,18 @@ either expensive or bad at Chinese, so I built my own. I've used it daily for si
 hours of audio through it.
 
 ## Quick Start
+
+### Download the app (recommended)
+
+1. Download `Verbatim.dmg` from [Releases](https://github.com/Kapozux/_Verbatim_/releases) (Apple Silicon Macs).
+2. Drag Verbatim into Applications. It isn't signed, so the first time right-click it and choose **Open**.
+3. **◉ Verbatim** appears in the menu bar and your browser opens the app. Add a Gemini API key in
+   **Settings** for the cloud engines and creator analysis; local Whisper needs no key.
+
+Your data stays in `~/Library/Application Support/Verbatim`. Full walkthrough:
+[Getting started](docs/getting-started.md).
+
+### Run from source
 
 ```bash
 brew install ffmpeg yt-dlp
@@ -32,6 +49,16 @@ bash run.sh        # open http://localhost:5001
 ```
 
 Python 3.9+. Use Homebrew's `yt-dlp`, not the pip package.
+
+## Documentation
+
+- [Getting started](docs/getting-started.md): install, first transcript, export
+- [Engines](docs/engines.md): which transcription engine to use, keys, cost
+- [Creators](docs/creators.md): the creator analysis workspace
+- [FAQ](docs/faq.md): Gatekeeper, keys, download errors, data, uninstall
+
+中文文档：[快速上手](docs/zh-CN/getting-started.md) · [转写引擎](docs/zh-CN/engines.md) ·
+[博主分析](docs/zh-CN/creators.md) · [常见问题](docs/zh-CN/faq.md)
 
 ## Engines
 
@@ -64,7 +91,9 @@ pipx install verbatim-transcribe-mcp
 ```
 
 Claude Code and other agents can call Verbatim directly: transcribe links, search transcripts, run
-creator analysis.
+creator analysis. The PyPI release has the transcription tools; the creator workspace tools (ask,
+stances, predictions, recurring claims, radar) are in this repo for now — install them with
+`pipx install -e verbatim-mcp`.
 
 ## Stats
 
@@ -76,7 +105,9 @@ creator analysis.
 
 - **Creator pipelines don't auto-resume** after a server restart. They're marked failed; click
   **Continue** to reuse everything already done and redo only what's missing.
-- **`--cookies-from-browser`** requires the named browser to be installed locally.
+- **Browser cookies for downloads.** Running from source, yt-dlp borrows Chrome's login cookies (skipped
+  if Chrome isn't installed; change it with `YTDLP_COOKIES_BROWSER`). The app doesn't borrow cookies
+  unless you set that variable, so a heavily rate-limited Bilibili channel may need a retry later.
 - Gemini may block sensitive material; that file falls back to local Whisper instead of failing.
 - The **Xiaohongshu tab** needs a companion scraper project (`XHS_PROJECT` env var) and `uv`. It's not a
   pip dependency, since it drives a real logged-in browser session.

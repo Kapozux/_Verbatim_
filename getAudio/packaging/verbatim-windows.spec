@@ -33,6 +33,7 @@ COLLECT_ALL_PACKAGES = [
     'google.genai',
     'dashscope',
     'av',             # faster-whisper 解码用
+    'bilibili_api',   # B站 space 列表被风控时的 fallback
 ]
 
 for package in COLLECT_ALL_PACKAGES:
@@ -46,6 +47,7 @@ hiddenimports += [
     'transcribe_gemini',
     'transcribe_dashscope',
     'transcribe_precise',
+    'transcribe_gemini35',
     'analyze',
     'audioutil',
     'downloader',
@@ -55,6 +57,11 @@ hiddenimports += [
     'summarize',
     'taskdb',
     'config',
+    'ask',
+    'usage',
+    'reflect',
+    'backup',
+    'exporter',
 ]
 
 a = Analysis(

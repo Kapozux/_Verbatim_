@@ -703,6 +703,7 @@ async function topicsLoad() {
         <div class="tp-head"><div class="cx-muted">${T('tp.sub', { n: tps.length })} ${tagNote}
             <span id="tp-progress" class="cx-muted">${job ? T('tp.tagging', { a: job.done, b: job.total || '…' }) : ''}</span></div></div>
         ${datesNote}
+        <div id="tp-beliefs"></div>
         <div class="tp-chips">${tps.map(t => `<button type="button" class="tp-chip${t.topic === topicsState.sel ? ' on' : ''}" data-t="${escapeHtml(t.topic)}">
             <span class="tp-name">${escapeHtml(t.topic)}</span><span class="tp-n">${t.count}</span>${stanceBar(t.stances, t.count)}</button>`).join('')}</div>
         <div id="tp-detail"></div>`;
@@ -721,6 +722,74 @@ async function topicsLoad() {
         topicsLoad();
     };
     topicRenderDetail();
+    beliefsLoad();
+}
+
+// ================= 核心信念：同一个主张在多期里反复出现 =================
+let beliefsState = { open: {}, shown: {} };
+
+async function beliefsLoad() {
+    const id = cx.id;
+    const box = document.getElementById('tp-beliefs');
+    if (!box) return;
+    let d;
+    try { d = await (await fetch(`/api/chain/${id}/beliefs`)).json(); } catch { box.innerHTML = ''; return; }
+    if (cx.id !== id || !document.getElementById('tp-beliefs')) return;
+    clearTimeout(cx.timers.beliefs);
+    const job = d.job && d.job.status === 'running' ? d.job : null;
+    if (job) cx.timers.beliefs = setTimeout(beliefsLoad, 4000);
+    const est = d.estimate || {};
+    const err = d.job && d.job.status === 'error' ? `<p class="cx-err">${escapeHtml(d.job.error)}</p>` : '';
+    const btn = (label) => window.VERBATIM_DEMO || job ? '' :
+        `<button class="${d.built_at ? 'cx-link' : 'btn-primary cx-send'}" type="button" id="bl-find">${label}</button>`;
+    const progress = job ? `<span class="cx-muted">${T('bl.finding', { a: job.done, b: job.total || '…' })}</span>` : '';
+    if ((d.episodes || 0) < 3 || !est.topics) {
+        box.innerHTML = '';            // 不到 3 期、或没有横跨 3 期的话题：这块不出现
+        return;
+    }
+    if (!d.built_at) {
+        box.innerHTML = `<div class="bl-box bl-empty"><h3>${T('bl.title')}</h3>
+            <p class="cx-muted">${T('bl.desc')}</p>${progress}${err}
+            ${btn(T('bl.findBtn', { cost: fmtUsd(Math.max(0.01, est.est_cost_usd || 0)) }))}</div>`;
+    } else {
+        const items = d.items || [];
+        items.forEach(b => b.cards.forEach(c => { cxCiteCache[c.id] = c; }));
+        const list = items.map((b, n) => {
+            const key = b.belief;
+            const shown = beliefsState.shown[key] || 4;
+            const first = b.cards[0] || {};
+            const span = b.first && b.last
+                ? T('bl.span', { n: b.episodes, a: b.first, b: b.last }) : T('bl.spanNoDate', { n: b.episodes });
+            const stance = b.stance && b.stance !== 'none' ? `<span class="cx-stance st-${b.stance}">${T('stance.' + b.stance)}</span>` : '';
+            return `<details class="bl-item" data-k="${n}"${beliefsState.open[key] ? ' open' : ''}>
+                <summary><div class="bl-belief"><span class="cx-ai-tag">${T('bl.aiTag')}</span> ${escapeHtml(b.belief)}</div>
+                    <blockquote class="cc-quote bl-quote">${escapeHtml(first.quote || first.obs || '')}</blockquote>
+                    <div class="bl-meta"><b>${span}</b>${stance}<span class="tp-n">${escapeHtml(b.topic || '')}</span></div></summary>
+                <div class="bl-cards">${b.cards.slice(0, shown).map(c => sourceItemHtml(c.id, c)).join('')}
+                ${b.cards.length > shown ? `<button class="btn-secondary cc-more bl-more" type="button" data-k="${n}">${T('cards.more', { n: b.cards.length - shown })}</button>` : ''}</div>
+            </details>`;
+        }).join('');
+        box.innerHTML = `<div class="bl-box"><div class="bl-head"><h3>${T('bl.title')}</h3>
+                <span class="cx-muted">${items.length ? T('bl.count', { n: items.length }) : ''} ${T('bl.builtAt', { d: d.built_at })}</span>
+                ${progress}${btn(T('bl.redo'))}</div>
+            ${err}${d.failed_topics ? `<p class="cx-muted">${T('bl.failedTopics', { n: d.failed_topics })}</p>` : ''}
+            ${items.length ? `<div class="bl-list">${list}</div>` : `<p class="cx-muted">${T('bl.none')}</p>`}</div>`;
+        box.querySelectorAll('.bl-item').forEach(el => el.addEventListener('toggle', () => {
+            beliefsState.open[items[+el.dataset.k].belief] = el.open;
+        }));
+        box.querySelectorAll('.bl-more').forEach(m => m.onclick = () => {
+            const b = items[+m.dataset.k];
+            beliefsState.shown[b.belief] = (beliefsState.shown[b.belief] || 4) + 12;
+            beliefsLoad();
+        });
+        wireCitations(box);
+    }
+    const f = box.querySelector('#bl-find');
+    if (f) f.onclick = async () => {
+        f.disabled = true;
+        await fetch(`/api/chain/${id}/beliefs/find`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        beliefsLoad();
+    };
 }
 
 let cxResizeT = null;

@@ -16,11 +16,12 @@ import re
 import time
 from datetime import datetime
 
-from config import (GEMINI_API_KEY, GEMINI_ANALYSIS_MODEL,
+from config import (GEMINI_ANALYSIS_MODEL,
                     GEMINI_EXTRACT_MODEL, GEMINI_FALLBACK_MODELS,
-                    DASHSCOPE_API_KEY, ALIYUN_COMPAT_BASE,
+                    ALIYUN_COMPAT_BASE,
                     OPENROUTER_COMPAT_BASE, resolve_analysis,
                     make_gemini_client)
+import config
 from harness import fanout, agent
 import usage
 
@@ -256,7 +257,7 @@ def _lang_line(lang):
 def _call_gemini(prompt, grounded=False, model=None, purpose='analysis'):
     """带重试的 Gemini 调用。grounded=True 开 Google 搜索。model 缺省用合成模型。
     purpose 只用于记账（usage.db 里按用途汇总）。"""
-    api_key = GEMINI_API_KEY or os.environ.get('GEMINI_API_KEY', '')
+    api_key = config.gemini_key()
     if not api_key:
         raise RuntimeError('GEMINI_API_KEY 未设置')
 
@@ -344,7 +345,7 @@ def _llm(prompt, provider, model, grounded=False, purpose='analysis'):
     """按 provider 分发：gemini 走 google-genai，aliyun 走百炼，openrouter 走 OpenRouter。
     purpose：记账用途标签（cards / synth / verify / lens / brief / review / xhs …）。"""
     if provider == 'aliyun':
-        key = DASHSCOPE_API_KEY or os.environ.get('DASHSCOPE_API_KEY', '')
+        key = config.dashscope_key()
         if not key:
             raise RuntimeError('DASHSCOPE_API_KEY 未设置（阿里云分析需要）')
         return _call_openai_compat(prompt, model, ALIYUN_COMPAT_BASE, key,
@@ -385,7 +386,7 @@ def _extract_cards(title, transcript_text, author, provider, model):
         today=datetime.now().strftime('%Y-%m-%d'),
     )
     data = agent(lambda p: _llm(p, provider, model, purpose='cards'),
-                 prompt, schema=['cards'], retries=2)
+                 prompt, schema=['cards'], retries=2, retry_on_error=False)
     if not isinstance(data, dict):
         return None
     data.setdefault('cards', [])
@@ -625,9 +626,22 @@ def synthesize(episodes, author='该博主', critique_level='analytical',
     if not good:
         raise RuntimeError('所有期都没抽到证据卡，无法合成画像')
     if bad_n >= max(1, attempted_n * 0.5):
-        reasons = {e.get('unusable') for e in episodes if e.get('unusable')}
-        why = ('；'.join(sorted(r for r in reasons if r))[:160]
-               or '抽卡失败，先查 API key / 限流')
+        # 分开说清楚是哪一类：以前一律落到「先查 API key」，可实际常是内容本身没观点
+        failed_n = sum(1 for e in episodes if e.get('extract_failed') and not e.get('unusable'))
+        unusable = [e.get('unusable') for e in episodes if e.get('unusable')]
+        empty_n = sum(1 for e in episodes
+                      if not e.get('cards') and not e.get('extract_failed'))
+        dropped_n = attempted_n - len(episodes)
+        parts = []
+        if failed_n:
+            parts.append(f'{failed_n} 期抽卡调用失败（先查 API key / 限流）')
+        if unusable:
+            parts.append(f'{len(unusable)} 期转写不可用（{"；".join(sorted(set(unusable)))[:80]}）')
+        if empty_n:
+            parts.append(f'{empty_n} 期抽取正常但没有可用观点（内容太水或不是本人发言）')
+        if dropped_n > 0:
+            parts.append(f'{dropped_n} 期在下载 / 转写阶段就没成功')
+        why = '；'.join(parts)[:240] or '原因不明'
         raise RuntimeError(
             f'只有 {len(good)}/{attempted_n} 期拿到了可用证据卡，画像不可信：{why}')
     level = critique_level if critique_level in _TONE else 'analytical'
@@ -754,7 +768,7 @@ _XHS_IMG_MIME = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg
 
 def _call_gemini_mm(prompt, image_paths, model=None):
     """多模态 Gemini：文字 + 图片一起送。带模型降级链、重试。返回文本。"""
-    api_key = GEMINI_API_KEY or os.environ.get('GEMINI_API_KEY', '')
+    api_key = config.gemini_key()
     if not api_key:
         raise RuntimeError('GEMINI_API_KEY 未设置')
     from google.genai import types

@@ -54,17 +54,21 @@ def _extract_json(raw):
         return None
 
 
-def agent(call_fn, prompt, *, schema=None, retries=2):
+def agent(call_fn, prompt, *, schema=None, retries=2, retry_on_error=True):
     """一次 LLM 调用。
 
     schema=None            → 返回原始文本（失败到底返回 ''）。
     schema=可迭代的必需键名 → 解析 JSON 并校验这些键都在，缺则重试；失败到底返回 None。
     call_fn(prompt) -> str 由调用方注入（保持本模块无业务依赖）。
+    retry_on_error=False：call_fn 抛异常就不再重来——它内部已经按模型降级链重试过了，
+    外面再包几轮就是「3 × 降级链 × 3」次计费。只对输出不合格（空 / JSON 坏）重试。
     """
     for _ in range(retries + 1):
         try:
             out = call_fn(prompt)
         except Exception:  # noqa: BLE001
+            if not retry_on_error:
+                break
             out = None
         if not out:
             continue

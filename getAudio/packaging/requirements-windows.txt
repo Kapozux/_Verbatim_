@@ -19,3 +19,4 @@ torch>=2.0
 # Windows 托盘图标（对应 mac 用的 rumps）
 pystray>=0.19
 pillow>=10.0
+bilibili-api-python>=17.0  # B站 space 列表被 412 风控封锁时的 probe() fallback

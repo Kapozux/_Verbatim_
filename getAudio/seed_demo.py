@@ -18,6 +18,7 @@ import os
 import random
 import re
 import shutil
+import tempfile
 import sys
 from datetime import datetime, timedelta
 
@@ -301,16 +302,25 @@ def write_chain(chain_id, src_results, dst_results, demo_task_ids):
         return None
 
     # 画像 + 五个镜头：拿英文证据卡、lang=en 重新生成（不是逐句翻译中文稿）
+    # 画像和五个镜头互不依赖，并行跑（串行要十来分钟）
+    from concurrent.futures import ThreadPoolExecutor
     with usage.scope(ref='demo-seed'):
-        portrait = _cached(f'chains/{chain_id}/portrait', lambda: synthesize(
-            episodes, author=author, critique_level=state.get('critique_level') or 'analytical',
-            preset='gemini', self_verify=False, lang='en'))
-        for lens in LENSES:
-            md = _cached(f'chains/{chain_id}/lens_{lens}', lambda: render_lens(
+        def _portrait():
+            return _cached(f'chains/{chain_id}/portrait', lambda: synthesize(
+                episodes, author=author, critique_level=state.get('critique_level') or 'analytical',
+                preset='gemini', self_verify=False, lang='en'))
+
+        def _lens(lens):
+            return lens, _cached(f'chains/{chain_id}/lens_{lens}', lambda: render_lens(
                 episodes, lens, author=author, preset='gemini', lang='en'))
-            if md:
-                with open(os.path.join(ddir, f'镜头_{lens}.md'), 'w', encoding='utf-8') as f:
-                    f.write(md)
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            fut_p = pool.submit(usage.bound(_portrait))
+            lens_out = list(pool.map(usage.bound(_lens), LENSES))
+            portrait = fut_p.result()
+    for lens, md in lens_out:
+        if md:
+            with open(os.path.join(ddir, f'镜头_{lens}.md'), 'w', encoding='utf-8') as f:
+                f.write(md)
     if portrait:
         with open(os.path.join(ddir, '总分析.md'), 'w', encoding='utf-8') as f:
             f.write(portrait)
@@ -344,6 +354,10 @@ def write_chain(chain_id, src_results, dst_results, demo_task_ids):
     return len(episodes), sum(len(e['cards']) for e in episodes)
 
 
+DERIVED_FILES = ('tags.json', 'predictions.json', 'embeddings.npz', 'speakers.json',
+                 'chat_starters.json', 'beliefs.json')
+
+
 def main():
     keep_dates = '--keep-dates' in sys.argv
     max_items = int(sys.argv[sys.argv.index('--max') + 1]) if '--max' in sys.argv else 200
@@ -364,6 +378,15 @@ def main():
     else:
         items = [(n, m, datetime.strptime(m['date'][:19], '%Y-%m-%d %H:%M:%S')) for n, m in items]
 
+    # 重建会整个删掉演示目录；博主页的派生数据（话题标签、预测核对、向量、说话人、开场问题）
+    # 是另花钱算的，先挪出来，建完再放回去。ask.py 按卡片内容指纹认，卡变了的条目自己会作废重算
+    stash = tempfile.mkdtemp(prefix='demo-derived-')
+    for cid in DEMO_CHAINS:
+        for name in DERIVED_FILES:
+            p = os.path.join(dst, '_chains', cid, name)
+            if os.path.isfile(p):
+                os.makedirs(os.path.join(stash, cid), exist_ok=True)
+                shutil.copy2(p, os.path.join(stash, cid, name))
     if os.path.isdir(dst):
         shutil.rmtree(dst)
     os.makedirs(dst)
@@ -374,6 +397,12 @@ def main():
     for cid in DEMO_CHAINS:
         got = write_chain(cid, src, dst, demo_ids)
         print(f'creator {cid[:8]}:', f'{got[0]} episodes, {got[1]} evidence cards' if got else 'skipped')
+        ddir = os.path.join(dst, '_chains', cid)
+        for name in DERIVED_FILES:
+            kept = os.path.join(stash, cid, name)
+            if got and os.path.isfile(kept) and not os.path.exists(os.path.join(ddir, name)):
+                shutil.copy2(kept, os.path.join(ddir, name))
+    shutil.rmtree(stash, ignore_errors=True)
 
     os.makedirs(os.path.join(DEMO_DIR, 'uploads'), exist_ok=True)
     if not keep_dates:

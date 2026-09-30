@@ -1,16 +1,18 @@
 """
 DashScope transcription engine (阿里云百炼).
-默认走 Qwen-Audio-3.0 ASR（见 config.DASHSCOPE_ASR_MODEL）；paraformer-v2 是同接口
+默认走 Qwen-Audio-3.1 ASR（见 config.DASHSCOPE_ASR_MODEL）；paraformer-v2 是同接口
 的上一代模型，改 env 即可退回。两者请求/返回结构一致，共用本模块。
 """
 
 import json
 import os
+import random
 import time
 
 import requests as http_requests
 
-from config import DASHSCOPE_API_KEY, DASHSCOPE_ASR_MODEL
+from config import DASHSCOPE_ASR_MODEL
+import config
 
 BASE_URL = 'https://dashscope.aliyuncs.com/api/v1'
 
@@ -18,7 +20,7 @@ BASE_URL = 'https://dashscope.aliyuncs.com/api/v1'
 def transcribe_audio(filepath, progress_callback=None, diarization=False,
                      speaker_count=None, model=None):
     """
-    Transcribe audio using DashScope ASR (Qwen-Audio-3.0 by default) via REST API.
+    Transcribe audio using DashScope ASR (Qwen-Audio-3.1 by default) via REST API.
 
     Args:
         diarization: 开启说话人分离（声纹），返回的每段会带 'speaker' 字段。
@@ -31,10 +33,10 @@ def transcribe_audio(filepath, progress_callback=None, diarization=False,
         List of segment dicts with keys: timestamp (str), text (str),
         以及开启 diarization 时的 speaker。
     """
-    api_key = DASHSCOPE_API_KEY or os.environ.get('DASHSCOPE_API_KEY', '')
+    api_key = config.dashscope_key()
     if not api_key:
         raise RuntimeError(
-            "DashScope API Key 未设置。请在 .env 文件中设置 DASHSCOPE_API_KEY。"
+            "DashScope API Key 未设置。请在 Settings 里填写（或在 .env 里设置 DASHSCOPE_API_KEY）。"
         )
     model = model or DASHSCOPE_ASR_MODEL
 
@@ -183,6 +185,14 @@ def _poll_task(task_id, api_key, progress_callback=None):
         except http_requests.RequestException as e:
             # 4xx（鉴权/参数/任务不存在）说明请求本身有问题，重试也不会好
             status_code = getattr(getattr(e, 'response', None), 'status_code', None)
+            # 429 是查询太频繁（并发 20 路时每路 2 秒一查会碰到 20 QPS 上限），退避后接着查，不是 Key 错
+            if status_code == 429:
+                if waited_seconds >= MAX_WAIT_SECONDS:
+                    raise RuntimeError('DashScope 查询任务持续被限流，已超时放弃') from e
+                backoff = 5 + random.random() * 5
+                time.sleep(backoff)
+                waited_seconds += backoff
+                continue
             if status_code is not None and 400 <= status_code < 500:
                 raise RuntimeError(
                     f"DashScope 查询任务失败 (HTTP {status_code})，请检查 API Key 是否正确"

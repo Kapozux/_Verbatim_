@@ -71,6 +71,13 @@ def set_status(task_id, status, error=None):
         )
 
 
+def set_upload_path(task_id, upload_path):
+    """链接任务下完音频后补登源文件位置：重启能恢复，网络错重排也找得到。"""
+    with _write_lock, _conn() as c:
+        c.execute('UPDATE tasks SET upload_path=?, updated_at=? WHERE id=?',
+                  (upload_path, _now(), task_id))
+
+
 def set_engine(task_id, engine):
     """换引擎重投一个既有 task_id 时同步这一列，不然它永远留着创建时那个引擎。
 

@@ -546,7 +546,7 @@ def _is_content_block(err):
     return any(m in s for m in _CONTENT_BLOCK_MARKERS)
 
 
-def _chain_stopped(chain_id):
+def _chain_stopped(chain_id, task_id=None):
     """这条链条是不是已经被用户停掉了（内存标记 + 落盘终态都算）。
 
     _cancel_chains 只在链条线程活着的时候有值（finally 里就 discard 了），而按下停止
@@ -557,12 +557,19 @@ def _chain_stopped(chain_id):
         return False
     if chain_id in _cancel_chains:
         return True
+    cdir = _chain_dir(chain_id)
+    if not os.path.isdir(cdir):
+        return True          # 链条被删了：队列里剩下的别再转、别再花钱
+    if task_id and task_id in _manual_tasks:
+        return False         # 用户在已停止的链上手动重转某一期：终态 cancelled 不拦它
     try:
-        with open(os.path.join(_chain_dir(chain_id), 'chain.json'), 'r',
-                  encoding='utf-8') as f:
+        with open(os.path.join(cdir, 'chain.json'), 'r', encoding='utf-8') as f:
             return json.load(f).get('stage') == 'cancelled'
     except Exception:  # noqa: BLE001  读不到就当没停，宁可多转一条也不误杀
         return False
+
+
+_manual_tasks = set()   # 单期重转提交的 task_id（见 _retranscribe_video）
 
 
 # ---- 断网断路器 ----
@@ -756,7 +763,7 @@ def _run_transcription(task_id, filepath, engine, original_filename, q,
     # 链条已被停止 → 队列里剩下的这些别再开跑（停止前可能已经提交了几十个）。
     # 音频留在 uploads/ 不删，Continue 会直接拿它重转，不用重下载。
     chain_id = (extra_meta or {}).get('chain_id')
-    if _chain_stopped(chain_id):
+    if _chain_stopped(chain_id, task_id):
         taskdb.set_status(task_id, 'failed', error='已随链条停止，未开始转写')
         q.put(json.dumps({'type': 'error', 'message': '已随链条停止，未开始转写'}))
         tasks.pop(task_id, None)
@@ -774,7 +781,7 @@ def _run_transcription(task_id, filepath, engine, original_filename, q,
     # 链条被停止也会放出来，下面拿到额度后那道检查会把它标成"随链条停止"。
     if engine != 'whisper' and _net_breaker.is_open():
         q.put(json.dumps({'type': 'queued', 'message': '网络断开，恢复后自动继续...'}))
-        _net_breaker.wait(lambda: _chain_stopped(chain_id))
+        _net_breaker.wait(lambda: _chain_stopped(chain_id, task_id))
 
     # 排队等待本引擎的并发额度
     sem = _engine_semaphores.get(engine)
@@ -785,7 +792,7 @@ def _run_transcription(task_id, filepath, engine, original_filename, q,
     t_tx = time.monotonic()           # 抽音频前就开始算；下面抽完会重置
 
     # 排队期间（可能几十分钟）用户按了停止 → 到自己这一轮时再确认一次
-    if _chain_stopped(chain_id):
+    if _chain_stopped(chain_id, task_id):
         if sem is not None:
             sem.release()
         taskdb.set_status(task_id, 'failed', error='已随链条停止，未开始转写')
@@ -894,9 +901,17 @@ def _run_transcription(task_id, filepath, engine, original_filename, q,
 
         def _whisper_transcribe():
             """本地 Whisper 转写（主路径 + 云引擎失败时的兜底路径共用）。"""
+            # 用电池时原地等插电，不直接判失败：以前一拔电，几百期的 Whisper 链几秒内
+            # 全部被标成失败，插电后还得手动 Continue。等久了（12 小时）或链被停了才放弃。
             if _on_battery():
-                raise _OnBattery('电脑正在用电池供电，本地 Whisper 会把 CPU 全部性能核心跑满——'
-                                 '插上电源再转，或者这条改用云端引擎（Gemini 等）')
+                q.put(json.dumps({'type': 'queued',
+                                  'message': 'On battery — waiting for power before running local Whisper…'}))
+                deadline = time.monotonic() + 12 * 3600
+                while _on_battery():
+                    if time.monotonic() > deadline or _chain_stopped(chain_id, task_id):
+                        raise _OnBattery('电脑正在用电池供电，本地 Whisper 会把 CPU 全部性能核心跑满——'
+                                         '插上电源再转，或者这条改用云端引擎（Gemini 等）')
+                    time.sleep(30)
             from transcribe_whisper import transcribe_audio
 
             q.put(json.dumps({
@@ -1125,8 +1140,8 @@ def _run_transcription(task_id, filepath, engine, original_filename, q,
                     'type': 'progress', 'percent': 0,
                     'message': f'{why} — falling back to local Whisper...',
                 }))
-                # 换并发闸：放掉云引擎额度，改排 Whisper 的队（本地 CPU 只允许 2 路，
-                # 不然 12 路 whisper 同时烧 CPU）。finally 里统一释放当前 sem。
+                # 换并发闸：放掉云引擎额度，改排 Whisper 的队（本地并发见
+                # config.ENGINE_CONCURRENCY['whisper']，不然十几路 whisper 同时烧 CPU）。finally 里统一释放当前 sem。
                 if sem is not None:
                     sem.release()
                 sem = _engine_semaphores.get('whisper')
@@ -1321,13 +1336,83 @@ def _enqueue_local_task(path, engine, speaker_count=None):
     return task_id, None
 
 
+def _chain_task_context():
+    """task_id → 重投需要的链条上下文（chain.json 里的 videos[].task_id 反查）。
+    taskdb 只存了位置参数那几列；链条任务少了 chain_id 等于点停止拦不住、
+    钱记不到链上，summarize 回到默认 True 还会给每期白出一份摘要。"""
+    ctx = {}
+    try:
+        names = os.listdir(CHAINS_DIR)
+    except OSError:
+        return ctx
+    for name in names:
+        try:
+            with open(os.path.join(CHAINS_DIR, name, 'chain.json'), 'r', encoding='utf-8') as f:
+                st = json.load(f)
+        except Exception:  # noqa: BLE001
+            continue
+        chain_id = st.get('id') or name
+        for v in st.get('videos') or []:
+            tid = v.get('task_id')
+            if not tid:
+                continue
+            ctx[tid] = dict(
+                fallback_whisper=st.get('fallback_whisper', False),
+                summarize=st.get('summarize', False),
+                extra_meta={'source_url': v.get('video_url'),
+                            'video_id': v.get('video_id'),
+                            'creator': st.get('author') or v.get('uploader'),
+                            'chain_id': chain_id},
+            )
+    return ctx
+
+
+_ORPHAN_MIN_AGE_S = 600   # 比这新的 uploads 条目不当孤儿：可能正在 file.save / shutil.move，taskdb 行还没建
+
+
+def _clean_orphan_uploads(keep_ids=()):
+    """删 uploads/ 里不属于任何未完成任务的文件和残留下载目录。
+
+    认 task_id 时去掉 `_audio` 之类的后缀（worker 抽音轨的中间文件 `<tid>_audio.ogg`）
+    和 `url_` 前缀（单链接下载目录）。failed 但音频还在的保留——Continue 靠它直接重转。"""
+    cleaned = 0
+    now = time.time()
+    for name in os.listdir(config.UPLOAD_FOLDER):
+        path = os.path.join(config.UPLOAD_FOLDER, name)
+        try:
+            if now - os.lstat(path).st_mtime < _ORPHAN_MIN_AGE_S:
+                continue
+        except OSError:
+            continue
+        stem = name.split('.', 1)[0]
+        if stem.startswith('url_'):
+            stem = stem[4:]
+        tid = stem.split('_', 1)[0]
+        if tid in keep_ids:
+            continue
+        row = taskdb.get(tid) if _is_valid_task_id(tid) else None
+        if row and row.get('status') != 'done':
+            continue
+        try:
+            if os.path.isdir(path) and not os.path.islink(path):
+                shutil.rmtree(path)
+            else:
+                os.remove(path)
+            cleaned += 1
+        except OSError:
+            pass
+    return cleaned
+
+
 def recover_unfinished_tasks():
     """启动时找回上次没跑完的任务：源文件还在就重新入队，不在就标记失败。
 
-    同时清掉 uploads/ 里不属于任何待恢复任务的孤儿文件。
+    先清孤儿再重投：反过来的话，刚恢复的视频任务可能已开始抽音轨，
+    中间文件会被当孤儿删掉。
     """
     rows = taskdb.unfinished()
-    active_ids = set()
+    cleaned = _clean_orphan_uploads(keep_ids={r['id'] for r in rows})
+    chain_ctx = _chain_task_context() if rows else {}
     recovered = 0
 
     for row in rows:
@@ -1337,31 +1422,17 @@ def recover_unfinished_tasks():
             taskdb.set_status(task_id, 'pending')
             q = queue.Queue()
             tasks[task_id] = q
+            engine = row.get('engine')
+            kwargs = chain_ctx.get(task_id) or {'model_review': engine != 'whisper'}
             submit_transcription(
-                row.get('engine'), run_transcription, task_id, upload_path,
-                row.get('engine'), row.get('filename'), q, row.get('speaker_count'),
+                engine, run_transcription, task_id, upload_path,
+                engine, row.get('filename'), q, row.get('speaker_count'), **kwargs,
             )
-            active_ids.add(task_id)
             recovered += 1
         else:
             taskdb.set_status(
                 task_id, 'failed', error='服务重启且源文件已丢失，请重新上传'
             )
-
-    # 孤儿上传文件清理。只删真孤儿：taskdb 里查无此任务、或任务已 done
-    # （done 的音频已复制进 results/，upload 副本没用了）。
-    # failed 但音频还在的必须保留——Continue 靠它"直接重转、不用重下载"。
-    cleaned = 0
-    for name in os.listdir(config.UPLOAD_FOLDER):
-        tid = name.split('.', 1)[0]
-        row = taskdb.get(tid) if _is_valid_task_id(tid) else None
-        if row and row.get('status') != 'done':
-            continue                     # 未完成任务的音频：保留给 Continue
-        try:
-            os.remove(os.path.join(config.UPLOAD_FOLDER, name))
-            cleaned += 1
-        except OSError:
-            pass
 
     if recovered or cleaned:
         print(f"[recover] 找回未完成任务 {recovered} 个，清理孤儿上传文件 {cleaned} 个")
@@ -1443,11 +1514,11 @@ def _download_then_transcribe(task_id, url, engine, q, section=None, offset_sec=
                 q.put(json.dumps({'type': 'progress', 'percent': 90,
                                   'message': f'Found existing {sub_kind} subtitles ({sub_lang}) — skipping download & transcription'}))
                 try:
-                    _save_subtitle_task(task_id, target, sub_segs, sub_kind, lang=sub_lang,
-                                        timing={'subs_check_s': timing['subs_check_s'],
-                                                'wall_s': timing['subs_check_s']})
+                    saved = _save_subtitle_task(task_id, target, sub_segs, sub_kind, lang=sub_lang,
+                                                timing={'subs_check_s': timing['subs_check_s'],
+                                                        'wall_s': timing['subs_check_s']})
                     q.put(json.dumps({'type': 'done', 'task_id': task_id,
-                                      'segments': sub_segs, 'summary': None,
+                                      'segments': saved, 'summary': None,
                                       'subtitle_lang': sub_lang}))
                     return
                 except Exception as e:  # noqa: BLE001  存字幕失败也别让任务死：转写兜底
@@ -1465,8 +1536,16 @@ def _download_then_transcribe(task_id, url, engine, q, section=None, offset_sec=
             q.put(json.dumps({'type': 'error', 'message': 'Download failed — check the link.'}))
             return
         title = item.get('title') or url
+        # 音频挪出 dl_dir（finally 会删它）：云引擎遇网络错时 worker 会用同一个文件
+        # 重新排队，放在 dl_dir 里的话这边一返回就被删了，重排必败。
+        # 整段下载的登记进 taskdb，重启也能恢复；片段（section）恢复时拿不到 offset，不登记。
+        ext = os.path.splitext(item['path'])[1].lstrip('.') or 'mp3'
+        audio_path = os.path.join(config.UPLOAD_FOLDER, f'{task_id}.{ext}')
+        shutil.move(item['path'], audio_path)
+        if not section:
+            taskdb.set_upload_path(task_id, audio_path)
         # 复用正常转写链路：落 results/、taskdb done、SSE 推进度，全和上传一致
-        run_transcription(task_id, item['path'], engine, title, q,
+        run_transcription(task_id, audio_path, engine, title, q,
                           None, False, engine != 'whisper', offset_sec=offset_sec,
                           extra_meta={'source_url': url,
                                       'video_id': item.get('video_id') or _video_id_from_url(url),
@@ -1477,6 +1556,18 @@ def _download_then_transcribe(task_id, url, engine, q, section=None, offset_sec=
         q.put(json.dumps({'type': 'error', 'message': str(e)[:200]}))
     finally:
         shutil.rmtree(dl_dir, ignore_errors=True)
+        status = (taskdb.get(task_id) or {}).get('status')
+        if status in ('pending', 'running'):
+            return       # 网络错已重新排队：新 worker 还要用这个 q 和音频
+        if section or status != 'failed':
+            # 片段音频没法按原 offset 恢复，删掉；done 的 worker 已经删过。
+            # 失败的整段音频留着，和上传任务一样可以直接重转、不用重下载。
+            for name in os.listdir(config.UPLOAD_FOLDER):
+                if name.startswith(task_id + '.'):
+                    try:
+                        os.remove(os.path.join(config.UPLOAD_FOLDER, name))
+                    except OSError:
+                        pass
         # 字幕命中的快速路径不经过 run_transcription，它自己的 finally 里那份
         # tasks.pop 不会跑到——不清这里，任务会永远卡在「进行中」，
         # /api/history DELETE 那边 `if task_id in tasks` 的判断会一直挡着删不掉。
@@ -1528,7 +1619,7 @@ def api_transcribe_urls():
     engine = body.get('engine', 'gemini35')
     sub_mode = _clean_sub_mode(body.get('subs'))
     try:
-        max_videos = max(1, min(300, int(body.get('max_videos') or 20)))
+        max_videos = max(1, min(_MAX_CHAIN_VIDEOS, int(body.get("max_videos") or 20)))   # 和博主链同一个上限
     except (TypeError, ValueError):
         max_videos = 20
     lines = [u.strip() for u in re.split(r'[\n,]+', body.get('urls') or '') if u.strip()]
@@ -1798,6 +1889,7 @@ def api_history_detail(task_id):
 
 
 _summary_jobs = set()   # 正在补摘要的 task_id，防连点重复花钱
+_summary_jobs_lock = threading.Lock()
 
 
 @app.route('/api/history/<task_id>/summary', methods=['POST'])
@@ -1815,9 +1907,10 @@ def api_history_summary(task_id):
             segments = json.load(f)
     except Exception:  # noqa: BLE001
         return jsonify({'error': 'Transcript not found'}), 404
-    if task_id in _summary_jobs:
-        return jsonify({'error': 'Already generating'}), 409
-    _summary_jobs.add(task_id)
+    with _summary_jobs_lock:        # 查-加要原子：同一毫秒双击不能发两次模型调用
+        if task_id in _summary_jobs:
+            return jsonify({'error': 'Already generating'}), 409
+        _summary_jobs.add(task_id)
     try:
         from summarize import summarize_transcript
         full_text = '\n'.join(f"[{s.get('timestamp', '')}] {s.get('text', '')}"
@@ -2104,6 +2197,8 @@ def _reflect_touch():
         reflect.touch(config.RESULTS_FOLDER)
     except Exception:  # noqa: BLE001
         pass
+    if DEMO_MODE:
+        return
     try:
         import backup
         backup.touch(config.RESULTS_FOLDER)
@@ -2130,12 +2225,19 @@ def _update_meta(meta_path, updates):
 
 def _save_chain(state):
     """原子写 chain.json：临时文件 + os.replace，持全局锁。所有 chain.json 写都走这。"""
-    path = os.path.join(_chain_dir(state['id']), 'chain.json')
+    cdir = _chain_dir(state['id'])
+    if not os.path.isdir(cdir):
+        return       # 链条已被删除：还在收尾的线程别再把它写回来（也别抛异常）
+    path = os.path.join(cdir, 'chain.json')
     tmp = path + '.tmp'
     with _chain_write_lock:
-        with open(tmp, 'w', encoding='utf-8') as f:
-            json.dump(state, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, path)
+        try:
+            with open(tmp, 'w', encoding='utf-8') as f:
+                json.dump(state, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, path)
+        except FileNotFoundError:
+            if os.path.isdir(cdir):
+                raise        # 目录还在却写不了，是真问题；目录没了就是刚被删，静默放过
 
 
 _VID_IN_NAME = re.compile(r'\[([A-Za-z0-9_-]{6,20})\]')
@@ -2150,7 +2252,6 @@ _URL_ID_PATTERNS = (
     re.compile(r'bilibili\.com/bangumi/play/((?:ep|ss)\d+)'),       # B站番剧
     re.compile(r'douyin\.com/video/(\d{15,})'),
 )
-_SHORT_LINK_HOSTS = ('b23.tv/', 'youtu.be/')      # youtu.be 本身就带 id，不用解析；b23.tv 要跟跳转
 
 
 def _looks_like_url(text):
@@ -2322,19 +2423,33 @@ def _video_id_index(require_speakers=False):
 def _has_speaker_labels(result_dir, meta):
     if meta.get('engine') == 'gemini35':            # 这个引擎总是开着 diarization
         return True
+    # 看每段开头有没有「说话人N：」前缀，不在全文里找子串——正文里恰好说到「说话人」三个字的稿会被误判
     try:
         with open(os.path.join(result_dir, 'transcript.json'), 'r', encoding='utf-8') as f:
-            return '说话人' in f.read()
+            segs = json.load(f)
     except Exception:
         return False
+    return any(isinstance(sg, dict) and _SPEAKER_PREFIX.match(sg.get('text') or '')
+               for sg in (segs or [])[:200])
+
+
+_SPEAKER_PREFIX = re.compile(r'^\s*说话人\s*\d+\s*[：:]')
 
 
 def _save_subtitle_task(task_id, target, segments, source, lang=None, timing=None,
-                        summarize=True):
+                        summarize=True, chain_id=None):
     """把抓来的字幕当作转写结果落盘（无音频），并在 taskdb 里标记 done。
 
     这样它和普通转写任务一样进历史、进分析，只是引擎标为 subtitle、没有音频回放。
+    返回落盘的句子级片段（实时推给前端的也该是这份，和 Library 里一致）。
+    摘要 / enrich 的花费记到这个 task（和链条）上——这条路径不经过 run_transcription 的 scope。
     """
+    with usage.scope(ref=task_id, chain=chain_id):
+        return _save_subtitle_task_inner(task_id, target, segments, source, lang, timing,
+                                         summarize)
+
+
+def _save_subtitle_task_inner(task_id, target, segments, source, lang, timing, summarize):
     task_dir = os.path.join(config.RESULTS_FOLDER, task_id)
     os.makedirs(task_dir, exist_ok=True)
     from downloader import merge_caption_cues
@@ -2383,6 +2498,7 @@ def _save_subtitle_task(task_id, target, segments, source, lang=None, timing=Non
     except Exception:
         pass
     _reflect_touch()
+    return segments
 
 
 def _engine_used(task_id):
@@ -2862,7 +2978,8 @@ def _run_chain(state):
                 task_id = str(uuid.uuid4())
                 _save_subtitle_task(task_id, target, sub_segs, sub_source,
                                     lang=(_sub_meta or {}).get('sub_lang'),
-                                    summarize=state.get('summarize', False))
+                                    summarize=state.get('summarize', False),
+                                    chain_id=chain_id)
                 v['task_id'] = task_id
                 v['title'] = target.get('title') or v['title']
                 v['status'] = 'done'
@@ -3751,7 +3868,8 @@ def api_chains():
                 try:
                     with open(cpath, 'r', encoding='utf-8') as f:
                         state = json.load(f)
-                    _ensure_raw_doc(state)      # 老链条按需补『合并原文.md』
+                    if not DEMO_MODE:
+                        _ensure_raw_doc(state)      # 老链条按需补『合并原文.md』
                     cdir = os.path.join(CHAINS_DIR, name)
                     # 有没有证据卡（跨博主对比只列有卡的）+ 订阅状态（卡片上的「有更新」小点）
                     names = os.listdir(cdir)
@@ -3832,7 +3950,9 @@ def api_chain_detail(chain_id):
         if v.get('status') in ('transcribing', 'downloading') \
                 and _sync_video_with_taskdb(v):
             healed = True
-    if healed:
+    # 只在链已终态时落盘：还在跑的链由 run_chain 用内存里的 state 写，这里无锁读-改-写
+    # 会拿旧快照覆盖它刚写进去的字段。演示实例只读，不写
+    if healed and not DEMO_MODE and data.get('stage') in ('done', 'failed', 'cancelled'):
         try:
             _save_chain(data)
         except Exception:  # noqa: BLE001
@@ -3846,7 +3966,7 @@ def api_chain_detail(chain_id):
     # 头像：空的、或存的其实是视频封面（老数据默认行为），都值得重探一次
     needs_avatar = not data.get('avatar_checked') \
         and not _dl_is_real_avatar(data.get('avatar'))
-    if (needs_followers or needs_author or needs_avatar) \
+    if (needs_followers or needs_author or needs_avatar) and not DEMO_MODE \
             and data.get('stage') in ('done', 'failed', 'cancelled') \
             and data.get('url') and chain_id not in _channel_backfilling:
         _channel_backfilling.add(chain_id)
@@ -3879,10 +3999,14 @@ def api_chain_reanalyze(chain_id):
     cpath = os.path.join(_chain_dir(chain_id), 'chain.json')
     if not os.path.isfile(cpath):
         return jsonify({'error': 'Not found'}), 404
-    with open(cpath, 'r', encoding='utf-8') as f:
-        state = json.load(f)
-    if state.get('stage') in ('downloading', 'transcribing', 'analyzing', 'synthesizing'):
-        return jsonify({'ok': False, 'error': 'This pipeline is still running — wait for it to finish before re-analyzing'}), 409
+    # 检查和占位在同一把锁里做：以前连点两下能起两个 _reanalyze_chain（还漏了 starting）
+    with _chain_write_lock:
+        with open(cpath, 'r', encoding='utf-8') as f:
+            state = json.load(f)
+        if state.get('stage') not in ('done', 'failed', 'cancelled'):
+            return jsonify({'ok': False, 'error': 'This pipeline is still running — wait for it to finish before re-analyzing'}), 409
+        state['stage'] = 'starting'
+        _save_chain(state)
 
     body = request.get_json(silent=True) or {}
     state['verify'] = bool(body.get('verify', False))
@@ -4308,6 +4432,28 @@ def api_chain_predictions_check(chain_id):
     return jsonify({'ok': True, 'started': started})
 
 
+@app.route('/api/chain/<chain_id>/beliefs')
+def api_chain_beliefs(chain_id):
+    """核心信念：同一个主张在 ≥3 期里反复出现（每条带全部原话出处）。"""
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    import ask
+    out = ask.beliefs(_chain_dir(chain_id))
+    out['job'] = _job_view(chain_id, 'beliefs')
+    return Response(json.dumps(out, ensure_ascii=False), mimetype='application/json')
+
+
+@app.route('/api/chain/<chain_id>/beliefs/find', methods=['POST'])
+def api_chain_beliefs_find(chain_id):
+    """后台找核心信念（flash-lite 按话题分批，代码复核跨期数）。没打话题标签的先补标。"""
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    import ask
+    cdir = _chain_dir(chain_id)
+    started = _start_card_job(chain_id, 'beliefs', lambda p: ask.find_beliefs(cdir, progress=p))
+    return jsonify({'ok': True, 'started': started})
+
+
 @app.route('/api/compare', methods=['POST'])
 def api_compare():
     """跨博主：同一个问题，2~4 个博主的立场并排放，各自带原话。body: {chains: [id], question}"""
@@ -4635,8 +4781,16 @@ def _retranscribe_video(chain_id, index, target, engine):
         taskdb.create(task_id, display_name, engine, None, upload_path)
         q = queue.Queue()
         tasks[task_id] = q
+        _manual_tasks.add(task_id)      # 链可能已停止（cancelled）：用户手点的这一期照样转
+        fallback = False
+        try:
+            with open(os.path.join(_chain_dir(chain_id), 'chain.json'), 'r', encoding='utf-8') as f:
+                fallback = bool(json.load(f).get('fallback_whisper'))
+        except Exception:  # noqa: BLE001
+            pass
         submit_transcription(engine, run_transcription, task_id, upload_path, engine,
                         display_name, q, None,
+                        fallback_whisper=fallback,
                         summarize=_chain_summarize(chain_id),
                         extra_meta={'source_url': target.get('video_url'),
                                     'video_id': item.get('video_id'),
@@ -4645,16 +4799,25 @@ def _retranscribe_video(chain_id, index, target, engine):
         _update_video(chain_id, index, {
             'task_id': task_id, 'title': item['title'],
             'video_id': item['video_id'], 'status': 'transcribing',
-            'source': f'retranscribe:{engine}',
+            'source': f'retranscribe:{engine}', 'error': None,
         })
 
-        # 轮询到落定，回写状态
-        while True:
+        # 轮询到落定，回写状态。链被删了 / 任务行没了就不等了；排队再久也有个头（2 天）
+        deadline = time.time() + 2 * 86400
+        while time.time() < deadline:
             time.sleep(5)
+            if not os.path.isdir(_chain_dir(chain_id)):
+                return
             row = taskdb.get(task_id)
-            if row and row['status'] in ('done', 'failed'):
-                _update_video(chain_id, index, {'status': row['status']})
-                break
+            if not row:
+                _update_video(chain_id, index, {'status': 'failed'})
+                return
+            if row['status'] in ('done', 'failed'):
+                fields = {'status': row['status']}
+                if row['status'] == 'done':
+                    fields['engine_used'] = _engine_used(task_id)
+                _update_video(chain_id, index, fields)
+                return
     except Exception:  # noqa: BLE001
         _update_video(chain_id, index, {'status': 'failed'})
     finally:
@@ -4697,6 +4860,9 @@ def api_chain_delete(chain_id):
     cdir = _chain_dir(chain_id)
     if not os.path.isdir(cdir):
         return jsonify({'error': 'Not found'}), 404
+    # 正在跑的先停：链条线程看 _cancel_chains 收手；已排队的转写看到目录没了
+    # 也会自己放弃（_chain_stopped），不会删了链还接着转写计费
+    _cancel_chains.add(chain_id)
     # 只删链条目录（分析产物）；转写结果仍留在历史里
     shutil.rmtree(cdir, ignore_errors=True)
     return jsonify({'ok': True})
@@ -4869,7 +5035,8 @@ def api_stats():
     try:
         from enrich import translate_tags
         tmap = translate_tags([t for t, _ in top_tags],
-                              os.path.join(results_dir, '_tagmap.json'))
+                              os.path.join(results_dir, '_tagmap.json'),
+                              offline=DEMO_MODE)     # 演示实例只用缓存，不调模型
     except Exception:
         tmap = {}
 
@@ -4897,7 +5064,9 @@ def api_reflect():
         rng = '1m'
     lang = request.args.get('lang', 'zh')
     refresh = request.args.get('refresh') in ('1', 'true')
-    return jsonify(reflect.build(config.RESULTS_FOLDER, rng, lang, refresh))
+    # 演示实例只读不花钱：GET 也不许触发模型（只挡了非 GET 的守卫管不到这里）
+    return jsonify(reflect.build(config.RESULTS_FOLDER, rng, lang, refresh and not DEMO_MODE,
+                                 generate=not DEMO_MODE))
 
 
 # ========== Settings API ==========
@@ -4907,6 +5076,8 @@ def _mask_key(env_name):
     v = (os.environ.get(env_name) or '').strip()
     if not v:
         return False, ''
+    if DEMO_MODE:
+        return True, '••••'      # 演示实例对外展示：连末 4 位也不露
     return True, '••••' + v[-4:] if len(v) >= 4 else '••••'
 
 
@@ -5066,7 +5237,10 @@ def _audio_files():
 @app.route('/api/costs')
 def api_costs():
     """Settings → Costs：模型调用费用汇总（本月 / 全部，按服务商 / 用途 / 模型）。"""
-    return jsonify(usage.summary())
+    out = usage.summary()
+    if DEMO_MODE:
+        out.pop('prices_path', None)    # 本机路径，演示实例不外露
+    return jsonify(out)
 
 
 @app.route('/api/storage')
@@ -5105,6 +5279,11 @@ def _stale_uploads():
         path = os.path.join(up, name)
         if not (os.path.isfile(path) or os.path.islink(path)):
             continue
+        try:
+            if time.time() - os.lstat(path).st_mtime < _ORPHAN_MIN_AGE_S:
+                continue     # 可能正在上传 / 移入，taskdb 行还没建
+        except OSError:
+            continue
         tid = name.split('.')[0].replace('_audio', '')
         row = taskdb.get(tid) if _is_valid_task_id(tid) else None
         if row and row.get('status') in ('pending', 'running', 'failed'):
@@ -5123,21 +5302,29 @@ def _run_purge_audio():
     with _purge_lock:
         _purge_state.update(running=True, done=0, total=len(audio) + len(stale),
                             freed=0, errors=0)
+    emptied = set()      # 真删掉了音频的任务目录
     for path in audio + stale:
         try:
             size = os.path.getsize(path) if not os.path.islink(path) else 0
             os.remove(path)          # 软链只删链接本身，原文件不受影响
             with _purge_lock:
                 _purge_state['freed'] += size
+            if path in audio:
+                emptied.add(os.path.dirname(path))
         except OSError:
             with _purge_lock:
                 _purge_state['errors'] += 1
         with _purge_lock:
             _purge_state['done'] += 1
-    # meta 里的 audio_ext 清空，回放接口和详情页据此判断「没有音频」
-    for d in os.listdir(config.RESULTS_FOLDER):
-        mp = os.path.join(config.RESULTS_FOLDER, d, 'meta.json')
-        if _is_valid_task_id(d) and os.path.isfile(mp):
+    # 只改真删掉了音频、且目录里已没有别的音频的记录：删失败的、清理期间新存了音频的
+    # 都不该被标成「没有音频」；其余 meta 不重写，免得 mtime 变了下次备份全量再拷一遍
+    for td in emptied:
+        mp = os.path.join(td, 'meta.json')
+        try:
+            left = any(n.startswith('audio.') and not n.endswith('.tmp') for n in os.listdir(td))
+        except OSError:
+            continue
+        if not left and os.path.isfile(mp):
             _update_meta(mp, {'audio_ext': ''})
     with _purge_lock:
         _purge_state['running'] = False
@@ -5155,7 +5342,10 @@ def api_audio_purge():
 @app.route('/api/backup/status')
 def api_backup_status():
     import backup
-    return jsonify(backup.status(config.RESULTS_FOLDER))
+    st = backup.status(config.RESULTS_FOLDER)
+    if DEMO_MODE:
+        st['dest'] = ''     # Drive 路径里带账号邮箱和用户名，演示实例不外露
+    return jsonify(st)
 
 
 @app.route('/api/backup/run', methods=['POST'])
@@ -5405,6 +5595,28 @@ def api_xhs_report():
         return jsonify({'markdown': f.read()})
 
 
+def start_background():
+    """服务起来前要跑的恢复与后台线程。直接 `python app.py` 和打包版的
+    packaging/launcher.py 都调这一个——以前 launcher 只抄了两个 recover，
+    打包版里定期同步、回顾、备份的调度线程都没起。"""
+    recover_unfinished_tasks()
+    recover_unfinished_chains()
+    threading.Thread(target=_backfill_source_links, daemon=True).start()
+    threading.Thread(target=_subscription_loop, daemon=True).start()   # 订阅的博主定时增量更新
+    if DEMO_MODE:
+        return   # 演示库只读不花钱：不预算回顾（调模型），也不备份（task_id 与真实库相同，会覆盖真实备份）
+    try:
+        import reflect
+        reflect.start_scheduler(config.RESULTS_FOLDER)   # 回顾提前算好，打开不用等
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        import backup
+        backup.start_scheduler(config.RESULTS_FOLDER)    # 内置备份：启动后 90 秒跑一次，之后每 6 小时
+    except Exception:  # noqa: BLE001
+        pass
+
+
 if __name__ == '__main__':
     # 调试器默认关（debug=True 的 Werkzeug 调试器在公网上等于 RCE）。
     # 本地想要热重载显式 FLASK_DEBUG=1。另：HOST 非 127.0.0.1（对外暴露）时强制关 debug，
@@ -5415,17 +5627,7 @@ if __name__ == '__main__':
     # debug 模式有 reloader 父/子两进程，只在子进程（WERKZEUG_RUN_MAIN）跑；
     # 非 debug 只有一个进程，直接跑。
     if not debug or os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
-        recover_unfinished_tasks()
-        recover_unfinished_chains()
-        threading.Thread(target=_backfill_source_links, daemon=True).start()
-        threading.Thread(target=_subscription_loop, daemon=True).start()   # 订阅的博主定时增量更新
-        try:
-            import reflect
-            reflect.start_scheduler(config.RESULTS_FOLDER)   # 回顾提前算好，打开不用等
-            import backup
-            backup.start_scheduler(config.RESULTS_FOLDER)    # 内置备份：启动后 90 秒跑一次，之后每 6 小时
-        except Exception:  # noqa: BLE001
-            pass
+        start_background()
     # HOST 默认 127.0.0.1（本地只对自己开）；Docker 里设 HOST=0.0.0.0 对外暴露。
     app.run(debug=debug, threaded=True, host=_host,
             port=int(os.environ.get('PORT', 5001)))

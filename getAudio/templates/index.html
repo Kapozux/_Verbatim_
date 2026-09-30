@@ -42,7 +42,7 @@
             <!-- ===== Tab: Transcribe ===== -->
             <section id="tab-transcribe" class="tab-panel active">
                 <div class="hero">
-                    <h1 data-i18n="transcribe.title">Transcribe<span class="accent">.</span></h1>
+                    <h1><span data-i18n="transcribe.title">Transcribe</span><span class="accent">.</span></h1>
                     <p data-i18n="transcribe.subtitle">Drop audio or video files — Verbatim extracts the audio and turns it into timestamped text.</p>
                 </div>
 
@@ -74,7 +74,7 @@
                         </details>
                         <label class="collection-cap"><span data-i18n="transcribe.videosPerCollection">Videos per collection</span>
                             <input type="number" id="url-max-videos" class="search-input chain-small"
-                                   min="1" max="300" value="20"
+                                   min="1" max="600" value="20"
                                    data-i18n-title="transcribe.videosPerCollectionTitle"
                                    title="When a link is a collection/playlist, transcribe at most this many of its videos.">
                         </label>
@@ -194,7 +194,7 @@
             <!-- ===== Tab: 小红书采集 ===== -->
             <section id="tab-xhs" class="tab-panel">
                 <div class="hero">
-                    <h1 data-i18n="xhs.title">Xiaohongshu<span class="accent">.</span></h1>
+                    <h1><span data-i18n="xhs.title">Xiaohongshu</span><span class="accent">.</span></h1>
                     <p data-i18n-html="xhs.subtitle">Enter keywords and how many notes — Verbatim drives a real browser to search, download full-res images, and pull top-level comments into a dataset. <b>First run pops a browser asking for a QR login</b> (remembered afterwards).</p>
                 </div>
                 <form class="chain-form-shell" onsubmit="return false">
@@ -236,7 +236,7 @@
             <!-- ===== Tab: 博主库 (Creators) ===== -->
             <section id="tab-creators" class="tab-panel">
                 <div class="hero">
-                    <h1 data-i18n="creators.title">Creators<span class="accent">.</span></h1>
+                    <h1><span data-i18n="creators.title">Creators</span><span class="accent">.</span></h1>
                     <p data-i18n="creators.subtitle">Paste a channel and Verbatim transcribes every episode, pulls out what the creator actually said, and writes a portrait. Then ask anything (every answer cites the second it was said), see their stances over time, check their predictions — and keep it synced as new videos come out.</p>
                 </div>
 
@@ -417,7 +417,7 @@
             <!-- ===== Tab: Library ===== -->
             <section id="tab-library" class="tab-panel">
                 <div class="hero">
-                    <h1 data-i18n="library.title">Library<span class="accent">.</span></h1>
+                    <h1><span data-i18n="library.title">Library</span><span class="accent">.</span></h1>
                     <p data-i18n="library.subtitle">Every transcript and analysis document, searchable in one place.</p>
                 </div>
 
@@ -512,7 +512,7 @@
                     <div class="results-actions">
                         <button id="detail-summarize-btn" class="btn-secondary hidden" data-i18n-title="detail.summarizeTitle" title="Write a summary for this episode (one model call, about 1¢)"><span data-i18n="detail.summarize">Summarize</span></button>
                         <button id="detail-copy-btn" class="btn-secondary" data-i18n-title="detail.copyTitle" title="Copy text"><span data-i18n="detail.copy">Copy</span></button>
-                        <button id="detail-download-btn" class="btn-secondary" data-i18n-title="detail.downloadTitle" title="Download as TXT"><span data-i18n="detail.download">TXT</span></button>
+                        <button id="detail-download-btn" class="btn-secondary" data-i18n-title="detail.downloadTitle" title="Download as MD"><span data-i18n="detail.download">MD</span></button>
                         <button id="detail-srt-btn" class="btn-secondary" data-i18n-title="detail.srtTitle" title="Download subtitles"><span data-i18n="detail.srt">SRT</span></button>
                     </div>
                 </div>
@@ -559,7 +559,7 @@
                 <button id="doc-download-btn" class="btn-secondary" data-i18n-title="doc.downloadTitle" title="Download the Markdown file"><span data-i18n="doc.download">Download .md</span></button>
             </div>
             <div id="doc-content" class="md-body"></div>
-            <aside id="doc-toc" class="doc-toc hidden" aria-label="On this page"></aside>
+            <aside id="doc-toc" class="doc-toc hidden" data-i18n-aria-label="doc.toc" aria-label="On this page"></aside>
         </div>
 
         <footer class="site-footer">
@@ -811,7 +811,7 @@
                                 <span class="settings-opt" data-i18n="settings.whisperModelOpt">local transcription · bigger = better zh accuracy, slower first load</span>
                             </span>
                             <select id="set-whisper-model" class="search-input">
-                                <option value="" data-i18n="settings.wmSmallDefault">small (default)</option>
+                                <option value="" data-i18n="settings.wmSmallDefault">Default (large-v3 — ~3 GB download on first use)</option>
                                 <option value="tiny" data-i18n="settings.wmTiny">tiny — fastest, rough</option>
                                 <option value="base" data-i18n="settings.wmBase">base</option>
                                 <option value="small" data-i18n="settings.wmSmall">small</option>
@@ -824,21 +824,21 @@
                                 <span class="settings-opt" data-i18n="settings.geminiTranscribeOpt">default gemini-2.5-flash</span>
                             </span>
                             <input type="text" id="set-gemini-transcribe" class="search-input"
-                                   placeholder="gemini-2.5-flash (default) · e.g. gemini-2.5-pro" autocomplete="off">
+                                   data-i18n-placeholder="settings.phGeminiTranscribe" placeholder="gemini-2.5-flash (default) · e.g. gemini-2.5-pro" autocomplete="off">
                         </label>
                         <label class="settings-field">
                             <span class="settings-label"><span data-i18n="settings.geminiAnalysisModel">Gemini · analysis (synthesis) model</span>
                                 <span class="settings-opt" data-i18n="settings.geminiAnalysisOpt">default gemini-2.5-pro</span>
                             </span>
                             <input type="text" id="set-gemini-analysis" class="search-input"
-                                   placeholder="gemini-2.5-pro (default) · e.g. gemini-3.1-pro-preview" autocomplete="off">
+                                   data-i18n-placeholder="settings.phGeminiAnalysis" placeholder="gemini-2.5-pro (default) · e.g. gemini-3.1-pro-preview" autocomplete="off">
                         </label>
                         <label class="settings-field">
                             <span class="settings-label"><span data-i18n="settings.geminiExtractModel">Gemini · extraction model</span>
                                 <span class="settings-opt" data-i18n="settings.geminiExtractOpt">default gemini-2.5-flash · cheap mechanical step</span>
                             </span>
                             <input type="text" id="set-gemini-extract" class="search-input"
-                                   placeholder="gemini-2.5-flash (default)" autocomplete="off">
+                                   data-i18n-placeholder="settings.phGeminiExtract" placeholder="gemini-2.5-flash (default)" autocomplete="off">
                         </label>
                         <p class="settings-opt" data-i18n="settings.modelsFooter">DeepSeek / Kimi / GLM / Qwen model names are per-analysis presets (pick the model in the Creators form).</p>
                     </section>
@@ -861,7 +861,7 @@
                                     <span class="settings-opt" data-i18n="settings.backupDirOpt">blank = auto-detect your Google Drive · saved with the Save button below</span>
                                 </span>
                                 <input type="text" id="set-backup-dir" class="search-input" autocomplete="off"
-                                       placeholder="~/Library/CloudStorage/GoogleDrive-…/My Drive/getAudio_备份">
+                                       data-i18n-placeholder="settings.phBackupDir" placeholder="~/Library/CloudStorage/GoogleDrive-…/My Drive/getAudio_备份">
                             </label>
                             <div class="settings-test-row">
                                 <button type="button" id="backup-now" class="btn-secondary" data-i18n="settings.backupNow">Back up now</button>
@@ -922,7 +922,7 @@
                             key field blank to keep the current one.
                         </p>
                         <p class="settings-desc">
-                            <a href="https://github.com/xyzxinlu-max/getAudio" target="_blank" rel="noopener" data-i18n="settings.sourceLink">Source on GitHub ↗</a>
+                            <a href="https://github.com/Kapozux/_Verbatim_" target="_blank" rel="noopener" data-i18n="settings.sourceLink">Source on GitHub ↗</a>
                         </p>
                     </section>
                 </div>
