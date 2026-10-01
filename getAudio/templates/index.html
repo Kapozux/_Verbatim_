@@ -43,7 +43,7 @@
             <section id="tab-transcribe" class="tab-panel active">
                 <div class="hero">
                     <h1><span data-i18n="transcribe.title">Transcribe</span><span class="accent">.</span></h1>
-                    <p data-i18n="transcribe.subtitle">Drop audio or video files — Verbatim extracts the audio and turns it into timestamped text.</p>
+                    <p data-i18n="transcribe.subtitle">Drop audio or video files. Verbatim extracts the audio and turns it into timestamped text.</p>
                 </div>
 
                 <form id="upload-form" enctype="multipart/form-data">
@@ -59,18 +59,18 @@
                                accept=".mp3,.wav,.flac,.m4a,.ogg,.webm,.mp4,.mov,.mkv,.avi,.m4v">
                         <textarea id="mixed-input" class="url-box" rows="2"
                             data-i18n-placeholder="transcribe.mixedPlaceholder"
-                            placeholder="Or paste video links / local file paths — one per line, mix freely&#10;https://www.bilibili.com/video/BV...      /Users/you/Documents/lecture.mp4"></textarea>
+                            placeholder="Or paste video links / local file paths, one per line, mix freely&#10;https://www.bilibili.com/video/BV...      /Users/you/Documents/lecture.mp4"></textarea>
                         <details class="hint-details"><summary data-i18n="transcribe.tipsSummary">Tips: links, time ranges, playlists, local paths</summary>
                         <p class="local-hint" data-i18n-html="transcribe.localHint">Links download &amp; transcribe (YouTube, Bilibili &amp; other yt-dlp
-                            sites — for a whole channel use Creators). Local paths are read in place, nothing
-                            uploaded — note: macOS blocks reading from Downloads/Desktop, keep files in
+                            sites; for a whole channel, use Creators). Local paths are read in place, nothing
+                            uploaded. Note: macOS blocks reading from Downloads/Desktop, keep files in
                             Documents or another folder.<br>
                             Only want part of a video? Add a time range after the link:
-                            <code>…/watch?v=xxx @10:00-25:00</code> (or <code>@5:30-</code> to the end) —
+                            <code>…/watch?v=xxx @10:00-25:00</code> (or <code>@5:30-</code> to the end):
                             only that clip is downloaded &amp; transcribed, cheaper, and timestamps stay at the
                             real video position.<br>
                             A collection / playlist link (e.g. a Bilibili 合集, a YouTube playlist) is expanded
-                            into its videos and each one is transcribed — transcripts only, no analysis.</p>
+                            into its videos and each one is transcribed. Transcripts only, no analysis.</p>
                         </details>
                         <label class="collection-cap"><span data-i18n="transcribe.videosPerCollection">Videos per collection</span>
                             <input type="number" id="url-max-videos" class="search-input chain-small"
@@ -82,8 +82,8 @@
                                title="When a link already has captions, use them instead of transcribing. Auto = only the video's own language (never a machine translation). Pick a language to require that one; if it isn't available the audio is transcribed instead. Off = always transcribe.">
                             <span data-i18n="transcribe.subs">Existing subtitles</span>
                             <select id="url-subs" class="search-input chain-small">
-                                <option value="auto" data-i18n="subs.auto">Auto — the video's own language</option>
-                                <option value="off" data-i18n="subs.off">Off — always transcribe the audio</option>
+                                <option value="auto" data-i18n="subs.auto">Auto: the video's own language</option>
+                                <option value="off" data-i18n="subs.off">Off: always transcribe the audio</option>
                                 <option value="zh">中文</option>
                                 <option value="en">English</option>
                                 <option value="ja">日本語</option>
@@ -151,7 +151,7 @@
 
                     <div class="form-group hidden" id="speaker-count-group">
                         <label class="group-label" for="speaker-count">
-                            <span data-i18n="transcribe.speakers">Expected speakers</span> <small class="hint" data-i18n="transcribe.speakersHint">(optional — improves accuracy; leave blank to auto-detect)</small>
+                            <span data-i18n="transcribe.speakers">Expected speakers</span> <small class="hint" data-i18n="transcribe.speakersHint">(optional: improves accuracy; leave blank to auto-detect)</small>
                         </label>
                         <input type="number" id="speaker-count" name="speaker_count"
                                min="1" max="20" step="1"
@@ -195,13 +195,13 @@
             <section id="tab-xhs" class="tab-panel">
                 <div class="hero">
                     <h1><span data-i18n="xhs.title">Xiaohongshu</span><span class="accent">.</span></h1>
-                    <p data-i18n-html="xhs.subtitle">Enter keywords and how many notes — Verbatim drives a real browser to search, download full-res images, and pull top-level comments into a dataset. <b>First run pops a browser asking for a QR login</b> (remembered afterwards).</p>
+                    <p data-i18n-html="xhs.subtitle">Enter keywords and how many notes. Verbatim drives a real browser to search, download full-res images, and pull top-level comments into a dataset. <b>First run pops a browser asking for a QR login</b> (remembered afterwards).</p>
                 </div>
                 <form class="chain-form-shell" onsubmit="return false">
                     <div class="chain-form">
                         <textarea id="xhs-keywords" class="search-input" rows="4"
                             data-i18n-placeholder="xhs.keywordsPlaceholder"
-                            placeholder="One keyword per line — searched separately, de-duplicated, merged:&#10;uiuc cs admissions&#10;college essay tips&#10;对象出轨"></textarea>
+                            placeholder="One keyword per line, searched separately, de-duplicated, merged:&#10;uiuc cs admissions&#10;college essay tips&#10;对象出轨"></textarea>
                         <div class="chain-form-row">
                             <label class="xhs-num"><span data-i18n="xhs.notesToScrape">Notes to scrape</span>
                             <input type="number" id="xhs-max-notes" class="search-input chain-small"
@@ -211,7 +211,7 @@
                                    min="50" max="2000" value="400"></label>
                             <button id="xhs-start" type="button" class="btn-primary chain-btn" data-i18n="xhs.startScraping">Start scraping</button>
                         </div>
-                        <p class="chain-hint" data-i18n-html="xhs.hint">Scraping and analysis are decoupled; every note is saved as it lands (safe to interrupt). Anti-bot warning: 70+ notes in one run risks rate-limiting — go in small batches. Data lands in <code>xhs_dataset/</code>.</p>
+                        <p class="chain-hint" data-i18n-html="xhs.hint">Scraping and analysis are decoupled; every note is saved as it lands (safe to interrupt). Anti-bot warning: 70+ notes in one run risks rate-limiting, so go in small batches. Data lands in <code>xhs_dataset/</code>.</p>
                     </div>
                 </form>
                 <div id="xhs-progress" class="xhs-progress hidden"></div>
@@ -237,7 +237,7 @@
             <section id="tab-creators" class="tab-panel">
                 <div class="hero">
                     <h1><span data-i18n="creators.title">Creators</span><span class="accent">.</span></h1>
-                    <p data-i18n="creators.subtitle">Paste a channel and Verbatim transcribes every episode, pulls out what the creator actually said, and writes a portrait. Then ask anything (every answer cites the second it was said), see their stances over time, check their predictions — and keep it synced as new videos come out.</p>
+                    <p data-i18n="creators.subtitle">Paste a channel and Verbatim transcribes every episode, pulls out what the creator actually said, and writes a portrait. Then ask anything (every answer cites the second it was said), see their stances over time, check their predictions, and keep it synced as new videos come out.</p>
                 </div>
 
                 <form class="chain-form-shell nf" onsubmit="return false">
@@ -248,13 +248,13 @@
                                placeholder="https://www.youtube.com/@creator  ·  a channel / homepage (for one video, use Transcribe)">
                         <button id="nf-look" type="button" class="btn-secondary nf-look" data-i18n="nf.look">Look it up</button>
                     </div>
-                    <p class="chain-hint nf-hint" data-i18n-html="nf.hint">Paste a YouTube channel, a Bilibili space or a playlist. You'll see who it is, how many videos, and what it would cost — before anything runs.</p>
+                    <p class="chain-hint nf-hint" data-i18n-html="nf.hint">Paste a YouTube channel, a Bilibili space or a playlist. You'll see who it is, how many videos, and what it would cost, before anything runs.</p>
                     <div id="nf-preview" class="nf-preview hidden"></div>
 
                     <div id="nf-body" class="nf-body hidden">
                         <!-- 第 1 步：分析哪些期 -->
                         <section class="nf-sec">
-                            <h3 class="nf-h"><span class="nf-n">1</span><span data-i18n="nf.whichTitle">Which videos</span></h3>
+                            <h2 class="nf-h"><span class="nf-n">1</span><span data-i18n="nf.whichTitle">Which videos</span></h2>
                             <div class="nf-quick" id="nf-quick"></div>
                             <div class="nf-filters">
                                 <label class="nf-field"><span data-i18n="nf.since">Published since</span>
@@ -275,18 +275,18 @@
                         <div class="nf-side">
                         <!-- 第 2 步：要做什么 -->
                         <section class="nf-sec">
-                            <h3 class="nf-h"><span class="nf-n">2</span><span data-i18n="nf.whatTitle">What to do</span></h3>
+                            <h2 class="nf-h"><span class="nf-n">2</span><span data-i18n="nf.whatTitle">What to do</span></h2>
                             <div class="nf-goals">
                                 <label class="nf-goal"><input type="radio" name="nf-goal" value="analyze" checked>
                                     <span><b data-i18n="nf.goalAnalyze">Full analysis (recommended)</b>
                                     <small data-i18n="nf.goalAnalyzeD">Transcribe every video, pull out the quotes and write a portrait. Then you can ask questions, see stances and check predictions.</small></span></label>
                                 <label class="nf-goal"><input type="radio" name="nf-goal" value="transcribe">
                                     <span><b data-i18n="nf.goalTranscribe">Transcripts only</b>
-                                    <small data-i18n="nf.goalTranscribeD">Every video transcribed plus one merged full text. No analysis — much cheaper. You can analyse later.</small></span></label>
+                                    <small data-i18n="nf.goalTranscribeD">Every video is transcribed and merged into one full text, without the analysis step, which costs far less. You can still analyse later.</small></span></label>
                             </div>
                             <div class="nf-opts">
                                 <label class="nf-opt"><input type="checkbox" id="nf-speakers">
-                                    <span><b data-i18n="nf.speakers">It's a call-in / interview channel — tell speakers apart</b>
+                                    <span><b data-i18n="nf.speakers">It's a call-in / interview channel: tell speakers apart</b>
                                     <small data-i18n="nf.speakersD">Uses a transcription engine that labels who is speaking, so guests’ words aren’t credited to the host.</small></span></label>
                                 <label class="nf-opt"><input type="checkbox" id="chain-prefer-subs">
                                     <span><b data-i18n="nf.subs">Use existing subtitles when a video has them</b>
@@ -296,7 +296,7 @@
                                     <small data-i18n="nf.predictD">Finds the checkable predictions and looks up whether they came true (web search, a few cents).</small></span></label>
                                 <label class="nf-opt"><input type="checkbox" id="nf-sync">
                                     <span><b data-i18n="nf.sync">Keep it up to date</b>
-                                    <small data-i18n="nf.syncD">Check for new videos on a schedule and add only those — nothing already here is redone.</small></span>
+                                    <small data-i18n="nf.syncD">Check for new videos on a schedule and add only those. Nothing already here is redone.</small></span>
                                     <select id="nf-sync-iv" class="nf-sync-iv">
                                         <option value="168" data-i18n="sub.f.168">Weekly</option>
                                         <option value="336" data-i18n="sub.f.336">Every 2 weeks</option>
@@ -362,8 +362,8 @@
                                 <label class="nf-field"><span data-i18n="nf.subLang">Subtitle language</span>
                                 <select id="chain-sub-lang" class="search-input chain-small chain-sub-lang"
                                         data-i18n-title="creators.subLangTitle" title="Which subtitle language counts.">
-                                    <option value="auto" data-i18n="subs.auto">Auto — the video's own language</option>
-                                    <option value="off" data-i18n="subs.off">Off — always transcribe the audio</option>
+                                    <option value="auto" data-i18n="subs.auto">Auto: the video's own language</option>
+                                    <option value="off" data-i18n="subs.off">Off: always transcribe the audio</option>
                                     <option value="zh">中文</option>
                                     <option value="en">English</option>
                                     <option value="ja">日本語</option>
@@ -410,7 +410,7 @@
                 <div id="creators-grid" class="creators-grid"></div>
                 <details id="creators-unfinished" class="cr-fold hidden"><summary></summary><div class="creators-grid"></div></details>
                 <details id="creators-hidden" class="cr-fold hidden"><summary></summary><div class="creators-grid"></div></details>
-                <p id="creators-empty" class="history-empty hidden" data-i18n="creators.empty">No creators yet — paste a link above to analyze one.</p>
+                <p id="creators-empty" class="history-empty hidden" data-i18n="creators.empty">No creators yet. Paste a link above to analyze one.</p>
                 <p id="creators-bangumi-note" class="creators-note hidden"></p>
             </section>
 
@@ -444,7 +444,7 @@
                             <div class="history-toolbar">
                                 <input type="search" id="search-input" class="search-input"
                                        data-i18n-placeholder="library.searchPlaceholder"
-                                       placeholder="Search titles, filenames, transcript text — or paste a video link…">
+                                       placeholder="Search titles, filenames, transcript text, or paste a video link…">
                                 <div id="source-filters" class="filter-chips">
                                     <button class="chip active" data-source="" data-i18n="library.allSources">All sources</button>
                                     <button class="chip" data-source="mine" data-i18n="library.mine">Mine</button>
@@ -474,9 +474,9 @@
                             <h2 data-i18n="library.analyses">Analyses</h2>
                             <button id="docs-refresh" class="btn-secondary" data-i18n-title="library.refreshTitle" data-i18n="library.refresh" title="Refresh">Refresh</button>
                         </div>
-                        <p class="chain-hint" data-i18n="library.docsHint">Documents produced by creator analyses. Click to read — no download needed.</p>
+                        <p class="chain-hint" data-i18n="library.docsHint">Documents produced by creator analyses. Click to read; no download needed.</p>
                         <div id="docs-list" class="docs-list">
-                            <p class="history-empty" data-i18n="library.noDocs">No analysis documents yet — analyze a creator first</p>
+                            <p class="history-empty" data-i18n="library.noDocs">No analysis documents yet. Analyze a creator first</p>
                         </div>
                     </div>
                 </div>
@@ -590,7 +590,7 @@
         <div class="cx-modal" role="dialog" aria-modal="true" aria-labelledby="col-title">
             <button class="settings-x" type="button" data-close data-i18n-aria-label="common.close" aria-label="Close">×</button>
             <h2 id="col-title" class="cx-modal-title">New collection</h2>
-            <p class="cx-muted" data-i18n="col.sub">Put any recordings together — interviews, lectures, meetings, several creators — and ask, compare stances and export them as one.</p>
+            <p class="cx-muted" data-i18n="col.sub">Put any recordings together (interviews, lectures, meetings, several creators) and ask, compare stances and export them as one.</p>
             <form id="col-form">
                 <div id="col-meta" class="col-meta">
                     <input id="col-name" class="search-input" type="text" maxlength="60" data-i18n-placeholder="col.namePh" placeholder="Name, e.g. User interviews · September">
@@ -759,9 +759,9 @@
                     <section class="settings-pane" data-pane="dashscope">
                         <h3 data-i18n="settings.paneDashscope">DashScope</h3>
                         <p class="settings-desc" data-i18n-html="settings.dashscopeDesc">
-                            Alibaba Cloud key — powers the <strong>Qwen-ASR</strong> engine, the speaker
+                            Alibaba Cloud key. Powers the <strong>Qwen-ASR</strong> engine, the speaker
                             diarization half of <strong>Precise</strong>, and the Alibaba analysis models.
-                            <strong>⚠ It moderates content</strong> — don't use it for politically
+                            <strong>⚠ It moderates content</strong>, so don't use it for politically
                             sensitive audio; prefer local Whisper or Gemini for that.
                         </p>
                         <label class="settings-field">
@@ -781,7 +781,7 @@
                     <section class="settings-pane" data-pane="openrouter">
                         <h3 data-i18n="settings.paneOpenrouter">OpenRouter</h3>
                         <p class="settings-desc" data-i18n-html="settings.openrouterDesc">
-                            One key for Claude and other frontier models — powers the
+                            One key for Claude and other frontier models. Powers the
                             <strong>Claude Opus</strong> analysis options in Creators (with thinking enabled).
                             No content moderation. Note: Opus is premium-priced and the pipeline
                             analyzes every episode, so cost scales with episode count.
@@ -803,7 +803,7 @@
                     <section class="settings-pane" data-pane="models">
                         <h3 data-i18n="settings.paneModels">Models</h3>
                         <p class="settings-desc" data-i18n="settings.modelsDesc">
-                            Saved instantly — the next task picks them up, no restart. Leave a field
+                            Saved instantly. The next task picks them up, no restart. Leave a field
                             blank to use the default.
                         </p>
                         <label class="settings-field">
@@ -811,12 +811,12 @@
                                 <span class="settings-opt" data-i18n="settings.whisperModelOpt">local transcription · bigger = better zh accuracy, slower first load</span>
                             </span>
                             <select id="set-whisper-model" class="search-input">
-                                <option value="" data-i18n="settings.wmSmallDefault">Default (large-v3 — ~3 GB download on first use)</option>
-                                <option value="tiny" data-i18n="settings.wmTiny">tiny — fastest, rough</option>
+                                <option value="" data-i18n="settings.wmSmallDefault">Default (large-v3, ~3 GB download on first use)</option>
+                                <option value="tiny" data-i18n="settings.wmTiny">tiny: fastest, rough</option>
                                 <option value="base" data-i18n="settings.wmBase">base</option>
                                 <option value="small" data-i18n="settings.wmSmall">small</option>
                                 <option value="medium" data-i18n="settings.wmMedium">medium</option>
-                                <option value="large-v3" data-i18n="settings.wmLarge">large-v3 — best (needs ~4GB RAM, fine on 48GB)</option>
+                                <option value="large-v3" data-i18n="settings.wmLarge">large-v3: best (needs ~4GB RAM, fine on 48GB)</option>
                             </select>
                         </label>
                         <label class="settings-field">
@@ -905,7 +905,7 @@
                             Models without a known rate are counted but shown as unpriced.
                         </p>
                         <div id="costs-body" class="reflect-body">
-                            <div class="reflect-loading" data-i18n="reflect.loading">Reading your library…</div>
+                            <div class="reflect-loading" data-i18n="costs.loading">Adding up costs…</div>
                         </div>
                     </section>
 
@@ -913,7 +913,7 @@
                     <section class="settings-pane" data-pane="about">
                         <h3 data-i18n="settings.paneAbout">About</h3>
                         <p class="settings-desc" data-i18n-html="settings.aboutDesc1">
-                            <strong>Verbatim</strong> — a local, self-hosted tool that turns audio and video
+                            <strong>Verbatim</strong> is a local, self-hosted tool that turns audio and video
                             into transcripts, then into cross-episode research.
                         </p>
                         <p class="settings-desc" data-i18n-html="settings.aboutDesc2">
