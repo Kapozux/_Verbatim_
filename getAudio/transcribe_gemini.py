@@ -15,6 +15,7 @@ from google import genai
 from google.genai import types
 from config import GEMINI_MODEL, GEMINI_INLINE_LIMIT, make_gemini_client
 import config
+import timecode
 import usage
 
 # 全局在飞请求闸：不管有多少个任务、每个任务拆了多少块，同时打向 Gemini 的
@@ -390,26 +391,6 @@ def split_audio_file(filepath, chunk_duration_seconds):
     return chunks, temp_dir
 
 
-def _timestamp_to_seconds(timestamp):
-    """Convert MM:SS or HH:MM:SS string to total seconds."""
-    parts = timestamp.split(":")
-    if len(parts) == 2:
-        minutes, seconds = parts
-        return int(minutes) * 60 + int(seconds)
-    if len(parts) == 3:
-        hours, minutes, seconds = parts
-        return int(hours) * 3600 + int(minutes) * 60 + int(seconds)
-    raise ValueError(f"Unsupported timestamp format: {timestamp}")
-
-
-def _seconds_to_hhmmss(total_seconds):
-    """Convert total seconds to HH:MM:SS."""
-    hours = total_seconds // 3600
-    minutes = (total_seconds % 3600) // 60
-    seconds = total_seconds % 60
-    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-
-
 def shift_timestamps(text, offset_seconds, chunk_seconds=None):
     """Shift [MM:SS] / [HH:MM:SS] timestamps by offset seconds.
 
@@ -426,10 +407,10 @@ def shift_timestamps(text, offset_seconds, chunk_seconds=None):
     limit = int(chunk_seconds) if chunk_seconds else None
 
     def repl(match):
-        ts = _timestamp_to_seconds(match.group(1))
+        ts = timecode.parse(match.group(1))
         if limit is not None:
             ts = max(0, min(ts, limit))
-        return f"[{_seconds_to_hhmmss(ts + offset_seconds)}]"
+        return f"[{timecode.hms(ts + offset_seconds)}]"
 
     return re.sub(pattern, repl, text)
 
@@ -439,8 +420,8 @@ def _normalize_timestamps(text):
     pattern = r'\[((?:\d{1,2}:)?\d{1,2}:\d{2})\]'
 
     def repl(match):
-        total_seconds = _timestamp_to_seconds(match.group(1))
-        return f"[{_seconds_to_hhmmss(total_seconds)}]"
+        total_seconds = timecode.parse(match.group(1))
+        return f"[{timecode.hms(total_seconds)}]"
 
     return re.sub(pattern, repl, text)
 
@@ -461,7 +442,7 @@ def parse_timestamped_text(text):
     for timestamp, content in matches:
         content = content.strip()
         if content:
-            normalized_ts = _seconds_to_hhmmss(_timestamp_to_seconds(timestamp))
+            normalized_ts = timecode.hms(timecode.parse(timestamp))
             segments.append({
                 'timestamp': normalized_ts,
                 'text': content,

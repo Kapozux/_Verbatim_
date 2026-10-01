@@ -26,7 +26,9 @@ import time
 from collections import Counter
 from datetime import datetime
 
+import citations
 import config
+import timecode
 import usage
 
 ASK_MODEL = os.environ.get('ASK_MODEL') or 'gemini-3.5-flash-lite'
@@ -42,8 +44,6 @@ TAG_BATCH = 100
 
 _CJK = re.compile(r'[一-鿿㐀-䶿]')
 _LATIN = re.compile(r'[a-z0-9][a-z0-9\'\-]+')
-_CITE = re.compile(r'\[#([A-Z]:)?([dt]?\d+(?:_[0-9a-f]{8})?-\d+)\]')
-_BAD_CITE = re.compile(r'\[#[^\]\n]{0,80}\]')
 _STOP = set('the a an and or of to in on for is are was were be been it this that with as at by from '
             'what how does do did about his her their he she they him them you your i my me we our '
             'think thinks view views say says said'.split())
@@ -100,25 +100,6 @@ def est_tokens(text):
     """粗估 token：汉字约 1 个一个，其它约 4 字符一个。"""
     cjk = len(_CJK.findall(text))
     return cjk + (len(text) - cjk) // 4
-
-
-def fmt_ts(ts):
-    """00:01:56 → 01:56；取不到返回 ''。"""
-    m = re.search(r'\d+:\d{2}(?::\d{2})?', str(ts or ''))
-    if not m:
-        return ''
-    s = m.group(0)
-    return re.sub(r'^0{1,2}:(?=\d{2}:\d{2}$)', '', s)
-
-
-def ts_seconds(ts):
-    s = fmt_ts(ts)
-    if not s:
-        return None
-    sec = 0
-    for part in s.split(':'):
-        sec = sec * 60 + int(part)
-    return sec
 
 
 def _fmt_date(d):
@@ -202,7 +183,7 @@ def load(chain_dir, passages=False):
             pred = t.get('pred') if 'pred' in t else c.get('prediction')
             cards.append({
                 'id': cid, 'ep': idx, 'obs': obs, 'quote': quote,
-                'ts': fmt_ts(c.get('timestamp')), 'sec': ts_seconds(c.get('timestamp')),
+                'ts': timecode.display(c.get('timestamp')), 'sec': timecode.seconds(c.get('timestamp')),
                 'layer': _layer(c.get('layer')),
                 'topic': topic or '', 'stance': stance if stance in STANCES else '',
                 'pred': bool(pred), 'h': card_hash({'quote': quote, 'obs': obs}),
@@ -326,7 +307,7 @@ def _add_passages(corpus, state, docs=True, extra=True):
         no = _stable_no(tid)
         for p in ps:
             c = _passage_card(f"t{no}-{p['i']}", idx, p['text'])
-            c['ts'], c['sec'] = fmt_ts(p.get('ts')), ts_seconds(p.get('ts'))
+            c['ts'], c['sec'] = timecode.display(p.get('ts')), timecode.seconds(p.get('ts'))
             cards.append(c)
 
 
@@ -450,7 +431,7 @@ def _segments(task_id):
         m = _SPK_RE.match(t)
         lab = re.sub(r'\s+', '', m.group(1)) if m else (str(sg.get('speaker')) if sg.get('speaker') is not None else '')
         body = t[m.end():] if m else t
-        out.append((ts_seconds(sg.get('timestamp')) or 0, lab, _NORM_RE.sub('', body.lower())))
+        out.append((timecode.seconds(sg.get('timestamp')) or 0, lab, _NORM_RE.sub('', body.lower())))
     if not any(x[1] for x in out):
         out = []
     if len(_seg_cache) > 400:
@@ -884,62 +865,9 @@ MODE_RULES = {
 }
 
 
-def _alias(c, corpus):
-    """给模型看的短 id：原文段落写成 t4-16（EP4 第 16 段）/ d2-3（DOC2 第 3 段），跟它看到的标签对得上。
-    真正的 id（t302223-16，固定编号）又长又看不出规律，模型会自作主张缩成 4-16，被当成编造的删掉。
-    卡片的 id 不变。"""
-    if c.get('layer') != 'source':
-        return c['id']
-    ep = corpus['episodes'][c['ep']]
-    no = re.sub(r'\D', '', ep.get('ui_label') or ep.get('label') or '') or str(c['ep'] + 1)
-    tag = f"{ep['person_tag']}:" if ep.get('person_tag') else ''      # 引用的博主：B:t4-16
-    return f"{tag}{'d' if ep.get('kind') == 'doc' else 't'}{no}-{c['id'].rsplit('-', 1)[1]}"
-
-
-_ALIAS_TOKEN = re.compile(r'(?<![\w:-])((?:[A-Z]:)?[dt]?\d+-\d+)(?![\w-])')
-
-
-def _unalias(text, amap, valid):
-    """模型回答里的短 id → 真 id（只动方括号里的，正文里的数字不碰）。
-    模型连字母都省了（4-16）、而又没有这张卡时，按 t4-16 / d4-16 认。"""
-    if not amap:
-        return text
-
-    def fix(m):
-        tok = m.group(1)
-        real = amap.get(tok)
-        if real is None and tok not in valid:
-            pre, raw = (tok[:2], tok[2:]) if tok[1:2] == ':' else ('', tok)
-            real = amap.get(pre + 't' + raw) or amap.get(pre + 'd' + raw)
-        return m.group(0).replace(tok, real) if real else m.group(0)
-    return re.sub(r'\[[^\]\n]{1,200}\]', lambda b: _ALIAS_TOKEN.sub(fix, b.group(0)), text)
-
-
-_TAGGED = re.compile(r'\[#([A-Z]):([dt]?\d+(?:_[0-9a-f]{8})?-\d+)\]')
-
-
-def _fix_tags(text, valid):
-    """项目里有好几个博主时，模型偶尔把人的字母写错（讲 YC 的句子引成 [#C:5-8]，其实是 B:5-8）。
-    只在这张卡在它写的字母下不存在、而换成别的字母恰好只有一张时才改；有歧义就不动，交给后面当编造的删掉。"""
-    if not any(':' in v for v in valid):
-        return text
-    by_raw = {}
-    for v in valid:
-        if len(v) > 2 and v[1] == ':':
-            by_raw.setdefault(v[2:], []).append(v)
-
-    def fix(m):
-        cid = f'{m.group(1)}:{m.group(2)}'
-        if cid in valid:
-            return m.group(0)
-        alt = by_raw.get(m.group(2)) or []
-        return f'[#{alt[0]}]' if len(alt) == 1 else m.group(0)
-    return _TAGGED.sub(fix, text or '')
-
-
 def _card_line(c, corpus, alias=False):
     ep = corpus['episodes'][c['ep']]
-    cid = _alias(c, corpus) if alias else c['id']
+    cid = citations.prompt_id(c, corpus) if alias else c['id']
     obs = c['obs'].replace('\n', ' ') or '-'
     quote = c['quote'].replace('\n', ' ')
     who = f" | said by: {c['speaker']}" if c.get('speaker') else ''
@@ -1022,24 +950,9 @@ def _spread(corpus, cards, k):
 def _history_text(history):
     lines = []
     for m in (history or [])[-HISTORY_TURNS * 2:]:
-        txt = _CITE.sub('', m.get('content') or '')
+        txt = citations.strip(m.get('content') or '')
         lines.append(f"{'User' if m.get('role') == 'user' else 'Assistant'}: {txt[:1200]}")
     return '\n'.join(lines) or '(none)'
-
-
-_CITE_GROUP = re.compile(r'\[\s*((?:[_\\]*[#@]?\s*(?:[A-Z]:)?[dt]?\d+(?:_[0-9a-f]{8})?-\d+\s*[,，;、]?\s*)+)\]')
-_CITE_ONE = re.compile(r'(?:[A-Z]:)?[dt]?\d+(?:_[0-9a-f]{8})?-\d+')
-
-
-def _normalize_cites(text, valid_ids):
-    """模型偶尔把引用写走样：[@4-35, @4-36]、[#3-1, #3-2]、[3-12]、[_#4-9]。拆成标准的 [#4-35][#4-36]。
-    没带 #/@ 的裸方括号只在里面全是真卡片 id 时才认，免得把正文里的 [2026-09] 当引用删掉。"""
-    def fix(m):
-        ids = _CITE_ONE.findall(m.group(1))
-        if not re.search(r'[#@]', m.group(1)) and not all(i in valid_ids for i in ids):
-            return m.group(0)
-        return ''.join(f'[#{i}]' for i in ids)
-    return _CITE_GROUP.sub(fix, text)
 
 
 _QUOTED = re.compile(r'“[^”]*”|「[^」]*」|"[^"]*"|『[^』]*』')
@@ -1047,7 +960,7 @@ _QUOTED = re.compile(r'“[^”]*”|「[^」]*」|"[^"]*"|『[^』]*』')
 
 def _wrong_lang(text, lang):
     """回答语言对不对：去掉引号里的原话和出处标记再看汉字占比。"""
-    body = _CITE.sub('', _QUOTED.sub('', text or ''))
+    body = citations.strip(_QUOTED.sub('', text or ''))
     letters = len(re.findall(r'[A-Za-z一-鿿]', body))
     if letters < 20:
         return False
@@ -1058,35 +971,6 @@ def _wrong_lang(text, lang):
 TRANSLATE_PROMPT = """Rewrite the answer below in {lang}. Keep every citation marker like [#3-12] exactly where it is, keep text inside quotation marks unchanged (those are verbatim quotes), keep the Markdown. Output only the rewritten answer.
 
 {text}"""
-
-
-_DANGLING = re.compile(r'\[#((?:[A-Z]:)?[dt]?\d+(?:_[0-9a-f]{8})?-\d+)\s*[,，;、]\s*(?=\[)')
-
-
-def clean_citations(text, valid_ids, dropped_ids=None):
-    """删掉模型编的（不在给它的卡里）引用，返回 (文本, 用到的 id 列表, 删掉的个数)。"""
-    used, dropped = [], 0
-    dropped_ids = dropped_ids if dropped_ids is not None else []
-
-    def sub(m):
-        nonlocal dropped
-        cid = (m.group(1) or '') + m.group(2)
-        if cid in valid_ids:
-            if cid not in used:
-                used.append(cid)
-            return f'\x00{cid}\x00'          # 先占位，免得被下面清走样引用那步误删
-        dropped += 1
-        dropped_ids.append(cid)
-        return ''
-    # 模型偶尔把括号写不齐：[#B:2-84, [#B:2-32, [#B:2-13] —— 没合上的那几个先补成完整的 [#B:2-84]
-    out = _DANGLING.sub(r'[#\1]', text or '')
-    out = _normalize_cites(out, valid_ids)
-    out = _CITE.sub(sub, out)
-    # 格式走样的「引用」（[##1-0 through #4-236]、[#3-12, 4-1]）：点不回去，一律删掉
-    out, n = _BAD_CITE.subn('', out)
-    out = re.sub(r'\x00([^\x00]+)\x00', r'[#\1]', out)
-    out = re.sub(r'[ \t]+([.,;:!?。，；：！？)])', r'\1', out)    # 删引用后留下的「空格+句号」
-    return out, used, dropped + n
 
 
 def _subject(corpus):
@@ -1185,9 +1069,8 @@ def _prepare(chain_dir, question, mode='about', history=None, topic=None, ui_lan
         episodes=_episode_lines(corpus, {c['ep'] for c in picked}),
         cards='\n'.join(_card_line(c, corpus, alias=True) for c in picked),
         history=_history_text(history), question=question.strip())
-    aliases = {_alias(c, corpus): c['id'] for c in picked if c.get('layer') == 'source'}
     return {'corpus': corpus, 'picked': picked, 'cov': cov, 'mode': mode, 'lang': lang, 'prompt': prompt,
-            'aliases': aliases, 'persona': who['author'] if who is not corpus else ''}
+            'persona': who['author'] if who is not corpus else ''}
 
 
 def _bg_block(corpus):
@@ -1207,14 +1090,11 @@ def _finish(raw, ctx, rewrite=True):
             raw = _llm(TRANSLATE_PROMPT.format(lang=ctx['lang'], text=raw), purpose='ask') or raw
         except Exception:  # noqa: BLE001  改写失败就用原文，别丢答案
             pass
-    by_id = {c['id']: c for c in ctx['picked']}
-    bad_ids = []
-    raw = _fix_tags(_unalias(raw, ctx.get('aliases'), set(by_id)), set(by_id))
-    text, used, dropped = clean_citations(raw, set(by_id), bad_ids)
+    cit = citations.Citations().add(ctx['corpus'], ctx['picked'])
+    text = cit.clean(raw)
     return {
-        'answer': text.strip(), 'mode': ctx['mode'], 'dropped_ids': bad_ids[:20],
-        'citations': {cid: card_view(by_id[cid], ctx['corpus']) for cid in used},
-        'coverage': ctx['cov'], 'dropped_citations': dropped, 'model': ASK_MODEL,
+        'answer': text, 'mode': ctx['mode'], 'dropped_ids': cit.dropped_ids[:20],
+        'citations': cit.used, 'coverage': ctx['cov'], 'dropped_citations': cit.dropped, 'model': ASK_MODEL,
         **({'persona': ctx['persona']} if ctx.get('persona') else {}),
     }
 
@@ -1900,7 +1780,8 @@ Rules: talk about the creators directly — don't mention how many cards or epis
 
 
 def compare(chain_dirs, question, per_creator=40):
-    blocks, valid, corpora = [], {}, {}
+    blocks, corpora = [], {}
+    cit = citations.Citations()
     letters = 'ABCDEF'
     for letter, cdir in zip(letters, chain_dirs):
         corpus = load(cdir)
@@ -1911,21 +1792,15 @@ def compare(chain_dirs, question, per_creator=40):
         kws = _expand_kw_cache(question, corpus)
         terms = _terms(question) + [t for k in kws for t in _terms(k)]
         picked, hits, _sem = hybrid(corpus, terms, question, per_creator)
-        valid.update({f'{letter}:{c["id"]}': (letter, c) for c in picked})
+        cit.add(corpus, picked, prefix=f'{letter}:', creator=corpus['author'])
         lines = '\n'.join(_card_line(c, corpus).replace('[#', f'[#{letter}:', 1) for c in picked)
         blocks.append(f"## {letter} = {corpus['author'] or letter} — {len(corpus['cards'])} cards from "
                       f"{len(corpus['episodes'])} episodes; {hits} matched, {len(picked)} shown\n"
                       f"{_episode_lines(corpus, {c['ep'] for c in picked})}\n{lines or '(no matching cards)'}")
     raw = _llm(COMPARE_PROMPT.format(question=question.strip(), lang=_answer_lang(question),
                                      blocks='\n\n'.join(blocks)), purpose='compare')
-    text, used, dropped = clean_citations(raw, set(valid))
-    cites = {}
-    for cid in used:
-        letter, c = valid[cid]
-        v = card_view(c, corpora[letter], prefix=f'{letter}:')
-        v['creator'] = corpora[letter]['author']
-        cites[cid] = v
-    return {'answer': text.strip(), 'citations': cites, 'dropped_citations': dropped,
+    text = cit.clean(raw)
+    return {'answer': text, 'citations': cit.used, 'dropped_citations': cit.dropped,
             'creators': [{'letter': l, 'author': corpora[l]['author'],
                           'cards': len(corpora[l]['cards'])} for l in corpora]}
 

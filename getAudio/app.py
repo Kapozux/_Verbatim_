@@ -23,6 +23,7 @@ from flask import Flask, Response, jsonify, render_template, request, send_file
 
 import config
 import taskdb
+import timecode
 import usage
 
 
@@ -219,40 +220,15 @@ def allowed_file(filename):
         filename.rsplit('.', 1)[1].lower() in config.ALLOWED_EXTENSIONS
 
 
-def format_seconds(s):
-    """秒 → MM:SS，超过一小时给 HH:MM:SS。
-
-    别退回纯 MM:SS：Whisper 的段落时间戳走这里，长音频会给出 `173:12` 这种
-    三位分钟数，下游（sanitize 的时间戳校验、前端 parseTimestampToSeconds）
-    按两位分钟解析，整条长稿的时间轴会被判坏并塌成同一个值。
-    """
-    total = int(s)
-    hours = total // 3600
-    minutes = total % 3600 // 60
-    seconds = total % 60
-    if hours:
-        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-    return f"{minutes:02d}:{seconds:02d}"
-
-
-def _shift_ts(ts, offset_sec):
-    """把 'MM:SS'/'HH:MM:SS' 时间戳字符串整体加偏移秒，再格式化回去。取不到就原样返回。"""
-    from sanitize import _ts_to_seconds
-    sec = _ts_to_seconds(ts)
-    if sec is None:
-        return ts
-    return format_seconds(sec + offset_sec)
-
-
 def _offset_segments(segments, offset_sec):
     """片段转写（只截了 10:00–25:00）出来的时间戳从 0 起 → 加偏移显示成原视频真实位置。"""
     if not offset_sec:
         return segments
     for seg in segments:
         if seg.get('timestamp'):
-            seg['timestamp'] = _shift_ts(seg['timestamp'], offset_sec)
+            seg['timestamp'] = timecode.shift(seg['timestamp'], offset_sec)
         if seg.get('end'):
-            seg['end'] = _shift_ts(seg['end'], offset_sec)
+            seg['end'] = timecode.shift(seg['end'], offset_sec)
     return segments
 
 
@@ -928,8 +904,8 @@ def _run_transcription(task_id, filepath, engine, original_filename, q,
             segs = []
             for seg in raw_segments:
                 item = {
-                    'timestamp': format_seconds(seg['start']),
-                    'end': format_seconds(seg['end']),
+                    'timestamp': timecode.clock(seg['start']),
+                    'end': timecode.clock(seg['end']),
                     'text': seg['text'].strip(),
                 }
                 segs.append(item)
@@ -1216,7 +1192,8 @@ def _static_version():
 
 @app.route('/')
 def index():
-    return render_template('index.html', static_version=_static_version(), demo=DEMO_MODE,
+    import citations
+    return render_template('index.html', static_version=_static_version(), demo=DEMO_MODE, cite_id=citations.ID,
                            demo_ask=DEMO_ASK)
 
 
@@ -1590,13 +1567,12 @@ def _parse_url_section(line):
     start/end 支持 MM:SS / HH:MM:SS / 纯秒；end 可省略（到片尾）。
     section 是 yt-dlp --download-sections 的值 '*START-END'（秒）；无后缀返回 (line, None, 0)。
     """
-    from sanitize import _ts_to_seconds
     m = re.search(r'\s+@\s*([0-9:]+)\s*-\s*([0-9:]*)\s*$', line)
     if not m:
         return line.strip(), None, 0
     url = line[:m.start()].strip()
-    start = _ts_to_seconds(m.group(1))
-    end = _ts_to_seconds(m.group(2)) if m.group(2) else None
+    start = timecode.parse(m.group(1), bare_seconds=True)
+    end = timecode.parse(m.group(2), bare_seconds=True) if m.group(2) else None
     if start is None or (end is not None and end <= start):
         return url, None, 0          # 无效范围：忽略后缀，转整段
     section = f"*{start}-{end if end is not None else 'inf'}"
@@ -5663,10 +5639,10 @@ def _subscription_digest(chain_id, new_tids, keywords):
                 keywords=', '.join(keywords) or 'none',
                 episodes=ask._episode_lines(corpus, eps),
                 cards='\n'.join(ask._card_line(c, corpus) for c in cards[:400])), purpose='digest')
-        by_id = {c['id']: c for c in cards}
-        text, used, _ = ask.clean_citations(raw, set(by_id))
-        out['markdown'] = text.strip()
-        out['citations'] = {i: ask.card_view(by_id[i], corpus) for i in used}
+        import citations
+        cit = citations.Citations().add(corpus, cards)
+        out['markdown'] = cit.clean(raw)
+        out['citations'] = cit.used
     except Exception as e:  # noqa: BLE001
         out['error'] = str(e)[:200]
     return out

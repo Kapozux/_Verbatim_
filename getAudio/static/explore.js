@@ -5,7 +5,9 @@
 
 const CX_TABS = ['read', 'ask', 'topics', 'predictions', 'cards', 'episodes'];
 const CX_CARD_TABS = ['ask', 'topics', 'predictions', 'cards'];
-const CITE_RE = /\[#((?:[A-Z]:)?[dt]?\d+(?:_[0-9a-f]{8})?-\d+)\]/g;   // 3-12 卡片；d2-14 文档段落；t5-3 转写段落
+// 出处标记 [#id]：id 的写法由后端 citations.ID 注入（3-12 卡片、d2-14 文档段落、t5-3 转写段落、B:3-12 引用的博主）
+const CITE_ID = window.CITE_ID || '(?:[A-Z]:)?[dt]?\\d+(?:_[0-9a-f]{8})?-\\d+';
+const CITE_RE = new RegExp(`\\[#(${CITE_ID})\\]`, 'g');
 const CAN_ASK = () => !window.VERBATIM_DEMO || window.VERBATIM_DEMO_ASK;
 let cx = { id: null, cards: null, chain: null, sub: null, tab: null, avail: {}, picked: false, loaded: {}, timers: {} };
 
@@ -624,7 +626,7 @@ function citedHtml(md, citations, order) {
     // 悬停看「EP1 · 00:48 + 原话」，点开照样跳到那一秒 / 那一页。
     // order 给了就按它编号（闪卡、自测题一段段分开画，用整份产出的统一顺序）
     order = order || citedOrder(md, citations);
-    const one = `\\[#(?:[A-Z]:)?[dt]?\\d+(?:_[0-9a-f]{8})?-\\d+\\]`;
+    const one = `\\[#${CITE_ID}\\]`;
     return renderMarkdown(md || '').replace(new RegExp(`(?:${one}\\s*)+`, 'g'), run => {
         const seen = new Set();
         let out = '';

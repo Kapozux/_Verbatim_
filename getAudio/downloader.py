@@ -22,6 +22,7 @@ import subprocess
 
 from config import YTDLP_LANG, YTDLP_COOKIES_FROM_BROWSER, YTDLP_PROXY, BILI_SESSDATA
 import config
+import timecode
 
 _PROBE_TIMEOUT = 120        # 元数据解析超时（秒）
 _PROBE_ATTEMPTS = 3         # B站 412 等间歇风控：解析链接也退避重试
@@ -854,29 +855,12 @@ def fetch_subtitle(target, dest_dir, lang='auto'):
     return (path, kind, meta) if path else (None, None, meta)
 
 
-def _fmt_ts(sec):
-    h, rem = divmod(int(sec), 3600)
-    m, s = divmod(rem, 60)
-    return f'{h:d}:{m:02d}:{s:02d}' if h else f'{m:02d}:{s:02d}'
-
-
 _SRT_TS = re.compile(
     r'(\d{2}):(\d{2}):(\d{2})[,.](\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2})[,.](\d{3})')
 
 
 _CUE_JUNK = re.compile(r'\[(?:\\h|\s|_)*\]|\\h')       # WebVTT 的 \h 转义、[__] 残留
 _SENT_END = re.compile(r'[.!?。！？…]["”’)）]?$')
-
-
-def _ts_to_sec(ts):
-    try:
-        parts = [int(x) for x in str(ts).split(':')]
-    except ValueError:
-        return 0
-    sec = 0
-    for x in parts:
-        sec = sec * 60 + x
-    return sec
 
 
 _TAG_ONLY = re.compile(r'^[\s\[\(（【]*[^\]\)）】]{0,20}[\]\)）】][\s♪]*$')   # [Music] / [Applause] / （音乐）
@@ -895,7 +879,7 @@ def subtitle_usable(segs, duration):
         return False, 'no cues'
     text = ''.join(s.get('text', '') for s in segs if not _TAG_ONLY.match(s.get('text', '') or ''))
     chars = len(re.sub(r'\s+', '', text))
-    last_end = max(_ts_to_sec(s.get('end') or s.get('timestamp')) for s in segs)
+    last_end = max((timecode.parse(s.get('end') or s.get('timestamp')) or 0) for s in segs)
     if duration and duration > 0:
         cover = last_end / float(duration)
         if cover < 0.8:
@@ -921,12 +905,12 @@ def merge_caption_cues(segs, max_chars=200, max_span=15):
             continue
         if buf is None:
             buf = {'timestamp': seg.get('timestamp'), 'end': seg.get('end'), 'text': text}
-            start = _ts_to_sec(seg.get('timestamp'))
+            start = (timecode.parse(seg.get('timestamp')) or 0)
         else:
             joiner = '' if ord(buf['text'][-1]) > 0x2E7F else ' '     # 中日韩不加空格
             buf['text'] += joiner + text
             buf['end'] = seg.get('end') or buf['end']
-        span = _ts_to_sec(seg.get('end') or seg.get('timestamp')) - start
+        span = (timecode.parse(seg.get('end') or seg.get('timestamp')) or 0) - start
         if _SENT_END.search(buf['text']) or len(buf['text']) >= max_chars or span >= max_span:
             out.append(buf)
             buf = None
@@ -953,8 +937,8 @@ def parse_srt(path):
         if not m:
             continue
         sh, sm, ss, _, eh, em, es, _ = m.groups()
-        ts, end = _fmt_ts(int(sh) * 3600 + int(sm) * 60 + int(ss)), \
-            _fmt_ts(int(eh) * 3600 + int(em) * 60 + int(es))
+        ts, end = timecode.clock(int(sh) * 3600 + int(sm) * 60 + int(ss)), \
+            timecode.clock(int(eh) * 3600 + int(em) * 60 + int(es))
         for ln in block.splitlines():
             if _SRT_TS.search(ln) or ln.strip().isdigit():
                 continue

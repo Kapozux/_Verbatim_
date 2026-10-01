@@ -1073,7 +1073,8 @@
         </div>
     </div>
 
-    <script>window.VERBATIM_DEMO = {{ 'true' if demo else 'false' }}; window.VERBATIM_DEMO_ASK = {{ 'true' if demo_ask else 'false' }};</script>
+    <script>window.VERBATIM_DEMO = {{ 'true' if demo else 'false' }}; window.VERBATIM_DEMO_ASK = {{ 'true' if demo_ask else 'false' }};
+        window.CITE_ID = {{ cite_id|tojson }};   // 出处 id 的写法，后端 citations.ID 那一份</script>
     <script src="/static/i18n.js?v={{ static_version }}"></script>
     <script src="/static/app.js?v={{ static_version }}"></script>
     <script src="/static/explore.js?v={{ static_version }}"></script>

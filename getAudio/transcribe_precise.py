@@ -23,6 +23,7 @@ from google.genai import types
 
 from config import GEMINI_MODEL, make_gemini_client
 import config
+import timecode
 from transcribe_gemini import parse_timestamped_text
 
 # 合并按时间窗口分段做：一次只喂一段给 Gemini，避免长音频（几小时）
@@ -80,19 +81,6 @@ def _make_client():
     return make_gemini_client(api_key)
 
 
-def _ts_to_seconds(ts):
-    parts = ts.split(':')
-    try:
-        nums = [int(p) for p in parts]
-    except ValueError:
-        return 0
-    if len(nums) == 3:
-        return nums[0] * 3600 + nums[1] * 60 + nums[2]
-    if len(nums) == 2:
-        return nums[0] * 60 + nums[1]
-    return 0
-
-
 _TS_RE = re.compile(r'\[(\d{1,3}:\d{2}(?::\d{2})?)\]')   # 分钟可能三位（>100 分钟的 MM:SS）
 
 
@@ -106,7 +94,7 @@ def _window_ts_ok(text, win):
     lo = win * MERGE_WINDOW_SECONDS
     hi = lo + MERGE_WINDOW_SECONDS
     slack = 90  # 容忍跨窗句子 / 尾句延续
-    tss = [_ts_to_seconds(m) for m in _TS_RE.findall(text)]
+    tss = [timecode.parse(m) or 0 for m in _TS_RE.findall(text)]
     if not tss:
         return False
     good = sum(1 for t in tss if lo - slack <= t <= hi + slack)
@@ -138,9 +126,9 @@ def merge_speaker_transcript(gemini_segments, dashscope_segments):
     a_by_win = defaultdict(list)
     b_by_win = defaultdict(list)
     for s in dashscope_segments:
-        a_by_win[_ts_to_seconds(s['timestamp']) // MERGE_WINDOW_SECONDS].append(s)
+        a_by_win[(timecode.parse(s['timestamp']) or 0) // MERGE_WINDOW_SECONDS].append(s)
     for s in gemini_segments:
-        b_by_win[_ts_to_seconds(s['timestamp']) // MERGE_WINDOW_SECONDS].append(s)
+        b_by_win[(timecode.parse(s['timestamp']) or 0) // MERGE_WINDOW_SECONDS].append(s)
 
     windows = sorted(set(a_by_win) | set(b_by_win))
     if not windows:

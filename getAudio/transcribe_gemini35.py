@@ -32,6 +32,7 @@ import requests
 from config import make_gemini_client
 from transcribe_gemini import split_audio_file, _get_audio_duration_seconds
 import config
+import timecode
 import usage
 
 MODEL_NAME = 'gemini-3.5-transcribe'
@@ -284,7 +285,7 @@ def _parse_response(data, offset_sec, chunk_seconds=None):
     if not words:
         # 没有标注（比如模型这次没按预期带 word_info）→ 至少别把这段文字丢了
         if full_text.strip():
-            return [{'timestamp': _fmt_ts(offset_sec), 'text': full_text.strip()}]
+            return [{'timestamp': timecode.hms(offset_sec), 'text': full_text.strip()}]
         return []
 
     groups = []
@@ -312,7 +313,7 @@ def _parse_response(data, offset_sec, chunk_seconds=None):
             intra_offset = max(0, min(intra_offset, chunk_seconds))
         start_sec = offset_sec + intra_offset
         segments.append({
-            'timestamp': _fmt_ts(start_sec),
+            'timestamp': timecode.hms(start_sec),
             'text': f'{_speaker_label(g[0].get("speaker"))}：{text}',
         })
     return segments
@@ -324,10 +325,3 @@ def _parse_offset(s):
         return float(str(s).rstrip('s'))
     except (TypeError, ValueError):
         return 0.0
-
-
-def _fmt_ts(seconds):
-    total = max(0, int(seconds))
-    h, rem = divmod(total, 3600)
-    m, s = divmod(rem, 60)
-    return f'{h:02d}:{m:02d}:{s:02d}'

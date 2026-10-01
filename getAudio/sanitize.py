@@ -22,6 +22,7 @@ import re
 import subprocess
 from collections import Counter
 import config
+import timecode
 
 # —— 阈值（保守）——
 _MICRO_MAX = 4        # 「核心字数 <= 4」算微段（嗯/然後/我/对…）
@@ -84,19 +85,6 @@ def _clean_text(text):
     return text.strip()
 
 
-def _ts_to_seconds(ts):
-    parts = (ts or '').split(':')
-    try:
-        nums = [int(p) for p in parts]
-    except ValueError:
-        return None
-    if len(nums) == 3:
-        return nums[0] * 3600 + nums[1] * 60 + nums[2]
-    if len(nums) == 2:
-        return nums[0] * 60 + nums[1]
-    return None
-
-
 def _in_silence(sec, silence_intervals):
     if sec is None or not silence_intervals:
         return False
@@ -104,11 +92,6 @@ def _in_silence(sec, silence_intervals):
         if a <= sec <= b:
             return True
     return False
-
-
-def _fmt_ts(v):
-    v = max(0, int(round(v)))
-    return f"{v // 3600:02d}:{v % 3600 // 60:02d}:{v % 60:02d}"
 
 
 def repair_timeline(segments, duration):
@@ -122,7 +105,7 @@ def repair_timeline(segments, duration):
     if not duration or duration <= 0 or not segments:
         return segments, 0
     lim = duration + 60  # 容一点边界误差
-    raw = [_ts_to_seconds(s.get('timestamp', '')) for s in segments]
+    raw = [timecode.parse(s.get('timestamp', '')) for s in segments]
     n = len(segments)
     good = [v is not None and 0 <= v <= lim for v in raw]  # 只看合法性，不看单调
     gi = [i for i in range(n) if good[i]]
@@ -143,7 +126,7 @@ def repair_timeline(segments, duration):
             v = raw[R]
         else:
             v = 0
-        out.append({**s, 'timestamp': _fmt_ts(v)})
+        out.append({**s, 'timestamp': timecode.hms(v, round_=True)})
     return out, n - len(gi)
 
 
@@ -182,7 +165,7 @@ def clean_transcript(segments, silence_intervals=None, duration=None):
     # —— 1) 静音掩码：落在静音里的「微段」大概率是幻听 ——
     if silence_intervals:
         for i, s in enumerate(segs):
-            if _is_micro(s) and _in_silence(_ts_to_seconds(s['timestamp']), silence_intervals):
+            if _is_micro(s) and _in_silence(timecode.parse(s['timestamp']), silence_intervals):
                 drop[i] = True
                 report['silence_dropped'] += 1
 
@@ -384,7 +367,7 @@ def transcript_quality(segments, duration=None, audio_path=None, clean_report=No
         if ratio >= _SILENT_RATIO:
             window = min(float(duration or _SILENCE_WINDOW), float(_SILENCE_WINDOW))
             inside = [t for s, t in zip(segs, texts)
-                      if (_ts_to_seconds(s.get('timestamp', '')) or 0) <= window]
+                      if (timecode.parse(s.get('timestamp', '')) or 0) <= window]
             n_chars = len(''.join(inside))
             stats['in_window'] = {'segments': len(inside), 'chars': n_chars}
             if len(inside) >= _MIN_HALLUCINATED and n_chars >= _MIN_HALLUCINATED_CHARS:

@@ -16,6 +16,7 @@ import uuid
 from datetime import datetime
 
 import ask
+import citations
 import usage
 
 KINDS = ('report', 'flashcards', 'quiz', 'coverage')
@@ -272,36 +273,6 @@ def _prompt(corpus, cards, lang, focus, task):
 
 # ================= 生成 =================
 
-class _Cites:
-    """一次生成里所有文字的出处：短别名 → 真 id → 校验 → 收集。"""
-
-    def __init__(self, corpus, cards):
-        self.corpus = corpus
-        self.by_id = {c['id']: c for c in cards}
-        self.aliases = {ask._alias(c, corpus): c['id'] for c in cards if c.get('layer') == 'source'}
-        self.used = {}
-        self.dropped = 0
-
-    _LEAD = re.compile(r'[（(]?(?:引文|出处|来源|参考|引用|Sources?|Citations?|References?)\s*[:：]\s*(?=\[#)', re.I)
-
-    def clean(self, text):
-        # 模型爱在出处前面加「引文：」「Source:」——芯片自己就说明是出处，删掉
-        raw = ask._fix_tags(ask._unalias(self._LEAD.sub('', str(text or '')), self.aliases, set(self.by_id)), set(self.by_id))
-        out, used, dropped = ask.clean_citations(raw, set(self.by_id))
-        self.dropped += dropped
-        for cid in used:
-            self.used[cid] = ask.card_view(self.by_id[cid], self.corpus)
-        return out.strip()
-
-    def one(self, token):
-        """单个 id（提纲对照里那条提纲出自哪段）。"""
-        t = str(token or '').strip().lstrip('#').strip('[]')
-        real = self.aliases.get(t) or (t if t in self.by_id else None)
-        if real:
-            self.used[real] = ask.card_view(self.by_id[real], self.corpus)
-        return real
-
-
 def _llm_json(prompt, key, tries=2):
     last = None
     for i in range(tries):
@@ -317,7 +288,7 @@ def _llm_json(prompt, key, tries=2):
 
 
 def _report(corpus, cards, lang, focus, n, oid, fmt='guide', custom=''):
-    cites = _Cites(corpus, cards)
+    cites = citations.Citations().add(corpus, cards)
     task = {'briefing': BRIEFING, 'guide': GUIDE, 'faq': FAQ, 'timeline': TIMELINE}.get(fmt) \
         or CUSTOM.format(prompt=custom)
     md = ask._llm(_prompt(corpus, cards, lang, focus, task), purpose='study')
@@ -326,7 +297,7 @@ def _report(corpus, cards, lang, focus, n, oid, fmt='guide', custom=''):
 
 
 def _flash(corpus, cards, lang, focus, n, oid):
-    cites = _Cites(corpus, cards)
+    cites = citations.Citations().add(corpus, cards)
     items = _llm_json(_prompt(corpus, cards, lang, focus, FLASH.format(n=n)), 'cards')
     out = []
     for it in items:
@@ -341,7 +312,7 @@ def _flash(corpus, cards, lang, focus, n, oid):
 
 
 def _quiz(corpus, cards, lang, focus, n, oid):
-    cites = _Cites(corpus, cards)
+    cites = citations.Citations().add(corpus, cards)
     items = _llm_json(_prompt(corpus, cards, lang, focus, QUIZ.format(n=n)), 'questions')
     rnd = random.Random(oid)          # 模型爱把正确答案放第一个：打乱选项，同一份每次打开顺序一样
     out = []
@@ -391,7 +362,7 @@ def _outline(corpus, pool, lang, focus, outline_src):
         material, thinned = _thin(corpus, list(hit.values()) or material, room)
         thinned = True
     cards = _ordered(corpus, outline_cards + material)
-    cites = _Cites(corpus, cards)
+    cites = citations.Citations().add(corpus, cards)
     ep = corpus['episodes'][oep]
     task = OUTLINE.format(label=ep.get('label'), title=ep['title'])
     items = _llm_json(_prompt(corpus, cards, lang, focus, task), 'items')
@@ -404,12 +375,11 @@ def _outline(corpus, pool, lang, focus, outline_src):
         note = cites.clean(it.get('note') or '')
         # 说明里只留材料的出处（引提纲证明不了「讲过」）；一段材料都引不出来的「讲过 / 提了一下」改判为没讲，
         # 没讲的不挂出处（模型爱引一段不相干的笔记来「证明没有」）
-        note = ask._CITE.sub(lambda m: m.group(0) if st != 'missing' and (m.group(1) or '') + m.group(2) in mat_ids
-                             else '', note)
-        if st != 'missing' and not ask._CITE.search(note):
+        note = citations.keep(note, lambda cid: st != 'missing' and cid in mat_ids)
+        if st != 'missing' and not citations.find(note):
             st = 'missing'
         out.append({'item': str(it['item']).strip()[:120], 'status': st,
-                    'outline': cites.one(it.get('outline')), 'note': re.sub(r'[ \t]+([。，；.,;])', r'\1', note).strip()})
+                    'outline': cites.resolve(it.get('outline')), 'note': re.sub(r'[ \t]+([。，；.,;])', r'\1', note).strip()})
     if not out:
         raise RuntimeError('The model returned no outline items')
     counts = {s: sum(1 for x in out if x['status'] == s) for s in ('covered', 'partial', 'missing')}
