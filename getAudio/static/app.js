@@ -1633,7 +1633,19 @@ async function nfStart() {
     try {
         const ex = nf.data.existing;
         let id;
-        if (ex) {                                             // 分析过：并进原来那条，不新开（原话缓存在那条里）
+        const host = typeof nfProject !== 'undefined' ? nfProject : null;     // 在项目的「添加来源」里贴的频道
+        if (host && ex && ex.chain_id !== host) {
+            // 这个频道资料库里已经有了：项目直接共用那条（不重跑、不重抽卡）；这次新挑的期并进那条去处理
+            if (nf.picked.size) await fetch(`/api/chain/${ex.chain_id}/retry`, { method: 'POST',
+                headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).catch(() => {});
+            const r = await (await fetch(`/api/chain/${host}/sources/channels`, { method: 'POST',
+                headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chain_ids: [ex.chain_id] }) })).json();
+            if (r.error) throw new Error(r.error);
+            showToast(T('as.channelShared'));
+            if (typeof nfDoneInProject === 'function') nfDoneInProject(host);
+            return;
+        }
+        if (ex) {                                             // 分析过（或就是这个项目的频道）：并进原来那条，只处理新挑的
             const r = await (await fetch(`/api/chain/${ex.chain_id}/retry`, { method: 'POST',
                 headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
             if (r && r.ok === false && r.error) throw new Error(r.error);
@@ -1641,18 +1653,20 @@ async function nfStart() {
             if (syncOn) await fetch(`/api/chain/${id}/subscription`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ on: true, interval_h: body.sync_interval_h }) });
         } else {
+            if (host) body.project_id = host;                 // 加进当前这个项目，不另起一个
             const resp = await fetch('/api/chain', { method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body) });
             const data = await resp.json();
             if (!resp.ok) throw new Error(data.error || T('creators.failedToCreate'));
             id = data.chain_id;
+            if (host && data.existing) showToast(T('as.channelShared'));
         }
         chainUrl.value = '';
         nf = { url: '', data: null, loading: false, quick: 30, picked: new Set(), since: '', kw: '' };
         document.getElementById('nf-preview').classList.add('hidden');
         document.getElementById('nf-body').classList.add('hidden');
-        cxStore('cx.tab', 'episodes');
-        navigate('chain/' + id);
+        if (host && typeof nfDoneInProject === 'function') nfDoneInProject(host);    // 博主可能是另起的一条（按引用加进来）
+        else navigate('chain/' + id);
     } catch (err) {
         alert(T('alert.failedToStartAnalysis', { message: err.message }));
     } finally {
@@ -1800,73 +1814,69 @@ function isRealAvatar(url) {
 }
 
 
+// 项目的门面：自选表情 > 频道头像 > 名字首字（频道）> 默认本子表情。项目首页卡片和项目页顶栏共用
+const DEFAULT_PJ_EMOJI = '📓';
+function chainFaceHtml(c, cls = '') {
+    const author = chainDisplayName(c);
+    if (c.emoji) return `<span class="pj-face pj-emoji ${cls}">${escapeHtml(c.emoji)}</span>`;
+    const colLike = c.kind === 'project' || c.kind === 'collection';
+    const initial = escapeHtml(String(author).trim().slice(0, 1).toUpperCase() || '?');
+    // referrerpolicy="no-referrer" 是必须的：B站 CDN 见到非 bilibili 的 Referer 一律 403
+    if (!colLike && isRealAvatar(c.avatar)) {
+        return `<span class="pj-face pj-img ${cls}" data-initial="${initial}"><img src="${escapeHtml(c.avatar)}" alt="" loading="lazy"
+            referrerpolicy="no-referrer" onerror="this.parentNode.textContent=this.parentNode.dataset.initial"></span>`;
+    }
+    if (c.url) return `<span class="pj-face pj-initial ${cls}">${initial}</span>`;
+    return `<span class="pj-face pj-emoji ${cls}">${DEFAULT_PJ_EMOJI}</span>`;
+}
+
+const PJ_PIN_SVG = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 3h6l-1 6 4 4H6l4-4z"/><path d="M12 13v8"/></svg>';
+
+// 卡片跟 Gemini Notebook 一样只放：表情 / 头像、名字、「日期 · N 个来源」、右上角 ⋮。
+// 正在跑、上次没跑完这类状态只用一行小字，不再摆彩色横幅和功能小标签
 function buildChainCard(c) {
     const active = !['done', 'failed', 'cancelled'].includes(c.stage);
     const author = chainDisplayName(c);
     const vids = c.videos || [];
-    // 卡面只有一种形状：一枚圆头像。以前是"视频封面当横幅 + 头像压角"，方的圆的
-    // 混在一起看着乱，而且封面尺寸不一让整行高低参差。现在统一——拿不到真头像
-    // （番剧、探测失败）就露名字首字，那也是同一个圆。
-    const isCol = c.kind === 'collection';
-    const face = !isCol && isRealAvatar(c.avatar) ? c.avatar : '';
-    const initial = escapeHtml(String(author).trim().slice(0, 1).toUpperCase() || '?');
-    // referrerpolicy="no-referrer" 是必须的：B站 CDN 见到非 bilibili 的 Referer
-    // 一律 403，不去掉 Referer 的话 B站博主全都只剩首字。
-    const thumb = `<div class="creator-thumb${isCol ? ' creator-thumb-col' : ''}">
-        <div class="creator-face${isCol ? ' creator-face-col' : ''}"><span>${isCol ? '❖' : initial}</span>${face
-            ? `<img src="${escapeHtml(face)}" alt="" loading="lazy"
-                 referrerpolicy="no-referrer" onerror="this.remove()">` : ''}</div>
-      </div>`;
-    // 订阅：有没看过的更新 → 珊瑚小点；只是在关注 → 小铃铛
-    const subMark = c.sub_new ? `<span class="creator-new" title="${T('sub.newBadge')}">${T('sub.newShort')}</span>`
-        : c.sub_on ? `<span class="creator-bell" title="${T('sub.following')}">↻</span>` : '';
-    const name = `<div class="creator-name">${escapeHtml(String(author).slice(0, 60))}${subMark}</div>`;
-
-    let body;
+    const subMark = c.sub_new ? `<span class="creator-new" title="${T('sub.newBadge')}">${T('sub.newShort')}</span>` : '';
+    const cont = label => `<a href="#" class="pj-act" onclick="continueChain('${c.id}', event);return false;">${T(label)}</a>`;
+    let meta = cardMetaLine(c);
+    let status = '';
     if (active) {
-        const prog = chainProgressText(c) || stageLabel(c.stage);
-        body = `<div class="creator-meta">${escapeHtml(prog)}</div>
-            <div class="creator-progressbar"><i style="width:${chainPercent(c)}%"></i></div>`
-            + (c.current ? `<div class="creator-current">${escapeHtml(c.current.slice(0, 60))}</div>` : '');
-    } else if (c.final_doc || c.has_cards) {
-        const nEp = vids.filter(v => v.status === 'done').length || vids.length;
-        // 能做什么一眼看到：有画像 / 能问 / 有话题
-        const chips = [c.final_doc ? T('creators.chipPortrait') : '', c.has_cards ? T('creators.chipAsk') : '',
-            c.has_tags ? T('creators.chipTopics') : ''].filter(Boolean);
-        // 内容都在、只是最近一次运行没跑完：不当失败处理，给一行小字 + 继续
-        const stale = c.stage !== 'done'
-            ? `<div class="creator-stale">${T(c.stage === 'failed' ? 'creators.lastRunFailed' : 'creators.lastRunStopped')} ·
-                 <a href="#" onclick="continueChain('${c.id}', event);return false;">${T('creators.continue')}</a></div>` : '';
-        const metaLine = isCol ? T('col.cardMeta', { kind: T('col.k.' + (c.collection_kind || 'mixed')), n: nEp })
-            : `${T('creators.nEpisodes', { n: nEp })} · ${escapeHtml(brainLabel(c.analysis_preset))}`;
-        body = `<div class="creator-meta">${metaLine}</div>
-            <div class="creator-chips">${chips.map(x => `<span>${x}</span>`).join('')}</div>${stale}`;
+        status = `<div class="pj-status run">${escapeHtml(chainProgressText(c) || stageLabel(c.stage))}</div>
+            <div class="creator-progressbar"><i style="width:${chainPercent(c)}%"></i></div>`;
+    } else if (c.final_doc || c.has_cards || c.kind === 'project') {
+        if (c.stage === 'failed' || c.stage === 'cancelled') {
+            status = `<div class="pj-status">${T(c.stage === 'failed' ? 'creators.lastRunFailed' : 'creators.lastRunStopped')} · ${cont('creators.continue')}</div>`;
+        }
     } else if (c.stage === 'done' && c.analyze === false) {
-        // 只转写：没有画像是预期结果，别掉进下面那个「中断」分支
         const nEp = vids.filter(v => v.status === 'done').length || vids.length;
-        body = `<div class="creator-meta">${T('creators.nTranscripts', { n: nEp })}${
-            c.raw_doc ? ' · ' + escapeHtml(T('creators.fullTranscript')) : ''}</div>`;
+        meta = escapeHtml(T(nEp === 1 ? 'creators.nTranscriptsOne' : 'creators.nTranscripts', { n: nEp }));
     } else if (c.stage === 'failed') {
-        body = `<div class="creator-meta creator-error" title="${escapeHtml(String(c.error || '').slice(0, 400))}">${escapeHtml(shortChainError(c.error))}</div>
-            <button class="btn-secondary btn-small creator-retry"
-                onclick="continueChain('${c.id}', event)">${T('creators.retry')}</button>`;
+        status = `<div class="pj-status bad" title="${escapeHtml(String(c.error || '').slice(0, 400))}">${escapeHtml(shortChainError(c.error))} · ${cont('creators.retry')}</div>`;
     } else {
-        // cancelled，或 done 但没产出画像（中断/未合成）
         const prog = chainProgressText(c);
-        body = `<div class="creator-meta">${T('stage.cancelled')}${prog ? ' · ' + escapeHtml(prog) : ''}</div>
-            <button class="btn-secondary btn-small creator-retry"
-                onclick="continueChain('${c.id}', event)">${T('creators.continue')}</button>`;
+        status = `<div class="pj-status">${T('stage.cancelled')}${prog ? ' · ' + escapeHtml(prog) : ''} · ${cont('creators.continue')}</div>`;
     }
-    // 隐藏 / 恢复：只改名单，不动数据
-    const hideBtn = active ? '' : `<button type="button" class="creator-hide" title="${T(c.hidden ? 'creators.unhide' : 'creators.hide')}"
-        aria-label="${T(c.hidden ? 'creators.unhide' : 'creators.hide')}"
-        onclick="event.stopPropagation();hideChain('${c.id}', ${!c.hidden})">${c.hidden ? '↺' : '×'}</button>`;
-    return `<div class="creator-card ${active ? 'creator-running' : ''}"
-        onclick="navigate('chain/${c.id}')" title="${escapeHtml(author)}">
-        ${hideBtn}${thumb}<div class="creator-body">${name}${body}</div></div>`;
+    return `<div class="pj-card${active ? ' running' : ''}${c.pin != null ? ' pinned' : ''}" data-id="${c.id}"
+        onclick="if(!event.target.closest('.pj-more,.pj-act,.pj-title-edit'))navigate('chain/${c.id}')" title="${escapeHtml(author)}">
+        <div class="pj-top">${chainFaceHtml(c)}
+            <button type="button" class="pj-more" aria-label="${escapeHtml(T('pjm.more'))}" title="${escapeHtml(T('pjm.more'))}"
+                onclick="event.stopPropagation();pjMenu(this,'${c.id}')"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5.5" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="12" cy="18.5" r="1.7"/></svg></button></div>
+        <div class="pj-title">${c.pin != null ? `<span class="pj-pin" title="${escapeHtml(T('pjm.pinned'))}">${PJ_PIN_SVG}</span>` : ''}<span class="pj-name">${escapeHtml(String(author).slice(0, 80))}</span>${subMark}</div>
+        <div class="pj-meta">${meta}</div>${status}
+    </div>`;
+}
+
+// 卡片副标题：最近动过的日期 · 几个来源（跟 Gemini Notebook 一样）
+function cardMetaLine(c) {
+    const d = (c.updated_at || c.finished_at || c.created_at || '').slice(0, 10);
+    const n = c.n_sources != null ? c.n_sources : (c.videos || []).filter(v => v.status === 'done').length;
+    return `${escapeHtml(d)} · ${T(n === 1 ? 'nb.nSourcesOne' : 'nb.nSources', { n })}`;
 }
 
 let lastChains = [];
+let pjFilter = null;          // 项目首页按分组筛（null = 全部）
 
 async function hideChain(id, hide) {
     try {
@@ -1889,43 +1899,42 @@ function renderChains(chains) {
     const grid = document.getElementById('creators-grid');
     const empty = document.getElementById('creators-empty');
     if (!grid) return;
-    // 同一 URL（去跟踪参数、去 /videos 后缀）只留一条：卡片代表"这个博主"。
-    // 挑哪一条：正在跑的 > 有画像的 > 最新的——只按"最新"挑会让一条中断的空跑
-    // 盖住之前花钱做出来的画像。旧 run 的文档仍在 Library → Analyses。
+    // 一切都是项目，摆在一个网格里。有频道链接的同一 URL（去跟踪参数、去 /videos 后缀）只留一条；
+    // 挑哪一条：正在跑的 > 有画像的 > 最新的——只按"最新"挑会让一条中断的空跑盖住之前花钱做出来的画像。
     const active = c => !['done', 'failed', 'cancelled'].includes(c.stage);
     const rank = c => (active(c) ? 4 : 0) + (c.final_doc ? 2 : 0) + (c.has_cards ? 1 : 0);
     const best = new Map();
     let bangumiN = 0;
     for (const c of chains) {
         if (c.merged_into) continue;          // 已并入别条：不出卡片
-        if (isBangumiUrl(c.url)) { bangumiN++; continue; }   // 番剧不算博主
-        if (c.kind === 'collection') continue;   // 合集另外放
-        const key = normalizeChainUrl(c.url);
+        if (c.ref_only) continue;             // 在项目里加的博主：在那个项目里看，首页不单独列
+        if (c.url && isBangumiUrl(c.url)) { bangumiN++; continue; }   // 番剧不算项目
+        const key = c.url ? normalizeChainUrl(c.url) : 'id:' + c.id;
         const cur = best.get(key);
         // /api/chains 已按 created_at 倒序 → 同分时先来的（更新的）胜出
         if (!cur || rank(c) > rank(cur)) best.set(key, c);
     }
     lastChains = chains;
     const latest = [...best.values()];
-    // 分三堆：正常的博主（进行中的排前面）/ 没跑出东西的（失败、中断、0 期）/ 你隐藏的
     const q = (document.getElementById('creators-search') || {}).value || '';
     const match = c => !q || (chainDisplayName(c) + ' ' + (c.url || '')).toLowerCase().includes(q.trim().toLowerCase());
     const nDone = c => (c.videos || []).filter(v => v.status === 'done').length;
-    // 「没跑完」= 手里什么都没有的（失败 / 中断且一期没转成、也没卡片没画像）；有内容的留在主列表
-    const unfinished = c => !active(c) && !c.final_doc && !c.has_cards && (c.stage === 'failed' || !nDone(c));
-    // 合集单独一栏放在最上面（没有 url，按 id 各算各的，不参与上面的按 URL 去重）
-    const cols = chains.filter(c => c.kind === 'collection' && !c.hidden && match(c));
+    // 「没跑完」= 有频道、却什么都没拿到的（失败 / 中断且一期没转成、也没卡片没画像）；空的新项目不算
+    const unfinished = c => !!c.url && !active(c) && !c.final_doc && !c.has_cards && (c.stage === 'failed' || !nDone(c));
     const colBlock = document.getElementById('collections-block');
-    if (colBlock) {
-        colBlock.classList.toggle('hidden', !cols.length);
-        document.getElementById('collections-grid').innerHTML = cols.map(buildChainCard).join('');
-    }
+    if (colBlock) colBlock.classList.add('hidden');
     const hidden = latest.filter(c => c.hidden && match(c));
     const unf = latest.filter(c => !c.hidden && unfinished(c) && match(c));
-    // 进行中的最前；然后是分析过（有画像 / 证据卡）的；只转写的放后面。各堆里保持新的在前
-    const weight = c => (active(c) ? 2 : 0) + (c.final_doc || c.has_cards ? 1 : 0);
-    const main = latest.filter(c => !c.hidden && !unfinished(c) && match(c))
-        .sort((a, b) => weight(b) - weight(a));
+    // 进行中的最前，其余按最近动过的排
+    const when = c => c.updated_at || c.finished_at || c.created_at || '';
+    // 选了某个分组：只看分组里的
+    const inCol = c => !pjFilter || (c.collections || []).includes(pjFilter);
+    // 置顶的最前（最近置顶的在前），然后进行中的，其余按最近动过的排
+    const pinRank = c => (c.pin == null ? 1e9 : c.pin);
+    const main = latest.filter(c => !c.hidden && !unfinished(c) && match(c) && inCol(c))
+        .sort((a, b) => (pinRank(a) - pinRank(b)) || (active(b) - active(a))
+            || (when(b) > when(a) ? 1 : when(b) < when(a) ? -1 : 0));
+    if (typeof pjRenderFilters === 'function') pjRenderFilters(latest.filter(c => !c.hidden && !unfinished(c)));
     if (empty) empty.classList.toggle('hidden', latest.length > 0);
     grid.innerHTML = main.map(buildChainCard).join('')
         || (q ? `<p class="history-empty">${T('creators.noMatch')}</p>` : '');
@@ -2005,9 +2014,12 @@ async function loadChainCards(id) {
         if (!resp.ok) return;
         r = await resp.json();
     } catch { return; }
-    if (chainCards.id !== id || chainDetailId !== id) return;   // 加载期间切到别的博主了
+    // 项目里看别的博主的原话：id 是那个人的链条（cxPid），不是项目本身
+    const own = chainDetailId === id;
+    if (chainCards.id !== id || (!own && !(typeof cxPid === 'function' && cxPid() === id))) return;   // 加载期间切走了
     if (!r.cards || !r.cards.length) {                          // 没跑过分析：问/话题/预测/证据卡不出现
-        if (typeof cxSetAvail === 'function') cxSetAvail({ cards: false });
+        if (own && typeof cxSetAvail === 'function') cxSetAvail({ cards: false });
+        if (!own) box.innerHTML = `<p class="cx-muted">${T('pp.notYet')}</p>`;
         return;
     }
     const eps = r.episodes || [];
@@ -2104,7 +2116,7 @@ async function loadChainCards(id) {
     });
     renderChainCards();
     // 问 / 话题 / 预测 / 证据卡 四个标签页（explore.js）
-    if (typeof exploreInit === 'function') exploreInit(id, r);
+    if (own && typeof exploreInit === 'function') exploreInit(id, r);
 }
 
 function renderChainCards() {
@@ -2185,7 +2197,8 @@ async function refreshChainDetail() {
     const err = c.error
         ? (failedNow ? `<div class="cd-alert">⚠ ${escapeHtml(String(c.error).slice(0, 180))}</div>`
             : `<div class="cp-old-err"><b>${T('chainDetail.lastError')}</b> ${escapeHtml(String(c.error).slice(0, 180))}</div>`) : '';
-    const actions = chainTerminal && c.kind === 'collection'
+    const colLike = c.kind === 'collection' || c.kind === 'project';      // 没有频道链接的：合集、项目
+    const actions = chainTerminal && colLike
         ? `<button class="btn-primary ci-btn" onclick="openCollectionModal({addTo: '${c.id}'})">${T('col.add')}</button>
            <button class="btn-secondary ci-btn" onclick="continueChain('${c.id}')">${T('col.rebuild')}</button>
            <button class="btn-secondary ci-btn btn-danger" onclick="deleteChain('${c.id}', true)">${T('common.delete')}</button>
@@ -2200,11 +2213,13 @@ async function refreshChainDetail() {
     // 已完成的链条上挂着历史报错时只在按钮上点个小红点，失败的链条才把报错摆到头部
     const opsDot = failedNow && c.error ? '<i class="cp-dot" aria-hidden="true"></i>' : '';
     const opsWasOpen = !!document.querySelector('#chain-detail-info .cp-ops[open]');
-    const ops = `<details class="chain-ops cp-ops"${opsWasOpen ? ' open' : ''}>
-        <summary class="btn-secondary cp-btn">⋯ ${T('chainDetail.runDetails')}${opsDot}</summary>
+    // 顶栏只留名字和两个按钮；身份 / 状态 / 数据 / 运行详情都收在「⋯」里（about 在下面算好再填）
+    const opsFor = about => `<details class="chain-ops cp-ops"${opsWasOpen ? ' open' : ''}>
+        <summary class="cp-more" title="${escapeHtml(T('chainDetail.runDetails'))}" aria-label="${escapeHtml(T('chainDetail.runDetails'))}"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><circle cx="5.5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="18.5" cy="12" r="1.7"/></svg>${opsDot}</summary>
         <div class="cp-ops-panel">
+            ${about}
             ${err}${fellNote}
-            ${c.kind === 'collection' ? '' : `<div class="ci-row"><span class="ci-k">${T('chainDetail.source')}</span>
+            ${colLike ? '' : `<div class="ci-row"><span class="ci-k">${T('chainDetail.source')}</span>
                 <span class="ci-v"><a href="${safeUrl(c.url)}" target="_blank" rel="noopener">${escapeHtml((c.url || '').slice(0, 80))}</a></span></div>
             <div class="ci-row"><span class="ci-k">${T('settings.title')}</span>
                 <span class="ci-v">${settingsLine(c)}</span></div>`}
@@ -2214,13 +2229,16 @@ async function refreshChainDetail() {
         </div></details>`;
 
     // ===== 档案头：头像 + 名字 + 状态 + 全部数据（含修辞三指标，由 explore.js 填进 #cp-rh）=====
-    const ch = c.kind === 'collection' ? '❖' : ((author || c.url || '?').trim().slice(0, 1) || '?');
-    const avatarHtml = `<div class="cd-avatar cp-avatar${c.kind === 'collection' ? ' creator-face-col' : ''}">${escapeHtml(ch)}${c.avatar && c.kind !== 'collection'
-        ? `<img class="cd-avatar-img" src="${escapeHtml(c.avatar || '')}" alt=""
-             referrerpolicy="no-referrer" onerror="this.remove()">` : ''}</div>`;
+    // 跟首页卡片同一张脸（自选表情 > 频道头像 > 首字 > 默认本子）；点它换表情
+    const avatarHtml = window.VERBATIM_DEMO ? chainFaceHtml(c, 'cp-face')
+        : `<button type="button" class="cp-face-btn" title="${escapeHtml(T('pjm.emoji'))}" aria-label="${escapeHtml(T('pjm.emoji'))}"
+            onclick="pjEmojiPicker(this,'${c.id}')">${chainFaceHtml(c, 'cp-face')}</button>`;
     const totalViews = vids.reduce((s, v) => s + (v.view_count || 0), 0);
     const stat = (n, l, extra = '') => `<div class="cp-stat"${extra}><div class="n">${n}</div><div class="l">${l}</div></div>`;
-    const stats = [stat(doneN, T('chainDetail.episodesRead'))];
+    const nDocs = (c.docs || []).length;
+    const stats = c.kind === 'project'
+        ? [stat(doneN, T('src.recordings')), stat(nDocs, T('src.docs'))]
+        : [stat(doneN, T('chainDetail.episodesRead'))];
     if (c.followers) stats.push(stat(fmtCount(c.followers), T('chainDetail.followers')));
     if (totalViews) stats.push(stat(fmtCount(totalViews), T('chainDetail.totalPlays')));
     const tail = [];
@@ -2236,29 +2254,37 @@ async function refreshChainDetail() {
               <a href="#" onclick="continueChain('${c.id}');return false;">${T('creators.continue')}</a></div>`
         : `<div class="cp-fail">${err}</div>`;
     const host = (() => { try { return new URL(c.url).hostname.replace(/^www\./, ''); } catch { return ''; } })();
+    const about = `<div class="cp-about">
+                <div class="cd-eyebrow">${c.kind === 'project'
+                    ? T('pj.eyebrow')
+                    : c.kind === 'collection'
+                    ? T('col.eyebrow', { kind: T('col.k.' + (c.collection_kind || 'mixed')), n: vids.length })
+                    : T(c.analyze === false ? 'chainDetail.eyebrowTranscripts' : 'chainDetail.eyebrow', { n: doneN })}</div>
+                <div class="cd-sub">${c.kind === 'project' && chainTerminal
+                    ? T('pj.updated', { d: escapeHtml(String(c.updated_at || c.created_at || '').slice(0, 16)) })
+                    : stageLabel(c.stage) + (c.finished_at ? ' · ' + escapeHtml(c.finished_at) : '')}${host
+                    ? ` · <a class="cp-src" href="${safeUrl(c.url)}" target="_blank" rel="noopener">${escapeHtml(host)} ↗</a>` : ''}</div>
+            </div>
+            <div class="cp-stats">${stats.join('')}<div id="cp-rh" class="cp-rh"></div>${tail.join('')}</div>`;
     document.getElementById('chain-detail-info').innerHTML = `
         <div class="cp-top">
             ${avatarHtml}
             <div class="cp-id">
-                <div class="cd-eyebrow">${c.kind === 'collection'
-                    ? T('col.eyebrow', { kind: T('col.k.' + (c.collection_kind || 'mixed')), n: vids.length })
-                    : T(c.analyze === false ? 'chainDetail.eyebrowTranscripts' : 'chainDetail.eyebrow', { n: doneN })}</div>
                 <h1 class="cp-name">${escapeHtml(String(author).slice(0, 60))}</h1>
-                <div class="cd-sub">${stageLabel(c.stage)}${c.finished_at ? ' · ' + escapeHtml(c.finished_at) : ''}${host
-                    ? ` · <a class="cp-src" href="${safeUrl(c.url)}" target="_blank" rel="noopener">${escapeHtml(host)} ↗</a>` : ''}</div>
                 ${running}
             </div>
-            <div class="cp-actions"><div id="cp-sub"></div>${ops}</div>
+            <div class="cp-actions"><div id="cp-sub"></div>${opsFor(about)}</div>
         </div>
-        ${failed}
-        <div class="cp-stats">${stats.join('')}<div id="cp-rh" class="cp-rh"></div>${tail.join('')}</div>`;
+        ${failed}`;
     lastChainDetail = c;
     if (typeof cxFillHead === 'function') cxFillHead(c);   // 修辞指标 + 订阅按钮（explore.js 缓存着，轮询重绘后补回去）
 
-    document.getElementById('chain-episodes-count').textContent = vids.length || '';
-    // 分集页顶栏：几期转写完了 + 整合的完整转写 + 勾选合并的提示
+    // 「来源」标签上的数字：录音 + 文档
+    const epN = document.getElementById('chain-episodes-count');      // 「全部录音」已从工作台挪到来源栏的菜单里
+    if (epN) epN.textContent = vids.length || '';
+    // 分集页顶栏：几期转写完了 + 整合的完整转写 + 勾选合并的提示（一段录音都没有就不摆）
     const epBar = document.getElementById('cx-ep-bar');
-    if (epBar) epBar.innerHTML = `
+    if (epBar) epBar.innerHTML = !vids.length ? '' : `
         <span class="cx-muted">${T('chainDetail.epBar', { done: doneN, total: vids.length })}</span>
         ${c.raw_doc ? `<button class="btn-secondary cp-btn" type="button"
             onclick="navigate('chain/${c.id}/doc/${encodeURIComponent(c.raw_doc)}')">${T('creators.fullTranscript')} ↗</button>` : ''}
@@ -2390,6 +2416,10 @@ async function loadChains() {
     try {
         const resp = await fetch('/api/chains');
         const chains = await resp.json();
+        if (typeof pjLoadCols === 'function') {           // 分组名单也重读：别处删了 / 改了分组这里跟上
+            await pjLoadCols();
+            if (pjFilter && !pjCols.some(c => c.id === pjFilter)) pjFilter = null;
+        }
         renderChains(chains);
         updateGlobalIndicator('chains', chains
             .filter(c => !['done', 'failed', 'cancelled'].includes(c.stage))
@@ -3775,12 +3805,91 @@ applyRoute();   // 恢复页面首次加载/刷新时应该显示的视图
 // 切换界面语言：nav/按钮等静态文案由 setLang() 里的 applyStaticI18n() 处理；
 // 这里补上"已经在屏幕上的动态内容"——按当前路由重新渲染一遍（复用现成的 fetch+渲染逻辑，
 // 不是重新发明），外加不受路由管的统计弹窗（如果正开着）。
+// 主题：跟随系统 → 浅色 → 深色，循环切换；存 localStorage，<head> 里的小脚本在首屏前就套上
+(function wireTheme() {
+    const btn = document.getElementById('theme-btn');
+    if (!btn) return;
+    const order = ['system', 'light', 'dark'];
+    const read = () => { try { return localStorage.getItem('theme') || 'system'; } catch { return 'system'; } };
+    const apply = mode => {
+        if (mode === 'system') delete document.documentElement.dataset.theme;
+        else document.documentElement.dataset.theme = mode;
+        btn.dataset.mode = mode;
+        btn.title = T('theme.' + mode);
+        btn.setAttribute('aria-label', T('theme.' + mode));
+    };
+    apply(read());
+    btn.addEventListener('click', () => {
+        const next = order[(order.indexOf(read()) + 1) % order.length];
+        try { if (next === 'system') localStorage.removeItem('theme'); else localStorage.setItem('theme', next); } catch { /* 记不住就只管这一次 */ }
+        apply(next);
+    });
+    document.addEventListener('langchange', () => apply(read()));
+})();
+
+// 侧栏收起成一列图标（列表页用；详情页本来就整个收起）。状态存 localStorage
+(function wireSidebarMini() {
+    const btn = document.getElementById('sb-collapse');
+    if (!btn) return;
+    const root = document.documentElement;
+    const label = () => {
+        const mini = root.classList.contains('sb-mini');
+        btn.title = T(mini ? 'nav.expand' : 'nav.collapse');
+        btn.setAttribute('aria-label', btn.title);
+        // 收起时图标没有字：把名字放进悬停提示
+        document.querySelectorAll('#sidebar .nav-tab, #sidebar .sb-item').forEach(b => {
+            const t = b.querySelector('span');
+            if (t) b.title = mini ? t.textContent : (b.dataset.i18nTitle ? T(b.dataset.i18nTitle) : '');
+        });
+    };
+    label();
+    btn.addEventListener('click', () => {
+        const mini = root.classList.toggle('sb-mini');
+        try { localStorage.setItem('sbMini', mini ? '1' : '0'); } catch { /* 无所谓 */ }
+        label();
+    });
+    document.addEventListener('langchange', label);
+})();
+
+// 档案头的「⋯」和「自动同步」是 <details> 下拉：点外面 / 按 Esc 收起（<details> 自己不会）
+document.addEventListener('click', e => {
+    document.querySelectorAll('#chain-detail-info details[open]').forEach(d => { if (!d.contains(e.target)) d.open = false; });
+});
+document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') document.querySelectorAll('#chain-detail-info details[open]').forEach(d => { d.open = false; });
+});
+
+// 项目 / 转写 / 文档页里侧栏是收起的（CSS：.app:has(#main-view.hidden)），顶栏的菜单按钮把它临时叫出来
+(function wireSidebarPeek() {
+    const app = document.querySelector('.app');
+    if (!app) return;
+    const close = () => app.classList.remove('sb-peek');
+    document.querySelectorAll('.sb-show').forEach(b => b.addEventListener('click', e => {
+        e.stopPropagation();
+        app.classList.toggle('sb-peek');
+    }));
+    document.getElementById('sb-scrim').addEventListener('click', close);
+    document.querySelectorAll('#sidebar .nav-tab, #sidebar .sb-item').forEach(b => b.addEventListener('click', close));
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') close(); });
+    window.addEventListener('hashchange', close);
+})();
+
 const uiLangToggle = document.getElementById('ui-lang-toggle');
+function syncLangSeg() {
+    if (!uiLangToggle) return;
+    uiLangToggle.querySelectorAll('[data-lang]').forEach(b => {
+        const on = b.dataset.lang === currentLang;
+        b.classList.toggle('on', on);
+        b.setAttribute('aria-checked', on ? 'true' : 'false');
+    });
+}
 if (uiLangToggle) {
-    uiLangToggle.textContent = currentLang === 'zh' ? 'EN' : '中';
-    uiLangToggle.addEventListener('click', () => {
-        setLang(currentLang === 'zh' ? 'en' : 'zh');
-        uiLangToggle.textContent = currentLang === 'zh' ? 'EN' : '中';
+    syncLangSeg();
+    uiLangToggle.addEventListener('click', e => {
+        const b = e.target.closest('[data-lang]');
+        if (!b || b.dataset.lang === currentLang) return;
+        setLang(b.dataset.lang);
+        syncLangSeg();
     });
 }
 document.addEventListener('langchange', () => {

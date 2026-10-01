@@ -5,7 +5,7 @@
 
 const CX_TABS = ['read', 'ask', 'topics', 'predictions', 'cards', 'episodes'];
 const CX_CARD_TABS = ['ask', 'topics', 'predictions', 'cards'];
-const CITE_RE = /\[#((?:[A-Z]:)?\d+(?:_[0-9a-f]{8})?-\d+)\]/g;
+const CITE_RE = /\[#((?:[A-Z]:)?[dt]?\d+(?:_[0-9a-f]{8})?-\d+)\]/g;   // 3-12 卡片；d2-14 文档段落；t5-3 转写段落
 const CAN_ASK = () => !window.VERBATIM_DEMO || window.VERBATIM_DEMO_ASK;
 let cx = { id: null, cards: null, chain: null, sub: null, tab: null, avail: {}, picked: false, loaded: {}, timers: {} };
 
@@ -22,21 +22,35 @@ function cxClearTimers() {
     cx.timers = {};
 }
 
-// ----- 入口 1：打开博主页（app.js openChainDetail）——先复位，哪些标签可用等数据到了再定 -----
+// ----- 入口 1：打开项目（app.js openChainDetail）——先复位，中间默认是问答，Studio 里哪些能用等数据到了再定 -----
 function exploreOpen(id) {
     cxClearTimers();
     cx = { id, cards: null, chain: null, sub: null, tab: null, avail: { read: null, cards: null },
-           picked: false, loaded: {}, timers: {} };
+           picked: false, loaded: {}, timers: {}, people: [], person: null };
     predsState = { v: null, shown: 30 };
     topicsState = { data: null, sel: null, shown: 24, col: null, hlSt: null, cards: {} };
     readState = { doc: null, files: null };
     ['cx-read', 'cx-ask', 'cx-topics', 'cx-preds'].forEach(i => { document.getElementById(i).innerHTML = ''; });
     document.getElementById('cx-digest').innerHTML = '';
     document.querySelectorAll('#chain-explore .cx-tab').forEach(b => {
-        b.onclick = () => { cx.picked = true; cxShowTab(b.dataset.cx); };
+        b.onclick = () => {
+            if (b.classList.contains('off')) { showToast(T(cxHasRec() ? 'nb.needsCards' : 'nb.needsRec')); return; }
+            cx.picked = true;
+            // 上面的格子都是「做一份新的」：先弹设置框；做好的进下面列表，点列表里的才在工作台栏里展开
+            const t = b.dataset.cx;
+            if (t === 'read') { readPicker(); return; }
+            if (VIEW_TABS.includes(t)) { viewPicker(t); return; }
+            if (t === 'compare') { comparePicker(); return; }
+            cxShowTab(t);
+        };
     });
+    if (typeof closeSourceReader === 'function') closeSourceReader();
+    if (typeof nbShowPane === 'function') nbShowPane('main');
     cxApplyAvail();
     subLoad(id);
+    peopleLoad();
+    if (typeof srcLoad === 'function') srcLoad();
+    if (typeof stOpen === 'function') stOpen(id);
     if (typeof lastChainDetail !== 'undefined' && lastChainDetail && lastChainDetail.id === id) cxFillHead(lastChainDetail);
 }
 
@@ -44,77 +58,243 @@ function exploreOpen(id) {
 function exploreInit(id, cardsResp) {
     if (cx.id !== id) exploreOpen(id);
     cx.cards = cardsResp;
-    cxSetAvail({ cards: true });
+    cxSetAvail({ cards: (cardsResp.cards || []).length > 0 });
     cxFillHead();
 }
 
-// 可用性：read = 有画像（或镜头）；cards = 有证据卡。null = 还不知道
+// 可用性：read = 有画像（或镜头）；cards = 有证据卡；src = 有能检索的原文（文档 / 入索引的录音）。null = 还不知道
 function cxSetAvail(patch) {
     Object.assign(cx.avail, patch);
     cxApplyAvail();
 }
 
 function cxTabOk(t) {
-    if (t === 'episodes') return true;
-    if (t === 'read') return !!cx.avail.read || !!cx.avail.cards;   // 没画像但有卡：还能在这里生成镜头
-    if (t === 'ask') return !!cx.avail.cards && CAN_ASK();     // 演示版没开提问：不给这个标签
-    return CX_CARD_TABS.includes(t) && !!cx.avail.cards;
+    if (t === 'studio') return typeof stState !== 'undefined' && !!stState.cur;     // 工作台里生成的一份
+    if (t === 'episodes') return !!(cx.chain && (cx.chain.videos || []).some(v => v.task_id));
+    const pc = cxPeopleCards();                                      // 项目里引用的博主有卡也算
+    if (t === 'read') return !!cx.avail.read || !!cx.avail.cards || pc || cx.people.some(p => p.portrait);   // 没画像但有卡：还能在这里生成镜头
+    if (t === 'ask') return (!!cx.avail.cards || !!cx.avail.src || pc) && CAN_ASK();
+    if (t === 'compare') return cx.people.filter(p => p.has_cards).length >= 2 && CAN_ASK();
+    return CX_CARD_TABS.includes(t) && (!!cx.avail.cards || pc);
 }
 
+// Studio 的格子一直摆着，暂时用不了的变灰（点了说为什么）；中间默认是问答
 function cxApplyAvail() {
-    document.querySelectorAll('#chain-explore .cx-tab').forEach(b =>
-        b.classList.toggle('hidden', !cxTabOk(b.dataset.cx)));
-    // 选哪个标签：用户这次点过的 > 上次停留的（可用的话）> 解读 > 分集
-    let want = cx.tab;
-    if (!cx.picked || !cxTabOk(want)) {
-        const stored = cxStore('cx.tab');
-        const demoAsk = stored === 'ask' && !CAN_ASK();
-        // 有画像先看解读；没画像但有卡先去问（演示版去话题）；都没有就是分集
-        const fallback = cx.avail.read ? 'read' : cx.avail.cards ? (CAN_ASK() ? 'ask' : 'topics')
-            : cx.avail.read === null || cx.avail.cards === null ? null : 'episodes';
-        want = stored && cxTabOk(stored) && !demoAsk ? stored : fallback;
-        // 还在等数据、而上次停留的标签可能马上可用：先别乱跳
-        if (!want) want = cx.avail.read === null ? (cxTabOk(stored) ? stored : 'episodes') : 'episodes';
-    }
-    if (want !== cx.tab) cxShowTab(want, true);
+    const person = !!(cx.chain && cx.chain.url);
+    // 只有文档、没有录音的项目：画像 / 立场 / 预测 / 原话 / 录音这几格根本用不上，不摆
+    const noRec = !!cx.chain && !cxHasRec();
+    document.querySelectorAll('#chain-explore .cx-tab.nb-tile').forEach(b => {
+        const ok = cxTabOk(b.dataset.cx);
+        b.classList.toggle('off', !ok);
+        b.classList.toggle('hidden', noRec || (b.dataset.cx === 'compare' && !cxTabOk('compare')));   // 对比：项目里至少两个人有卡
+        b.setAttribute('aria-disabled', ok ? 'false' : 'true');
+        // 悬停说明：能用的写这是什么，用不了的写缺什么
+        b.title = !ok && b.dataset.cx !== 'episodes'
+            ? T(cxHasRec() ? 'nb.needsCardsShort' : 'nb.needsRecShort') : T('nb.tile.' + b.dataset.cx + (person ? '' : 'Col'));
+    });
+    const want = cx.tab && cxTabOk(cx.tab) ? cx.tab : (cxTabOk('ask') ? 'ask' : null);
+    // 数据还没到齐：先别摆「还没有来源」
+    if (!want && (cx.avail.cards === null || cx.avail.src === undefined)) return;
+    if (want !== cx.tab || !want) cxShowTab(want, true);
 }
 
+// 画像 / 立场 / 预测 / 原话都是从录音里抽的；只有文档的项目点了要说清楚缺的是录音
+function cxHasRec() {
+    return !!(cx.chain && (cx.chain.url || (cx.chain.videos || []).length)) || (cx.people || []).length > 0;
+}
+
+// ================= 项目里的人（一个项目可以有好几个博主）=================
+// 画像、镜头、立场、预测、原话跟着「人」走：每个博主在自己的链条里算一次，几个项目共用。
+// 这几格打开时顶上一排人名，点谁看谁；问答 / 报告 / 闪卡跟着左栏勾选的来源走，不受这个影响。
+const PERSON_TABS = ['read', 'topics', 'predictions', 'cards'];
+const VIEW_TABS = ['topics', 'predictions', 'cards'];      // 现算的视图：做一份 = 在列表里记一条「谁的哪一样」
+function cxPid() { return cx.person || cx.id; }
+function cxPerson(id) { return (cx.people || []).find(p => p.chain_id === (id || cxPid())) || null; }
+function cxMulti() { return (cx.people || []).length > 1; }
+function cxPeopleCards() { return (cx.people || []).some(p => p.has_cards && p.chain_id !== cx.id); }
+
+function personName(p) {
+    if (!p) return '';
+    if (p.self && !p.url) return T('pp.loose');          // 没频道的项目自己抽过卡的那些录音
+    return p.name || T('pp.unnamed');
+}
+
+function personFace(p, size) {
+    const s = size || 22;
+    if (p.avatar) return `<img class="pp-face" src="${escapeHtml(p.avatar)}" width="${s}" height="${s}" alt="" referrerpolicy="no-referrer" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'pp-face pp-ini',textContent:'${escapeHtml(personName(p).slice(0, 1))}'}))">`;
+    return `<span class="pp-face pp-ini">${escapeHtml(p.emoji || personName(p).slice(0, 1))}</span>`;
+}
+
+function peopleChipsHtml() {
+    return cx.people.map(p => `<button type="button" class="pp-chip${p.chain_id === cxPid() ? ' on' : ''}" data-pid="${escapeHtml(p.chain_id)}"
+        ${p.has_cards || p.portrait ? '' : `title="${escapeHtml(T('pp.notYet'))}"`}>${personFace(p)}<span>${escapeHtml(personName(p))}</span>
+        ${p.has_cards || p.portrait ? '' : `<span class="pp-wait">${T('pp.wait')}</span>`}</button>`).join('');
+}
+
+async function peopleLoad() {
+    const id = cx.id;
+    if (!id) return;
+    let r;
+    try { r = await (await fetch(`/api/chain/${id}/people`)).json(); } catch { return; }
+    if (cx.id !== id || !r || !r.people) return;
+    const sig = ps => JSON.stringify(ps.map(p => [p.chain_id, p.has_cards, p.portrait, p.lenses, p.final_doc]));
+    const changed = sig(r.people) !== sig(cx.people || []);
+    cx.people = r.people;
+    if (!cx.person || !cxPerson(cx.person)) {
+        const first = cx.people.find(p => p.has_cards) || cx.people[0];
+        cx.person = first ? first.chain_id : null;
+    }
+    if (!changed) return;
+    if (cx.chain) cxFillHead(cx.chain);          // 「人物画像」还是「综述」跟着项目里有没有博主变
+    cxApplyAvail();
+    if (typeof stLoad === 'function' && stState.id === id) stLoad();     // 工作台列表里每个人的画像 / 镜头
+}
+
+// 换人：按人看的几格都作废重读，正开着的那格马上换成这个人的
+function cxSetPerson(pid) {
+    if (!pid || pid === cxPid()) return;
+    cx.person = pid;
+    PERSON_TABS.forEach(t => { delete cx.loaded[t]; });
+    predsState = { v: null, shown: 30 };
+    topicsState = { data: null, sel: null, shown: 24, col: null, hlSt: null, cards: {} };
+    readState = { doc: null, files: null };
+    ['cx-read', 'cx-topics', 'cx-preds'].forEach(i => { document.getElementById(i).innerHTML = ''; });
+    const tab = cx.tab;
+    if (tab === 'read') { cx.loaded.read = true; readLoad(); }
+    else if (tab === 'topics') { cx.loaded.topics = true; topicsLoad(); }
+    else if (tab === 'predictions') { cx.loaded.predictions = true; predsLoad(); }
+    else if (tab === 'cards' && typeof loadChainCards === 'function') loadChainCards(pid);
+    if (VIEW_TABS.includes(tab) && cxMulti()) nbvTitle(personName(cxPerson()));
+}
+
+function nbEmptyHtml() {
+    return `<div class="nb-empty-in"><div class="nb-empty-ic">👋</div>
+        <h3>${T('nb.emptyT')}</h3><p>${T('nb.emptyD')}</p>
+        ${window.VERBATIM_DEMO ? '' : `<button type="button" class="btn-primary cx-send" onclick="openAddSources()">＋ ${T('as.title')}</button>`}</div>`;
+}
+
+// 中间栏永远是对话；工作台里的东西（画像、立场、预测、原话、录音、生成的报告 / 闪卡……）在工作台这一栏里展开，
+// 跟 NotebookLM 一样——工作台变宽、对话往左收，来源栏留着对照原文。面板本身挪进 #nbv-body，
+// 关掉再挪回中间栏，各面板自己的代码不用知道这回事
+const NBV_WIDE = new Set(['topics', 'predictions', 'cards', 'episodes']);   // 表格类，给工作台多分点宽度
 function cxShowTab(tab, auto) {
+    const viewer = !!tab && tab !== 'ask';
     cx.tab = tab;
-    if (!auto) cxStore('cx.tab', tab);
-    document.querySelectorAll('#chain-explore .cx-tab').forEach(b => {
+    document.querySelectorAll('#chain-explore .cx-tab:not(.nb-tile)').forEach(b => {
         const on = b.dataset.cx === tab;
         b.classList.toggle('on', on);
         b.setAttribute('aria-selected', on ? 'true' : 'false');
     });
-    document.querySelectorAll('#chain-explore [data-cx-panel]').forEach(p =>
-        p.classList.toggle('hidden', p.dataset.cxPanel !== tab));
-    const desc = document.getElementById('cx-tab-desc');      // 标签名负责好认，这一行负责讲清楚
-    const colKey = 'cx.desc.' + tab + 'Col';
-    const isCol = cx.chain && cx.chain.kind === 'collection';
-    if (desc) desc.textContent = T(isCol && T(colKey) !== colKey ? colKey : 'cx.desc.' + tab);
-    if (cx.loaded[tab]) return;
+    const ex = document.getElementById('chain-explore');
+    const main = document.querySelector('#chain-explore .nb-main');
+    const body = document.getElementById('nbv-body');
+    if (main && body) {
+        [...body.children].forEach(p => { if (p.dataset.cxPanel !== tab) main.appendChild(p); });
+        const p = viewer && main.querySelector(`:scope > [data-cx-panel="${tab}"]`);
+        if (p) body.appendChild(p);
+    }
+    if (ex) {
+        ex.classList.toggle('nbv-on', viewer);
+        ex.classList.toggle('nbv-wide', viewer && NBV_WIDE.has(tab));
+        if (viewer) ex.classList.remove('studio-min');   // 工作台收着也得展开，不然打开的东西看不见
+    }
+    const askOn = cxTabOk('ask');
+    document.querySelectorAll('#chain-detail-view [data-cx-panel]').forEach(p => {
+        const k = p.dataset.cxPanel;
+        p.classList.toggle('hidden', !(k === tab || (k === 'ask' && askOn && (tab === 'ask' || viewer))));
+    });
+    const empty = document.getElementById('nb-empty');
+    if (empty) {
+        const show = !tab || (viewer && !askOn);
+        empty.classList.toggle('hidden', !show);
+        if (show) empty.innerHTML = nbEmptyHtml();
+    }
+    // 面包屑「工作台 › 格子名」；格子类的不再重复一个大标题，下面一行讲清楚这是什么
+    const nbv = document.getElementById('nb-viewer');
+    if (nbv) {
+        nbv.classList.toggle('hidden', !viewer);
+        document.getElementById('nbv-acts').innerHTML = '';
+        const tile = document.querySelector(`#chain-explore .nb-tile[data-cx="${tab}"] .nb-tl`);
+        nbvKind(tab === 'read' ? T(readIsCol() ? 'st.kindReadCol' : 'st.kindRead')
+            : tab === 'episodes' ? T('nb.episodes') : tile ? tile.textContent : '');
+        // 按人看的：标题写是谁的（项目里不止一个人时）
+        nbvTitle(VIEW_TABS.includes(tab) && cxMulti() ? personName(cxPerson()) : '');
+        const back = document.querySelector('#nbv-x span');
+        if (back) back.textContent = T(tab === 'episodes' ? 'nb.sources' : 'nb.studio');     // 全部录音是从来源栏打开的
+        const colKey = 'cx.desc.' + tab + 'Col';
+        const isCol = cx.chain && !cx.chain.url;
+        document.getElementById('nbv-desc').textContent = !viewer || tab === 'studio' || tab === 'read' ? ''
+            : T(isCol && T(colKey) !== colKey ? colKey : 'cx.desc.' + tab);
+        if (viewer) { nbFit(); body.scrollTop = 0; }
+    }
+    if (tab === 'cards' && typeof chainCards !== 'undefined' && chainCards.id !== cxPid()) loadChainCards(cxPid());
+    document.querySelectorAll('#st-list .st-item').forEach(el => el.classList.toggle('on',
+        viewer && typeof stState !== 'undefined' && el.dataset.id === stOpenId()));
+    if (typeof nbShowPane === 'function' && window.innerWidth < 1080) {
+        if (viewer) nbShowPane('studio');
+        else if (!auto) nbShowPane('main');
+    }
+    if (askOn && !cx.loaded.ask && (tab === 'ask' || viewer)) { cx.loaded.ask = true; askLoad(); }
+    if (!tab || cx.loaded[tab]) return;
     cx.loaded[tab] = true;
     if (tab === 'read') readLoad();
-    else if (tab === 'ask') askLoad();
     else if (tab === 'topics') topicsLoad();
     else if (tab === 'predictions') predsLoad();
 }
+
+// 工作台列表里哪一条正开着（报告等是 stState.cur；画像 / 镜头是阅读器里那份）
+function stOpenId() {
+    if (cx.tab === 'studio') return stState.cur ? stState.cur.id : '';
+    if (cx.tab === 'read' && readState.doc) return 'doc:' + cxPid() + ':' + readState.doc;
+    if (VIEW_TABS.includes(cx.tab)) {
+        const v = (stState.items || []).find(o => o.kind === 'view' && o.view === cx.tab && o.chain === cxPid());
+        return v ? v.id : '';
+    }
+    return '';
+}
+
+function nbvTitle(text) {
+    const el = document.getElementById('nbv-title');
+    if (el) el.textContent = text || '';
+}
+
+function nbvKind(text) {
+    const el = document.getElementById('nbv-kind');
+    if (el) el.textContent = text || '';
+}
+
+function nbvClose() {
+    if (!cx.tab || cx.tab === 'ask') return;
+    cxShowTab(cxTabOk('ask') ? 'ask' : null, true);
+}
+
+(function wireViewer() {
+    ['nbv-x', 'nbv-shrink'].forEach(id => {
+        const b = document.getElementById(id);
+        if (b) b.addEventListener('click', nbvClose);
+    });
+    document.addEventListener('keydown', e => {
+        if (e.key !== 'Escape' || document.querySelector('.settings-overlay:not(.hidden)') || document.getElementById('pj-pop')) return;
+        const nbv = document.getElementById('nb-viewer');
+        if (nbv && !nbv.classList.contains('hidden')) nbvClose();
+    });
+})();
 
 // ----- 档案头里的两个空位：修辞三指标（#cp-rh）、订阅按钮（#cp-sub）。
 // 档案头每次轮询都会整个重画，所以数据缓存在 cx 上，重画后由 app.js 调这里补回去 -----
 function cxFillHead(chain) {
     if (chain && chain.id === cx.id) {
         cx.chain = chain;
-        const isCol = chain.kind === 'collection';
-        const epTab = document.querySelector('#chain-explore .cx-tab[data-cx=episodes] [data-i18n]');
-        if (epTab) epTab.textContent = T(isCol ? 'col.items' : 'chainDetail.episodes');
-        const rdTab = document.querySelector('#chain-explore .cx-tab[data-cx=read]');
-        if (rdTab) rdTab.textContent = T(isCol ? 'cx.tab.readCol' : 'cx.tab.read');
-        const desc = document.getElementById('cx-tab-desc');
-        if (desc && cx.tab && isCol && T('cx.desc.' + cx.tab + 'Col') !== 'cx.desc.' + cx.tab + 'Col') desc.textContent = T('cx.desc.' + cx.tab + 'Col');
-        const read = !!chain.final_doc || !!chain.analyze && chain.stage === 'done';
+        const person = !!chain.url;
+        // 能检索的原文：文档、项目里额外加的录音，或者开了「转写全文入索引」的录音
+        const src = (chain.docs || []).length > 0 || (chain.recordings || []).length > 0
+            || (!!chain.index_transcripts && (chain.videos || []).some(v => v.status === 'done'));
+        if (cx.avail.src !== src) cxSetAvail({ src });
+        const rd = document.querySelector('#chain-explore .nb-tile[data-cx=read] .nb-tl');
+        if (rd) rd.textContent = T(person || (cx.people || []).some(p => p.url) ? 'cx.tab.read' : 'cx.tab.readCol');
+        const read = !!chain.final_doc || !!chain.analyze && chain.stage === 'done' && !!cx.avail.cards;
         if (cx.avail.read !== read) cxSetAvail({ read });
+        cxApplyAvail();
     }
     const rh = document.getElementById('cp-rh');
     const r = cx.cards && cx.cards.rhetoric;
@@ -129,7 +309,20 @@ function cxFillHead(chain) {
                 <div class="n">${pct(r.tradeoff_ratio)}</div><div class="l">${T('rh.trade')}</div></div>` : '';
     }
     subRender();
+    askHeroFill();
+    nbFit();
+    // 工作台列表里的画像要知道哪份文件是画像（chain.final_doc）：项目数据第一次到时补读一次
+    if (cx.chain && cx._stDocsFor !== cx.chain.id && typeof stLoad === 'function') { cx._stDocsFor = cx.chain.id; stLoad(); }
 }
+
+// 宽屏时三栏正好一屏高：量出三栏顶到页面顶的距离给 CSS（档案头会因为进度条、报错多一行，所以每次重画都量）
+function nbFit() {
+    const nb = document.getElementById('chain-explore');
+    if (!nb || !nb.offsetParent) return;
+    const top = Math.round(nb.getBoundingClientRect().top + window.scrollY);
+    document.documentElement.style.setProperty('--nb-top', top + 'px');
+}
+window.addEventListener('resize', () => { clearTimeout(nbFit.t); nbFit.t = setTimeout(nbFit, 120); });
 
 // ================= 订阅（档案头右上角：按钮 + 下拉设置）=================
 async function subLoad(id) {
@@ -147,7 +340,7 @@ async function subLoad(id) {
 function subRender() {
     const box = document.getElementById('cp-sub');
     const s = cx.sub;
-    const isCol = cx.chain && cx.chain.kind === 'collection';      // 合集没有频道可订阅
+    const isCol = cx.chain && ['collection', 'project'].includes(cx.chain.kind);      // 合集没有频道可订阅
     if (!box || !s || window.VERBATIM_DEMO || isCol) { if (box) box.innerHTML = ''; return; }
     const id = cx.id;
     const on = !!s.on;
@@ -158,7 +351,7 @@ function subRender() {
     const iv = freq.includes(+s.interval_h) ? +s.interval_h : 168;
     box.innerHTML = on ? `
         <details class="cp-subd"${wasOpen ? ' open' : ''}>
-            <summary class="btn-secondary cp-btn cx-sub-btn on">↻ ${T('sub.f.' + iv)}${T('sub.syncing')} ▾</summary>
+            <summary class="btn-secondary cp-btn cx-sub-btn on" title="${escapeHtml(T('sub.f.' + iv) + T('sub.syncing'))}">↻<span class="sub-label"> ${T('sub.f.' + iv)}${T('sub.syncing')} ▾</span></summary>
             <div class="cp-ops-panel cp-sub-panel">
                 <p class="cx-muted">${T('sub.onHint')}</p>
                 <label class="cx-sub-kw">${T('sub.freq')}
@@ -174,7 +367,7 @@ function subRender() {
                 </div>
             </div>
         </details>`
-        : `<button class="btn-secondary cp-btn cx-sub-btn" type="button" id="sub-on" title="${escapeHtml(T('sub.offHint'))}">${T('sub.follow')}</button>`;
+        : `<button class="btn-secondary cp-btn cx-sub-btn" type="button" id="sub-on" title="${escapeHtml(T('sub.offHint'))}">↻<span class="sub-label"> ${T('sub.follow')}</span></button>`;
     const post = body => fetch(`/api/chain/${id}/subscription`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     const q = sel => box.querySelector(sel);
@@ -220,155 +413,230 @@ function digestRender(d) {
 const LENS_KEYS = ['roast', 'craft', 'fun', 'quotes', 'worldview'];
 let readState = { doc: null, files: null };
 
+// 画像 / 镜头：大窗口里只放正文（一栏、阅读宽度、不套框），标题和「基于几期 · 生成于何时」在窗口顶栏，
+// 重新生成 / 单独打开在右上角。换哪一篇：工作台「人物画像」格子弹出的选择框，或者工作台下面的列表
 async function readLoad() {
-    const id = cx.id;
+    const id = cxPid();
     const box = document.getElementById('cx-read');
-    box.innerHTML = `<div class="cx-thinking">${T('cx.loading')}</div>`;
+    box.innerHTML = `<article class="rd-solo"><div class="md-body rd-body" id="rd-body"><div class="cx-thinking">${T('cx.loading')}</div></div></article>`;
     let files = [];
     try {
         const j = await (await fetch(`/api/chain/${id}/files`)).json();
         files = Array.isArray(j) ? j : (j.files || []);
     } catch { /* 当没有 */ }
-    if (cx.id !== id) return;
+    if (cxPid() !== id) return;
     const names = files.map(f => (typeof f === 'string' ? f : f.name));
     readState.files = names;
-    const chain = cx.chain || {};
-    const portrait = chain.final_doc && names.includes(chain.final_doc) ? chain.final_doc : null;
-    box.innerHTML = `
-        <div class="rd-grid">
-            <article class="rd-doc">
-                <div class="rd-doc-bar">
-                    <span class="rd-doc-name" id="rd-doc-name"></span>
-                    <span class="rd-doc-tools">
-                        <button class="cx-link" type="button" id="rd-full">${T('rd.openFull')}</button>
-                    </span>
-                </div>
-                <div class="md-body rd-body" id="rd-body"></div>
-            </article>
-            <aside class="rd-side">
-                <div class="rd-sec-title">${T('rd.docs')}</div>
-                <div class="rd-list" id="rd-list"></div>
-                ${chain.raw_doc ? `<button class="btn-secondary rd-raw" type="button" id="rd-raw">${T('creators.fullTranscript')} ↗</button>` : ''}
-                <div class="rd-sec-title rd-toc-title">${T('doc.toc')}</div>
-                <nav class="rd-toc" id="rd-toc"></nav>
-            </aside>
-        </div>`;
-    const raw = box.querySelector('#rd-raw');
-    if (raw) raw.onclick = () => navigate(`chain/${id}/doc/${encodeURIComponent(chain.raw_doc)}`);
-    box.querySelector('#rd-full').onclick = () => {
-        if (readState.doc) navigate(`chain/${id}/doc/${encodeURIComponent(readState.doc)}`);
-    };
-    readRenderList(portrait);
-    const first = portrait || LENS_KEYS.map(k => `镜头_${k}.md`).find(n => names.includes(n));
+    const fd = cxFinalDoc();
+    const portrait = fd && names.includes(fd) ? fd : null;
+    const want = readState.want && names.includes(readState.want) ? readState.want : null;
+    readState.want = null;
+    const first = want || portrait || LENS_KEYS.map(k => `镜头_${k}.md`).find(n => names.includes(n));
     if (first) readOpen(first);
     else {
         document.getElementById('rd-body').innerHTML = `<div class="rd-empty"><h3>${T('rd.noPortraitTitle')}</h3>
             <p class="cx-muted">${T('rd.noPortrait')}</p></div>`;
-        document.getElementById('rd-doc-name').textContent = T('rd.portrait');
-        document.querySelector('#cx-read .rd-toc-title').classList.add('hidden');
+        nbvTitle('');
     }
 }
 
-function readRenderList(portrait) {
-    const list = document.getElementById('rd-list');
-    if (!list) return;
-    const names = readState.files || [];
-    const canGen = !window.VERBATIM_DEMO && cx.avail.cards;
-    const item = (name, title, desc, have, key) => `
-        <button type="button" class="rd-item${readState.doc === name ? ' on' : ''}${have ? '' : ' rd-missing'}"
-            data-name="${escapeHtml(name)}" ${key ? `data-lens="${key}"` : ''} ${!have && !canGen ? 'disabled' : ''}>
-            <span class="rd-item-t">${title}</span>
-            <span class="rd-item-d">${desc}</span>
-            <span class="rd-item-s" id="rd-s-${key || 'portrait'}">${have ? '' : (canGen ? T('rd.generate') : T('rd.notYet'))}</span>
-        </button>`;
-    const isCol = cx.chain && cx.chain.kind === 'collection';
-    list.innerHTML = (portrait ? item(portrait, T(isCol ? 'rd.overview' : 'rd.portrait'), T(isCol ? 'rd.overviewDesc' : 'rd.portraitDesc'), true, '') : '')
-        + `<div class="rd-sec-title rd-sub">${T('rd.otherAngles')}</div>`
-        + LENS_KEYS.map(k => item(`镜头_${k}.md`, T('lens.' + k), T('lens.' + k + '.desc'),
-            names.includes(`镜头_${k}.md`), k)).join('');
-    list.querySelectorAll('.rd-item').forEach(b => b.onclick = () => {
-        if (names.includes(b.dataset.name)) readOpen(b.dataset.name);
-        else if (b.dataset.lens) readGenerate(b.dataset.lens);
-    });
+function readIsCol() {
+    const p = cxPerson();
+    if (p) return !p.url && ['collection', 'project'].includes(p.kind);      // 项目里看的是某个人
+    return !!(cx.chain && ['collection', 'project'].includes(cx.chain.kind));
+}
+
+// 正在看的那个人的画像文件名（项目自己的就是 chain.final_doc）
+function cxFinalDoc() {
+    const p = cxPerson();
+    if (p && p.chain_id !== cx.id) return p.final_doc || '';
+    return (cx.chain || {}).final_doc || (p && p.final_doc) || '';
+}
+
+function readLabel(name) {
+    return name.startsWith('镜头_') ? T('lens.' + name.slice(3, -3)) : T(readIsCol() ? 'rd.overview' : 'rd.portrait');
+}
+
+// 「基于 6 期 · 生成于 09-27 12:45」
+function readMeta(name) {
+    const p = cxPerson();
+    const n = p && p.chain_id !== cx.id ? p.episodes : ((cx.cards && cx.cards.episodes) || []).length;
+    const doc = typeof stState !== 'undefined' ? (stState.docs || []).find(d => d.file === name && d.chain === cxPid()) : null;
+    return [n ? T(readIsCol() ? 'rd.basedRec' : 'rd.basedEp', { n }) : '',
+        doc && doc.created_at ? T('rd.madeAt', { at: String(doc.created_at).slice(5, 16) }) : ''].filter(Boolean).join(' · ');
 }
 
 async function readOpen(name) {
-    const id = cx.id;
+    const id = cxPid();
     readState.doc = name;
-    document.querySelectorAll('#rd-list .rd-item').forEach(b => b.classList.toggle('on', b.dataset.name === name));
     const body = document.getElementById('rd-body');
-    const label = name.startsWith('镜头_') ? T('lens.' + name.slice(3, -3))
-        : T(cx.chain && cx.chain.kind === 'collection' ? 'rd.overview' : 'rd.portrait');
-    document.getElementById('rd-doc-name').textContent = label;
+    if (!body) return;
+    if (cx.tab === 'read') {
+        const lensName = /^镜头_/.test(name);
+        nbvKind(T(lensName ? 'st.kindLens' : readIsCol() ? 'st.kindReadCol' : 'st.kindRead'));
+        nbvTitle(readLabel(name));
+        const desc = document.getElementById('nbv-desc');
+        if (desc) desc.textContent = readMeta(name);
+        const acts = document.getElementById('nbv-acts');
+        if (acts) {
+            const lens = (name.match(/^镜头_(\w+)\.md$/) || [])[1];
+            acts.innerHTML = `${lens && !window.VERBATIM_DEMO ? `<button type="button" class="nbv-act" id="rd-regen">${T('rd.regen')}</button>` : ''}
+                <button type="button" class="nbv-act" id="rd-full">${T('rd.openFull')}</button>`;
+            const regen = acts.querySelector('#rd-regen');
+            if (regen) regen.onclick = () => { if (confirm(T('rd.regenConfirm', { name: readLabel(name) }))) readGenerate(lens, true); };
+            acts.querySelector('#rd-full').onclick = () => navigate(`chain/${id}/doc/${encodeURIComponent(name)}`);
+        }
+    }
+    document.querySelectorAll('#st-list .st-item').forEach(el => el.classList.toggle('on', el.dataset.id === 'doc:' + id + ':' + name));
     body.innerHTML = `<div class="cx-thinking">${T('cx.loading')}</div>`;
     let md = '';
     try {
         const r = await fetch(`/api/chain/${id}/file?name=${encodeURIComponent(name)}`);
         md = r.ok ? await r.text() : '';
     } catch { /* 下面报错 */ }
-    if (cx.id !== id || readState.doc !== name) return;
+    if (cxPid() !== id || readState.doc !== name) return;
     // 模型偶尔在正文前留一句「好的，这是修订后的画像」：第一个标题之前的寒暄不显示
     const h = md.search(/^#\s/m);
     if (h > 0 && h < 400) md = md.slice(h);
     body.innerHTML = md ? renderMarkdown(md) : `<p class="cx-err">${T('common.couldNotLoad')}</p>`;
-    // 本页目录：二级标题
-    const toc = document.getElementById('rd-toc');
-    const hs = [...body.querySelectorAll('h2, h3')];
-    hs.forEach((h, i) => { h.id = 'rd-h-' + i; });
-    toc.innerHTML = hs.map((h, i) => `<a href="#" data-h="${i}" class="${h.tagName === 'H3' ? 'rd-h3' : ''}">${escapeHtml(h.textContent)}</a>`).join('');
-    toc.previousElementSibling.classList.toggle('hidden', !hs.length);
-    toc.querySelectorAll('a').forEach(a => a.onclick = e => {
-        e.preventDefault();
-        document.getElementById('rd-h-' + a.dataset.h).scrollIntoView({ behavior: 'smooth', block: 'start' });
-    });
-    if (window.scrollY > document.getElementById('chain-explore').offsetTop) {
-        document.getElementById('chain-explore').scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
+    const nbvBody = document.getElementById('nbv-body');
+    if (nbvBody) nbvBody.scrollTop = 0;
 }
 
-async function readGenerate(lens) {
-    const id = cx.id;
+// 「人物画像」格子：先选看哪一篇（像 Gemini 生成前的设置框）。生成过的直接打开，没生成的点了就后台生成，
+// 生成好跟别的产出一样出现在工作台下面的列表里
+function readPicker() {
+    let ov = document.getElementById('rd-pick');
+    if (!ov) {
+        ov = document.createElement('div');
+        ov.id = 'rd-pick';
+        ov.className = 'settings-overlay hidden';
+        document.body.appendChild(ov);
+    }
+    toolOverlay('rd-pick');
+    const chain = cx.chain || {};
+    const docs = (typeof stState !== 'undefined' && stState.docs) || [];
+    const has = f => docs.find(d => d.file === f && d.chain === cxPid());
+    const me = cxPerson();
+    const canGen = !window.VERBATIM_DEMO && (me ? !!me.has_cards : !!cx.avail.cards);
+    const busy = l => typeof stState !== 'undefined' && stState.lensBusy.has(cxPid() + ':' + l);
+    const card = (file, title, desc, lens) => {
+        const d = has(file);
+        const status = busy(lens) ? `<span class="st-spin" aria-hidden="true"></span>${T('rd.generating')}`
+            : d ? T('rd.madeAt', { at: String(d.created_at || '').slice(5, 16) })
+            : lens ? (canGen ? T('rd.notMade') : T('rd.notYet')) : T('rd.noPortraitShort');
+        const act = busy(lens) ? '' : d ? `<button type="button" class="rd-pick-go" data-open="${escapeHtml(file)}">${T('rd.open')}</button>`
+            : lens && canGen ? `<button type="button" class="rd-pick-go primary" data-gen="${lens}">${T('rd.generate')}</button>` : '';
+        return `<div class="rd-pick-card${d ? ' have' : ''}">
+            <b>${escapeHtml(title)}</b><span class="rd-pick-d">${escapeHtml(desc)}</span>
+            <div class="rd-pick-f"><span class="rd-pick-s">${status}</span>${act}</div></div>`;
+    };
+    const col = readIsCol();
+    ov.innerHTML = `<div class="cx-modal rd-pick" role="dialog" aria-modal="true" aria-labelledby="rd-pick-t">
+        <button class="settings-x" type="button" data-close aria-label="${escapeHtml(T('common.close'))}">×</button>
+        <h2 class="cx-modal-title" id="rd-pick-t">${escapeHtml(T(col ? 'cx.tab.readCol' : 'cx.tab.read'))}</h2>
+        <p class="cx-muted">${T(col ? 'rd.pickDCol' : 'rd.pickD')}</p>
+        ${cxMulti() ? `<div class="pp-bar" id="rd-pick-pp">${peopleChipsHtml()}</div>` : ''}
+        <div class="rd-pick-grid">
+            ${card(cxFinalDoc() || '-', T(col ? 'rd.overview' : 'rd.portrait'), T(col ? 'rd.overviewDesc' : 'rd.portraitDesc'), '')}
+            ${LENS_KEYS.map(k => card(`镜头_${k}.md`, T('lens.' + k), T('lens.' + k + '.desc'), k)).join('')}
+        </div></div>`;
+    ov.querySelectorAll('[data-open]').forEach(b => b.onclick = () => { ov.classList.add('hidden'); stOpenDoc(b.dataset.open, cxPid()); });
+    ov.querySelectorAll('#rd-pick-pp [data-pid]').forEach(b => b.onclick = () => { cxSetPerson(b.dataset.pid); readPicker(); });
+    ov.querySelectorAll('[data-gen]').forEach(b => b.onclick = () => {
+        ov.classList.add('hidden');
+        readGenerate(b.dataset.gen);
+        showToast(T('rd.genStarted', { name: T('lens.' + b.dataset.gen) }));
+    });
+    ov.classList.remove('hidden');
+}
+
+async function readGenerate(lens, force) {
+    const id = cxPid();
+    const proj = cx.id;
+    const key = id + ':' + lens;
     const status = document.getElementById('rd-s-' + lens);
     if (status) status.textContent = T('rd.generating');
+    if (force) {                                                  // 重新生成：正文那里也提示一下
+        const body = document.getElementById('rd-body');
+        if (body && readState.doc === `镜头_${lens}.md`) body.innerHTML = `<div class="cx-thinking">${T('rd.regenerating')}</div>`;
+    }
+    if (typeof stLensBusy === 'function') stLensBusy(key, true);
     try {
         const r = await (await fetch(`/api/chain/${id}/lens`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lens }) })).json();
-        if (r.error) { if (status) status.textContent = r.error.slice(0, 40); return; }
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lens, force: !!force }) })).json();
+        if (r.error) { if (status) status.textContent = r.error.slice(0, 40); if (typeof stLensBusy === 'function') stLensBusy(key, false); return; }
         const done = () => {
-            if (cx.id !== id) return;
-            readState.files = [...(readState.files || []), `镜头_${lens}.md`];
-            readRenderList(cx.chain && cx.chain.final_doc);
-            readOpen(`镜头_${lens}.md`);
+            if (typeof stLensBusy === 'function') stLensBusy(key, false);
+            if (cx.id !== proj || cxPid() !== id) return;
+            if (!(readState.files || []).includes(`镜头_${lens}.md`)) readState.files = [...(readState.files || []), `镜头_${lens}.md`];
+            // 正开着这一篇（重新生成）：换成新版；没开着就只在列表里出现，不打断人
+            if (cx.tab === 'read' && readState.doc === `镜头_${lens}.md`) readOpen(`镜头_${lens}.md`);
+            else showToast(T('rd.genDone', { name: T('lens.' + lens) }));
         };
         if (r.ready) { done(); return; }
         let n = 60;
         const poll = async () => {
-            if (cx.id !== id) return;
-            if (n-- <= 0) { if (status) status.textContent = T('chainDetail.stillGenerating'); return; }
+            if (cx.id !== proj) return;
+            if (n-- <= 0) {
+                if (status) status.textContent = T('chainDetail.stillGenerating');
+                if (typeof stLensBusy === 'function') stLensBusy(key, false);
+                return;
+            }
             try {
                 const g = await (await fetch(`/api/chain/${id}/lens/${lens}`)).json();
                 if (g.ready) { done(); return; }
-                if (g.error) { if (status) status.textContent = T('chainDetail.generationFailed', { message: g.error.slice(0, 40) }); return; }
+                if (g.error) {
+                    if (status) status.textContent = T('chainDetail.generationFailed', { message: g.error.slice(0, 40) });
+                    if (typeof stLensBusy === 'function') stLensBusy(key, false);
+                    return;
+                }
             } catch { /* 抖动忽略 */ }
             cx.timers.lens = setTimeout(poll, 3000);
         };
         cx.timers.lens = setTimeout(poll, 3000);
-    } catch { if (status) status.textContent = T('chainDetail.generationFailedGeneric'); }
+    } catch {
+        if (status) status.textContent = T('chainDetail.generationFailedGeneric');
+        if (typeof stLensBusy === 'function') stLensBusy(key, false);
+    }
 }
 
 // ================= 出处芯片 + 来源列表（问答、对比、订阅摘要共用）=================
 function citeLabel(c) {
     const who = c.creator ? escapeHtml(String(c.creator).slice(0, 14)) + ' · ' : '';
-    return `${who}EP${c.ep_no}${c.ts ? ' · ' + c.ts : ''}`;
+    const lab = escapeHtml(c.label || 'EP' + c.ep_no);
+    if (c.kind === 'doc') {             // 文档：短标题 + 第几页（DOC1 这种编号用户认不出是哪份）
+        const t = String(c.episode || c.label || '');
+        // 没页码的（粘贴的文字、Markdown、网页）带上小标题，不然同一份文档的几个出处长得一模一样；
+        // 小标题就是文档标题（网页开头那个 # 标题）的不重复写
+        let h = !c.page && c.heading ? String(c.heading).replace(/^#+\s*/, '') : '';
+        if (h && (t.startsWith(h) || h.startsWith(t))) h = '';
+        const where = c.page ? ' · p.' + c.page : (h ? ' · ' + escapeHtml(h.length > 10 ? h.slice(0, 9) + '…' : h) : '');
+        return `${escapeHtml(t.length > 12 ? t.slice(0, 11) + '…' : t)}${where}`;
+    }
+    return `${who}${lab}${c.ts ? ' · ' + c.ts : ''}`;
 }
 
-function citedHtml(md, citations) {
-    // 先按 Markdown 渲染（会转义），[#3-12] 里没有要转义的字符，渲染后原样还在
-    return renderMarkdown(md || '').replace(CITE_RE, (m, cid) => {
-        const c = citations[cid];
-        if (!c) return '';
-        return `<button type="button" class="cx-cite" data-cid="${escapeHtml(cid)}"
-            title="${escapeHtml(c.quote.slice(0, 200))}">${citeLabel(c)}</button>`;
+function citedHtml(md, citations, order) {
+    // 先按 Markdown 渲染（会转义），[#3-12] 里没有要转义的字符，渲染后原样还在。
+    // 出处画成小小的数字圆点（跟 Gemini 一样，正文不被一串「EP1 · 00:48」打断）：
+    // 编号 = 在这段文字里第一次出现的顺序，跟下面「出处」列表的编号对得上；
+    // 悬停看「EP1 · 00:48 + 原话」，点开照样跳到那一秒 / 那一页。
+    // order 给了就按它编号（闪卡、自测题一段段分开画，用整份产出的统一顺序）
+    order = order || citedOrder(md, citations);
+    const one = `\\[#(?:[A-Z]:)?[dt]?\\d+(?:_[0-9a-f]{8})?-\\d+\\]`;
+    return renderMarkdown(md || '').replace(new RegExp(`(?:${one}\\s*)+`, 'g'), run => {
+        const seen = new Set();
+        let out = '';
+        for (const m of run.matchAll(CITE_RE)) {
+            const c = citations[m[1]];
+            if (!c || seen.has(m[1])) continue;
+            seen.add(m[1]);
+            const n = order.indexOf(m[1]) + 1;
+            out += `<button type="button" class="cx-cite" data-cid="${escapeHtml(m[1])}"
+            title="${citeLabel(c)} — ${escapeHtml(c.quote.slice(0, 200))}">${n || '·'}</button>`;
+        }
+        return out + (/\s$/.test(run) ? ' ' : '');
     });
 }
 
@@ -381,19 +649,30 @@ function citedOrder(md, citations) {
     return out;
 }
 
-function sourceItemHtml(cid, c) {
+function sourceItemHtml(cid, c, n) {
+    const num = n ? `<span class="cx-src-num">${n}</span>` : '';     // 跟正文里的数字圆点对得上
+    if (c.kind === 'doc') {             // 文档段落：没有「AI 转述」，原文就是全部；按钮是「在文档里打开」
+        const where = [c.page ? T('reader.page', { n: c.page }) : '', c.heading || ''].filter(Boolean).join(' · ');
+        return `<div class="cx-src" data-cid="${escapeHtml(cid)}" data-st="none">${num}
+            <blockquote class="cc-quote">${escapeHtml(c.quote)}</blockquote>
+            <div class="cx-src-foot"><span>${escapeHtml(c.label || '')} · ${escapeHtml(c.episode || '')}</span>
+                ${where ? `<span>${escapeHtml(where)}</span>` : ''}</div>
+            <div class="cx-src-actions"><button type="button" class="cx-link" data-doc="${escapeHtml(c.doc_id)}"
+                data-pi="${passageIndexOf(cid)}">${T('cx.openDoc')}</button></div>
+        </div>`;
+    }
     const transcript = c.task_id
         ? `<button type="button" class="cx-link" data-go="detail/${escapeHtml(c.task_id)}${c.sec != null ? '/t/' + c.sec : ''}">${T('cx.openTranscript', { ts: c.ts || '00:00' })}</button>` : '';
     const watch = c.video_url
         ? `<a class="cx-link" href="${safeUrl(c.video_url)}" target="_blank" rel="noopener">${T('cx.watch', { ts: c.ts || '' })}</a>` : '';
     const stance = c.stance && c.stance !== 'none' ? `<span class="cx-stance st-${c.stance}">${T('stance.' + c.stance)}</span>` : '';
-    return `<div class="cx-src" data-cid="${escapeHtml(cid)}" data-st="${escapeHtml(c.stance || 'none')}">
+    return `<div class="cx-src" data-cid="${escapeHtml(cid)}" data-st="${escapeHtml(c.stance || 'none')}">${num}
         <blockquote class="cc-quote">${escapeHtml(c.quote || c.obs)}</blockquote>
         ${c.quote && c.obs ? `<div class="cc-obs"><span class="cx-ai-tag">${T('cx.aiNote')}</span> ${escapeHtml(c.obs)}</div>` : ''}
         <div class="cx-src-foot">
             ${c.creator ? `<b>${escapeHtml(c.creator)}</b>` : ''}
             ${c.speaker ? `<span class="cx-who">🎙 ${escapeHtml(c.speaker)}</span>` : ''}
-            <span>EP${c.ep_no} · ${escapeHtml(c.episode || '')}</span>
+            <span>${escapeHtml(c.label || 'EP' + c.ep_no)} · ${escapeHtml(c.episode || '')}</span>
             ${c.date ? `<span>${escapeHtml(c.date)}</span>` : ''}${stance}
         </div>
         <div class="cx-src-actions">${transcript}${watch}${typeof clipButtonHtml === 'function' ? clipButtonHtml(c) : ''}
@@ -405,13 +684,20 @@ function sourcesHtml(citations, md) {
     const ids = citedOrder(md, citations);
     if (!ids.length) return '';
     return `<details class="cx-sources"><summary>${T('cx.sources', { n: ids.length })}</summary>
-        ${ids.map(k => sourceItemHtml(k, citations[k])).join('')}</details>`;
+        ${ids.map((k, i) => sourceItemHtml(k, citations[k], i + 1)).join('')}</details>`;
 }
 
 // 给某块 HTML 里的芯片 / 跳转 / 分享按钮挂事件
 function wireCitations(root, citations) {
     rememberCites(citations);
     root.querySelectorAll('.cx-cite').forEach(b => b.addEventListener('click', () => {
+        const c = (citations && citations[b.dataset.cid]) || cxCiteCache[b.dataset.cid];
+        // 出处点开在左栏看原文（跟 Gemini 一样）：文档跳到那一段，录音跳到那一秒
+        if (c && c.kind === 'doc' && typeof openSourceReader === 'function') {
+            openSourceReader(c.doc_id, passageIndexOf(b.dataset.cid));
+        } else if (c && c.task_id && typeof openTranscriptViewer === 'function') {
+            openTranscriptViewer(c.task_id, c.sec);
+        }
         const block = b.closest('.cx-msg, .cx-digest, .cmp-result') || root;
         const det = block.querySelector('.cx-sources');
         if (!det) return;
@@ -424,6 +710,9 @@ function wireCitations(root, citations) {
         }
     }));
     root.querySelectorAll('[data-go]').forEach(b => b.addEventListener('click', () => navigate(b.dataset.go)));
+    root.querySelectorAll('[data-doc]').forEach(b => b.addEventListener('click', () => {
+        if (typeof openSourceReader === 'function') openSourceReader(b.dataset.doc, b.dataset.pi === 'null' ? null : +b.dataset.pi);
+    }));
     root.querySelectorAll('[data-share]').forEach(b => b.addEventListener('click', () => {
         const c = (citations && citations[b.dataset.share]) || cxCiteCache[b.dataset.share];
         if (c) openShareCard({ ...c, author: c.creator || (cx.cards && cx.cards.author) || '' });
@@ -435,55 +724,105 @@ const cxCiteCache = {};
 function rememberCites(cites) { Object.assign(cxCiteCache, cites || {}); }
 
 // ================= 问 =================
-let askState = { mode: 'about', busy: false, messages: [], starters: [] };
+let askState = { mode: 'about', persona: null, busy: false, messages: [], starters: [] };
+
+// ----- 回答方式（原来输入框上面那个「问关于他的事 / 模拟他回答」切换）-----
+// 跟 NotebookLM 的「配置对话」一样收进对话栏右上角的设置里：默认状态不占地方；
+// 换成模拟时，输入框里出一个能点掉的标签，一直看得见现在是什么状态。
+function askPeople() {                // 能被模拟的人：有频道的项目自己 + 引用的博主（有卡的）
+    const ppl = (cx.people || []).filter(p => p.has_cards && (p.url || !p.self));
+    if (ppl.length) return ppl;
+    const ch = cx.chain || {};
+    return ch.url ? [{ chain_id: cx.id, name: chainDisplayName(ch), avatar: ch.avatar || '', url: ch.url }] : [];
+}
+function askPersona() {
+    const ppl = askPeople();
+    return ppl.find(p => p.chain_id === askState.persona) || ppl[0] || null;
+}
+function askSetMode(mode, persona) {
+    askState.mode = mode === 'as' && askPeople().length ? 'as' : 'about';
+    if (persona) askState.persona = persona;
+    cxStore('cx.mode.' + cx.id, askState.mode);
+    if (askState.persona) cxStore('cx.persona.' + cx.id, askState.persona);
+    askModeUi();
+}
+function askCfgHtml() {
+    const ppl = askPeople();
+    const cur = askPersona();
+    const opt = (mode, t, d, extra = '') => `<label class="cx-cfg-opt${askState.mode === mode ? ' on' : ''}">
+        <input type="radio" name="cx-mode" value="${mode}" ${askState.mode === mode ? 'checked' : ''}>
+        <span><b>${t}</b><span class="cx-muted">${d}</span>${extra}</span></label>`;
+    const who = ppl.length > 1 ? `<div class="pp-bar cx-cfg-who">${ppl.map(p => `<button type="button" class="pp-chip${cur && p.chain_id === cur.chain_id ? ' on' : ''}"
+        data-persona="${escapeHtml(p.chain_id)}">${personFace(p)}<span>${escapeHtml(personName(p))}</span></button>`).join('')}</div>` : '';
+    return `<div class="cx-cfg-t">${T('cx.cfg')}</div>
+        ${opt('about', T('cx.cfgAbout'), T((cx.people || []).length > 1 ? 'cx.cfgAboutDP' : 'cx.cfgAboutD'))}
+        ${opt('as', T('cx.cfgAs'), T('cx.cfgAsD'), askState.mode === 'as' ? who : '')}`;
+}
+
+// 对话开头那块：表情 / 头像、项目名、「N 个来源 · 日期」、一句话。项目数据可能比对话区晚到，到了再补一遍（cxFillHead）
+function askHeroHtml(ch, nSrc) {
+    if (!ch || !ch.id) return '';
+    const person = !!ch.url;
+    const when = String(ch.updated_at || ch.finished_at || ch.created_at || '').slice(0, 10);
+    // 换表情的入口在这儿（顶栏不放表情，跟 Gemini 一样）
+    const face = typeof chainFaceHtml === 'function' ? chainFaceHtml(ch, 'hero-face') : '';
+    return `${window.VERBATIM_DEMO ? face : `<button type="button" class="cx-hero-face" title="${escapeHtml(T('pjm.emoji'))}"
+            aria-label="${escapeHtml(T('pjm.emoji'))}" onclick="pjEmojiPicker(this,'${ch.id}')">${face}</button>`}
+        <h2 class="cx-hero-t">${escapeHtml(String(chainDisplayName(ch) || '').slice(0, 80))}</h2>
+        <div class="cx-hero-m"><span id="cx-hero-n">${T(nSrc === 1 ? 'nb.nSourcesOne' : 'nb.nSources', { n: nSrc })}</span>${when ? ' · ' + escapeHtml(when) : ''}</div>
+        <p class="cx-hero-d">${T(person ? 'cx.intro2' : 'cx.intro2P')}</p>`;
+}
+function askHeroFill() {
+    const box = document.getElementById('cx-hero');
+    if (!box || !cx.chain) return;
+    const nSrc = typeof srcAllIds === 'function' && srcState.data ? srcAllIds(srcState.data).length : (cx.chain.n_sources || 0);
+    const html = askHeroHtml(cx.chain, nSrc);
+    if (box.dataset.sig !== html) { box.innerHTML = html; box.dataset.sig = html; }   // 轮询重画时别闪
+}
 
 async function askLoad() {
     const id = cx.id;
     const box = document.getElementById('cx-ask');
-    askState = { mode: cxStore('cx.mode') === 'as' ? 'as' : 'about', busy: false, messages: [], starters: [] };
+    // 证据卡常比项目数据先到：这时还不知道是不是频道项目（决定「问他 / 模拟他」切换、提示语），等一下再画
+    if (!cx.chain || cx.chain.id !== id) {
+        box.innerHTML = `<div class="cx-thinking">${T('cx.loading')}</div>`;
+        const t0 = Date.now();
+        while ((!cx.chain || cx.chain.id !== id) && Date.now() - t0 < 4000) await new Promise(r => setTimeout(r, 60));
+        if (cx.id !== id) return;
+    }
+    // 「用他的口吻回答」只对有人的项目有意义（有频道 / 引用了博主）；纯资料项目问的是一堆材料，不给这个选项
+    const ch = cx.chain || {};
+    const person = !!ch.url;
+    askState = { mode: cxStore('cx.mode.' + id) === 'as' ? 'as' : 'about', persona: cxStore('cx.persona.' + id) || null,
+                 busy: false, messages: [], starters: [] };
+    if (!askPeople().length) askState.mode = 'about';
     const canAsk = !window.VERBATIM_DEMO || window.VERBATIM_DEMO_ASK;
+    const nSrc = typeof srcAllIds === 'function' && srcState.data ? srcAllIds(srcState.data).length : (ch.n_sources || 0);
     box.innerHTML = `
-        <div class="cx-ask-grid">
-            <div class="cx-ask-main">
-                <div class="cx-intro" id="cx-intro">
-                    <h3>${T(cx.chain && cx.chain.kind === 'collection' ? 'cx.introTitleCol' : 'cx.introTitle', { name: escapeHtml((cx.cards && cx.cards.author) || '') })}</h3>
-                    <ul>
-                        <li>${T('cx.intro1', { n: (cx.cards && cx.cards.cards || []).length, m: (cx.cards && cx.cards.episodes || []).length })}</li>
-                        <li>${T('cx.intro2')}</li>
-                        <li>${T('cx.intro3')}</li>
-                    </ul>
-                </div>
-                <div class="cx-thread" id="cx-thread"></div>
-                ${canAsk ? `<form class="cx-input-row" id="cx-form">
-                    <textarea id="cx-q" rows="1" maxlength="2000" placeholder="${escapeHtml(T('cx.placeholder'))}"></textarea>
-                    <button class="btn-primary cx-send" type="submit">${T('cx.send')}</button>
-                </form>` : `<p class="cx-muted">${T('cx.demoOff')}</p>`}
-            </div>
-            <aside class="cx-ask-side">
-                <div class="cx-seg" role="radiogroup" aria-label="${T('cx.mode')}">
-                    <button type="button" data-mode="about" role="radio">${T('cx.modeAbout')}</button>
-                    <button type="button" data-mode="as" role="radio">${T('cx.modeAs')}</button>
-                </div>
-                <p class="cx-muted" id="cx-mode-hint"></p>
+        <div class="cx-chat">
+            <div class="cx-chat-h" id="cx-chat-h"></div>
+            <div class="cx-scroll" id="cx-scroll">
+            <div class="cx-intro" id="cx-intro">
+                <!-- 跟 Gemini 一样：大表情 + 项目名 + 「N 个来源 · 日期」+ 一句话，下面三张建议问题卡片 -->
+                <div class="cx-hero" id="cx-hero">${askHeroHtml(ch, nSrc)}</div>
                 <div class="cx-starters" id="cx-starters"></div>
-                <div class="cx-side-actions">
-                    <span id="cx-exp-all"></span>
-                    <button type="button" class="cx-link cx-clear" id="cx-clear">${T('cx.clear')}</button>
-                </div>
-            </aside>
+            </div>
+            <div class="cx-thread" id="cx-thread"></div>
+            </div>
+            ${canAsk ? `<form class="cx-input-row" id="cx-form">
+                <span class="cx-mode-chip hidden" id="cx-mode-chip"></span>
+                <textarea id="cx-q" rows="1" maxlength="2000" placeholder="${escapeHtml(T(person ? 'cx.placeholder' : 'cx.placeholderP'))}"></textarea>
+                <span class="cx-src-n" id="cx-src-n"></span>
+                <button class="cx-send-btn" id="cx-send-btn" type="submit"
+                    aria-label="${escapeHtml(T('cx.send'))}" title="${escapeHtml(T('cx.send'))}">
+                    <svg class="i-send" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"/><path d="M6 11l6-6 6 6"/></svg>
+                    <svg class="i-stop" viewBox="0 0 24 24" width="26" height="26" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="8.5" y="8.5" width="7" height="7" rx="1.2" fill="currentColor"/></svg>
+                </button>
+            </form>
+            <p class="cx-disclaimer" id="cx-disc">${T(person ? 'cx.disclaimer' : 'cx.disclaimerP')}</p>` : `<p class="cx-muted">${T('cx.demoOff')}</p>`}
         </div>`;
-    box.querySelectorAll('.cx-seg button').forEach(b => b.onclick = () => {
-        askState.mode = b.dataset.mode;
-        cxStore('cx.mode', askState.mode);
-        askModeUi();
-    });
+    askHeadWire(id);
     askModeUi();
-    box.querySelector('#cx-clear').onclick = async () => {
-        if (!askState.messages.length) return;
-        await fetch(`/api/chain/${id}/ask`, { method: 'DELETE' });
-        askState.messages = [];
-        askRenderThread();
-    };
     const form = box.querySelector('#cx-form');
     if (form) {
         const q = form.querySelector('#cx-q');
@@ -492,10 +831,17 @@ async function askLoad() {
         q.addEventListener('keydown', e => {
             if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); form.requestSubmit(); }
         });
+        q.addEventListener('keydown', e => {
+            if (e.key === 'Escape' && askState.busy) { e.preventDefault(); askStop(); }
+        });
         form.addEventListener('submit', e => {
             e.preventDefault();
+            if (askState.busy) {               // 生成中这个按钮是「停止」；回车不算点停止
+                if (e.submitter) askStop();
+                return;
+            }
             const text = q.value.trim();
-            if (!text || askState.busy) return;
+            if (!text) return;
             q.value = ''; grow();
             askSend(text);
         });
@@ -507,6 +853,7 @@ async function askLoad() {
     } catch { /* 读不到历史就当新对话 */ }
     askRenderThread();
     askLoadStarters(id);
+    if (typeof srcSyncCount === 'function') srcSyncCount();
     // 从话题雷达「问他」跳过来：带着问题
     let pend = null;
     try { pend = JSON.parse(cxStore('cx.pendingAsk') || 'null'); } catch { /* 无 */ }
@@ -516,14 +863,70 @@ async function askLoad() {
     }
 }
 
-function askModeUi() {
-    document.querySelectorAll('#cx-ask .cx-seg button').forEach(b => {
-        const on = b.dataset.mode === askState.mode;
-        b.classList.toggle('on', on);
-        b.setAttribute('aria-checked', on ? 'true' : 'false');
+// 对话栏顶上一条：左边「对话」，右边 回答方式（设置）、⋯（导出 / 清空）。跟 NotebookLM 的对话栏头一样
+const CX_TUNE_SVG = '<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>';
+function askHeadWire(id) {
+    const head = document.getElementById('cx-chat-h');
+    if (!head) return;
+    const can = askPeople().length > 0 && CAN_ASK();
+    head.innerHTML = `<b>${T('cx.chat')}</b><span class="cx-foot-sp"></span>
+        ${can ? `<details class="cx-hd-menu" id="cx-cfg"><summary class="cx-ic-btn" title="${escapeHtml(T('cx.cfg'))}" aria-label="${escapeHtml(T('cx.cfg'))}">${CX_TUNE_SVG}</summary>
+            <div class="cx-hd-pop cx-cfg-pop" id="cx-cfg-pop"></div></details>` : ''}
+        <details class="cx-hd-menu" id="cx-more"><summary class="cx-ic-btn" title="${escapeHtml(T('cx.more'))}" aria-label="${escapeHtml(T('cx.more'))}">⋯</summary>
+            <div class="cx-hd-pop">
+                <div class="cx-hd-label">${T('cx.exportConv')}</div>
+                <button type="button" data-cexp="pdf">PDF</button><button type="button" data-cexp="docx">Word</button><button type="button" data-cexp="md">Markdown</button>
+                <hr><button type="button" data-clear class="danger">${T('cx.clear')}</button>
+            </div></details>`;
+    const cfg = head.querySelector('#cx-cfg');
+    if (cfg) cfg.addEventListener('toggle', () => { if (cfg.open) askCfgRender(); });
+    head.querySelectorAll('[data-cexp]').forEach(b => b.onclick = () => {
+        head.querySelector('#cx-more').open = false;
+        if (typeof runExport === 'function') runExport(b.dataset.cexp, askConvDoc());
     });
-    const hint = document.getElementById('cx-mode-hint');
-    if (hint) hint.textContent = askState.mode === 'as' ? T('cx.modeAsHint') : T('cx.modeAboutHint');
+    head.querySelector('[data-clear]').onclick = async () => {
+        head.querySelector('#cx-more').open = false;
+        if (!askState.messages.length || !confirm(T('cx.clearConfirm'))) return;
+        await fetch(`/api/chain/${id}/ask`, { method: 'DELETE' });
+        askState.messages = [];
+        askRenderThread();
+    };
+}
+function askCfgRender() {
+    const pop = document.getElementById('cx-cfg-pop');
+    if (!pop) return;
+    pop.innerHTML = askCfgHtml();
+    pop.querySelectorAll('input[name="cx-mode"]').forEach(r => r.onchange = () => { askSetMode(r.value); askCfgRender(); });
+    pop.querySelectorAll('[data-persona]').forEach(b => b.onclick = () => { askSetMode('as', b.dataset.persona); askCfgRender(); });
+}
+function askConvDoc() {
+    return { title: T('exp.convTitle', { name: chainDisplayName(cx.chain || {}) || '' }),
+        blocks: askState.messages.flatMap(x => x.role === 'user' ? [{ heading: x.content, md: '' }]
+            : (x.pending || x.error ? [] : [{ md: x.content, citations: x.citations }])) };
+}
+// 关掉的地方点一下：设置 / ⋯ 收起
+document.addEventListener('click', e => {
+    document.querySelectorAll('#cx-chat-h details[open]').forEach(d => { if (!d.contains(e.target)) d.open = false; });
+});
+
+function askModeUi() {
+    const as = askState.mode === 'as';
+    const p = as ? askPersona() : null;
+    const chip = document.getElementById('cx-mode-chip');
+    if (chip) {
+        chip.classList.toggle('hidden', !as);
+        chip.innerHTML = as ? `${p ? personFace(p, 20) : ''}<span>${escapeHtml(T('cx.asChip', { name: p ? personName(p) : '' }))}</span>
+            <button type="button" aria-label="${escapeHtml(T('cx.asOff'))}" title="${escapeHtml(T('cx.asOff'))}">×</button>` : '';
+        const x = chip.querySelector('button');
+        if (x) x.onclick = () => askSetMode('about');
+    }
+    const q = document.getElementById('cx-q');
+    const person = !!(cx.chain && cx.chain.url) || (cx.people || []).length > 0;
+    if (q) q.placeholder = as ? T('cx.asPh', { name: p ? personName(p) : '' }) : T(person ? 'cx.placeholder' : 'cx.placeholderP');
+    const disc = document.getElementById('cx-disc');
+    if (disc) disc.textContent = as ? T('cx.disclaimerAs') : T(person ? 'cx.disclaimer' : 'cx.disclaimerP');
+    const cfg = document.querySelector('#cx-cfg summary');
+    if (cfg) cfg.classList.toggle('on', as);
 }
 
 async function askLoadStarters(id) {
@@ -542,13 +945,21 @@ function askRenderStarters() {
     const box = document.getElementById('cx-starters');
     if (!box) return;
     if (!askState.starters.length) { box.innerHTML = ''; return; }
-    box.innerHTML = `<div class="cx-muted">${T('cx.tryAsking')}</div>` + askState.starters.map(q =>
-        `<button type="button" class="cx-starter">${escapeHtml(q)}</button>`).join('');
-    box.querySelectorAll('.cx-starter').forEach(b => b.onclick = () => askSend(b.textContent));
+    box.innerHTML = askState.starters.slice(0, 3).map(q =>
+        `<button type="button" class="cx-starter" data-q="${escapeHtml(q)}"><span>${escapeHtml(q)}</span><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 5v6a3 3 0 0 0 3 3h9"/><path d="M14 10l4 4-4 4"/></svg></button>`).join('');
+    box.querySelectorAll('.cx-starter').forEach(b => b.onclick = () => askSend(b.dataset.q));
 }
 
 function coverageText(cov) {
     if (!cov) return '';
+    // 资料类项目：说「段落 / 来源」，不说「卡片 / 期」
+    const P = cx.chain && cx.chain.kind === 'project' && cx.chain.template !== 'creator' ? 'P' : '';
+    if (P) {
+        const topicP = cov.topic ? T('cx.covTopic', { t: cov.topic }) + ' · ' : '';
+        if (cov.mode === 'all') return topicP + T('cx.covAllP', { n: cov.pool_cards, m: cov.pool_episodes });
+        if (cov.mode === 'spread') return topicP + T('cx.covSpreadP', { n: cov.pool_cards, m: cov.pool_episodes, k: cov.cards_used });
+        return topicP + T('cx.covSearchP', { n: cov.pool_cards, m: cov.pool_episodes, k: cov.cards_used, h: cov.keyword_hits });
+    }
     const topic = cov.topic ? T('cx.covTopic', { t: cov.topic }) + ' · ' : '';
     if (cov.mode === 'all') return topic + T('cx.covAll', { n: cov.pool_cards, m: cov.pool_episodes });
     if (cov.mode === 'spread') return topic + T('cx.covSpread', { n: cov.pool_cards, m: cov.pool_episodes, k: cov.cards_used });
@@ -560,8 +971,9 @@ function msgHtml(m, i) {
         const topic = m.topic ? `<span class="cx-topic-pill">${escapeHtml(m.topic)}</span>` : '';
         return `<div class="cx-msg cx-user">${topic}${escapeHtml(m.content)}</div>`;
     }
-    if (m.pending) {
-        return `<div class="cx-msg cx-bot"><div class="cx-thinking">${T('cx.reading')}</div></div>`;
+    if (m.pending) return `<div class="cx-msg cx-bot cx-live">${pendingInner(m)}</div>`;
+    if (m.stopped && !m.content) {
+        return `<div class="cx-msg cx-bot"><div class="cx-muted">${T('cx.stoppedEmpty')}</div></div>`;
     }
     if (m.error) {
         return `<div class="cx-msg cx-bot"><div class="cx-err">${escapeHtml(m.error)}</div></div>`;
@@ -579,7 +991,13 @@ function msgHtml(m, i) {
     return `<div class="cx-msg cx-bot" data-i="${i}">${sim}
         <div class="cx-answer md-body">${citedHtml(m.content, m.citations || {})}</div>
         ${sourcesHtml(m.citations || {}, m.content)}
-        <div class="cx-cov">${escapeHtml(coverageText(m.coverage))}${cost}${escapeHtml(dropped)} ${exp}</div>
+        <div class="cx-acts">
+            ${m.at && !window.VERBATIM_DEMO && typeof stSaveNote === 'function'
+                ? `<button type="button" class="cx-act cx-save-note"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 3h6l-1 6 4 4H6l4-4z"/><path d="M12 13v8"/></svg><span>${T('st.saveNote')}</span></button>` : ''}
+            <button type="button" class="cx-act cx-copy" title="${escapeHtml(T('cx.copy'))}" aria-label="${escapeHtml(T('cx.copy'))}"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg></button>
+            ${exp}
+            <span class="cx-cov">${m.stopped ? `<span class="cx-stopped-tag">${T('cx.stopped')}</span> ` : ''}${escapeHtml(coverageText(m.coverage))}${cost}${escapeHtml(dropped)}</span>
+        </div>
     </div>`;
 }
 
@@ -587,50 +1005,160 @@ function askRenderThread() {
     const box = document.getElementById('cx-thread');
     if (!box) return;
     box.innerHTML = askState.messages.map(msgHtml).join('');
-    box.querySelectorAll('.cx-msg.cx-bot[data-i]').forEach(el =>
-        wireCitations(el, askState.messages[+el.dataset.i].citations));
-    const clear = document.getElementById('cx-clear');
-    if (clear) clear.classList.toggle('hidden', !askState.messages.length);
-    const intro = document.getElementById('cx-intro');
-    if (intro) intro.classList.toggle('hidden', !!askState.messages.length);
-    const expAll = document.getElementById('cx-exp-all');
-    if (expAll && typeof exportMenuHtml === 'function') {
-        const done = askState.messages.filter(x => x.role === 'assistant' && !x.pending && !x.error);
-        expAll.innerHTML = done.length > 1 ? exportMenuHtml(() => ({
-            title: T('exp.convTitle', { name: (cx.cards && cx.cards.author) || '' }),
-            blocks: askState.messages.flatMap((x, k) => x.role === 'user' ? [{ heading: x.content, md: '' }]
-                : (x.pending || x.error ? [] : [{ md: x.content, citations: x.citations }])),
-        }), 'exp-all') : '';
-    }
+    box.querySelectorAll('.cx-msg.cx-bot[data-i]').forEach(el => {
+        const m = askState.messages[+el.dataset.i];
+        wireCitations(el, m.citations);
+        const save = el.querySelector('.cx-save-note');
+        if (save) save.addEventListener('click', () => stSaveNote(m, save));
+        const copy = el.querySelector('.cx-copy');
+        if (copy) copy.addEventListener('click', async () => {
+            // 复制纯文字：出处标记拿掉（贴到别处是一串 [#3-12] 没意义）
+            const text = String(m.content || '').replace(CITE_RE, '').replace(/[ \t]+([。，；.,;])/g, '$1');
+            try { await navigator.clipboard.writeText(text); showToast(T('cx.copied')); } catch { showToast(T('cx.copyFailed')); }
+        });
+    });
+    const more = document.getElementById('cx-more');     // 没有对话时 ⋯ 里的导出 / 清空没意义
+    if (more) more.classList.toggle('hidden', !askState.messages.some(x => x.role === 'assistant' && !x.pending && !x.error));
+    const starters = document.getElementById('cx-starters');
+    if (starters) starters.classList.toggle('hidden', !!askState.messages.length);
+}
+
+// 生成中的那条：阶段提示 + 已经写出来的字。出处标记先画成灰色占位，写完换成能点的
+function pendingInner(m) {
+    const stage = { search: 'cx.stageSearch', write: 'cx.stageWrite', rewrite: 'cx.stageRewrite' }[m.stage] || 'cx.reading';
+    const full = m.text || '';
+    const text = full.slice(0, m.shown == null ? full.length : m.shown).replace(/\[#[^\]\n]*$/, '');   // 半截的 [#3- 先别画
+    const body = text ? `<div class="cx-answer md-body">${renderMarkdown(text).replace(CITE_RE,
+        '<span class="cx-cite cx-cite-pending" aria-hidden="true"></span>')}</div>` : '';
+    const showStage = !text || m.stage === 'rewrite';   // 一有字就不再挂「正在写」
+    return `${showStage ? `<div class="cx-thinking">${T(stage)}</div>` : ''}${body}`;
+}
+
+let askAbort = null;
+function askStop() { if (askAbort) askAbort.abort(); }
+
+function askSetBusy(on) {
+    askState.busy = on;
+    const btn = document.getElementById('cx-send-btn');
+    if (!btn) return;
+    btn.classList.toggle('busy', on);
+    const label = T(on ? 'cx.stop' : 'cx.send');
+    btn.setAttribute('aria-label', label);
+    btn.title = on ? `${label} (Esc)` : label;
 }
 
 async function askSend(question, topic) {
     if (askState.busy) return;
     const id = cx.id;
-    askState.busy = true;
+    askSetBusy(true);
     askState.messages.push({ role: 'user', content: question, topic: topic || null });
-    const pending = { role: 'assistant', pending: true };
+    const pending = { role: 'assistant', pending: true, stage: 'search', text: '', shown: 0, mode: askState.mode };
     askState.messages.push(pending);
     askRenderThread();
     const thread = document.getElementById('cx-thread');
     if (thread && thread.lastElementChild) thread.lastElementChild.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    let msg;
+
+    // 只重画正在生成的这一条。模型一次吐一大段（flash-lite 整个回答常常就 5 段），
+    // 直接贴上去是一跳一跳的：用定时器把已到的字平滑地「打」出来，积压越多打得越快。
+    // 不用 requestAnimationFrame——标签页不在前台时它会停，切回来就只剩最后一下整段出现。
+    let tick = 0;
+    const paint = () => {
+        tick = 0;
+        if (cx.id !== id) return;
+        const el = document.querySelector('#cx-thread .cx-live');
+        if (!el) return;
+        const backlog = pending.text.length - pending.shown;
+        if (backlog > 0) pending.shown += Math.max(4, Math.ceil(backlog / 6));
+        // 宽屏时对话在中间栏里自己滚（#cx-scroll）；窄屏还是整页滚
+        const sc = document.getElementById('cx-scroll');
+        const near = sc && sc.scrollHeight > sc.clientHeight + 4
+            ? sc.scrollTop + sc.clientHeight >= sc.scrollHeight - 160
+            : window.innerHeight + window.scrollY >= document.body.scrollHeight - 160;
+        el.innerHTML = pendingInner(pending);
+        if (near) el.scrollIntoView({ block: 'end' });
+        if (pending.shown < pending.text.length) repaint();
+    };
+    const repaint = () => { if (!tick) tick = setTimeout(paint, 33); };
+    const caughtUp = () => new Promise(res => {          // 收尾前让打字追上（最多等 0.6 秒）
+        const t0 = Date.now();
+        const wait = () => (pending.shown >= pending.text.length || Date.now() - t0 > 600) ? res() : setTimeout(wait, 40);
+        wait();
+    });
+
+    const ctrl = new AbortController();
+    askAbort = ctrl;
+    let msg = null;
     try {
-        const resp = await fetch(`/api/chain/${id}/ask`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ question, mode: askState.mode, topic: topic || undefined, ui_lang: currentLang }),
+        const resp = await fetch(`/api/chain/${id}/ask/stream`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ctrl.signal,
+            body: JSON.stringify({ question, mode: askState.mode, topic: topic || undefined, ui_lang: currentLang,
+                                   persona: askState.mode === 'as' && askPersona() ? askPersona().chain_id : undefined,
+                                   scope: typeof srcScopeBody === 'function' ? srcScopeBody() : undefined }),
         });
-        const r = await resp.json();
-        msg = r.ok ? r.message : { role: 'assistant', error: r.error || T('common.couldNotLoad') };
+        if (!resp.ok || !resp.body) {
+            const r = await resp.json().catch(() => ({}));
+            msg = { role: 'assistant', error: r.error || T('common.couldNotLoad') };
+        } else {
+            const reader = resp.body.getReader();
+            const dec = new TextDecoder();
+            let buf = '';
+            for (;;) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                buf += dec.decode(value, { stream: true });
+                let nl;
+                while ((nl = buf.indexOf('\n')) >= 0) {
+                    const ln = buf.slice(0, nl).trim();
+                    buf = buf.slice(nl + 1);
+                    if (!ln) continue;
+                    let ev;
+                    try { ev = JSON.parse(ln); } catch { continue; }
+                    if (ev.type === 'stage') { pending.stage = ev.stage; repaint(); }
+                    else if (ev.type === 'delta') { pending.text += ev.text; repaint(); }
+                    else if (ev.type === 'done') msg = ev.message;
+                    else if (ev.type === 'error') msg = { role: 'assistant', error: ev.error };
+                }
+            }
+            if (!msg) msg = { role: 'assistant', error: T('common.couldNotLoad') };
+            else if (!msg.error) await caughtUp();
+        }
     } catch (e) {
-        msg = { role: 'assistant', error: String(e) };
+        if (e && e.name === 'AbortError') {
+            // 服务器那边会把半截校验好出处存进记录；这里先照原样摆着，下次打开就是存好的那版
+            msg = { role: 'assistant', content: pending.text.replace(/\[#[^\]\n]*$/, ''), citations: {},
+                    stopped: true, mode: pending.mode };
+        } else {
+            msg = { role: 'assistant', error: String(e) };
+        }
     }
-    askState.busy = false;
+    if (tick) clearTimeout(tick);
+    askAbort = null;
+    askSetBusy(false);
     if (cx.id !== id) return;
     askState.messages[askState.messages.indexOf(pending)] = msg;
     askRenderThread();
     const last = document.querySelector('#cx-thread .cx-msg:last-child');
     if (last) last.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    if (msg.stopped && msg.content) askSwapSaved(id, msg);
+}
+
+// 停止后先摆的是浏览器手里的半截（出处还没校验，只能先去掉）；服务器校验完存进记录，
+// 稍等一下取回那版换上，出处就能点了
+async function askSwapSaved(id, local) {
+    for (const wait of [700, 1500]) {
+        await new Promise(r => setTimeout(r, wait));
+        if (cx.id !== id || askState.busy) return;
+        let saved;
+        try { saved = (await (await fetch(`/api/chain/${id}/ask`)).json()).messages || []; } catch { return; }
+        const s = saved[saved.length - 1];
+        const i = askState.messages.indexOf(local);
+        if (i < 0) return;
+        if (s && s.role === 'assistant' && s.stopped && s.content) {
+            askState.messages[i] = s;
+            askRenderThread();
+            return;
+        }
+    }
 }
 
 // ================= 话题 / 立场时间线 =================
@@ -652,13 +1180,13 @@ function tpLeft(byEp) {
 }
 
 async function topicsLoad() {
-    const id = cx.id;
+    const id = cxPid();
     const box = document.getElementById('cx-topics');
     let d;
     try { d = await (await fetch(`/api/chain/${id}/topics`)).json(); } catch {
         box.innerHTML = `<p class="cx-err">${T('common.couldNotLoad')}</p>`; return;
     }
-    if (cx.id !== id) return;
+    if (cxPid() !== id) return;
     const job = d.job && d.job.status === 'running' ? d.job : null;
     const djob = d.dates_job && d.dates_job.status === 'running' ? d.dates_job : null;
     // 已经在看话题了、后台还在打标签 / 补日期：只更新进度行，别整页重画（会把滚动位置和筛选冲掉）
@@ -729,12 +1257,12 @@ async function topicsLoad() {
 let beliefsState = { open: {}, shown: {} };
 
 async function beliefsLoad() {
-    const id = cx.id;
+    const id = cxPid();
     const box = document.getElementById('tp-beliefs');
     if (!box) return;
     let d;
     try { d = await (await fetch(`/api/chain/${id}/beliefs`)).json(); } catch { box.innerHTML = ''; return; }
-    if (cx.id !== id || !document.getElementById('tp-beliefs')) return;
+    if (cxPid() !== id || !document.getElementById('tp-beliefs')) return;
     clearTimeout(cx.timers.beliefs);
     const job = d.job && d.job.status === 'running' ? d.job : null;
     if (job) cx.timers.beliefs = setTimeout(beliefsLoad, 4000);
@@ -847,13 +1375,13 @@ async function topicRenderDetail() {
     let cards = topicsState.cards[t.topic];
     if (!cards) {
         box.innerHTML = `<div class="cx-thinking">${T('cx.loading')}</div>`;
-        const id = cx.id, want = t.topic;
+        const id = cxPid(), want = t.topic;
         try {
             const r = await (await fetch(`/api/chain/${id}/topics?topic=${encodeURIComponent(want)}`)).json();
             const hit = (r.topics || []).find(x => x.topic === want);
             cards = topicsState.cards[want] = (hit && hit.cards) || [];
         } catch { box.innerHTML = `<p class="cx-err">${T('common.couldNotLoad')}</p>`; return; }
-        if (cx.id !== id || topicsState.sel !== want) return;
+        if (cxPid() !== id || topicsState.sel !== want) return;
     }
     cards.forEach(c => { cxCiteCache[c.id] = c; });
 
@@ -976,13 +1504,13 @@ function topicExportDoc(t, cards) {
 let predsState = { v: null, shown: 30 };
 
 async function predsLoad() {
-    const id = cx.id;
+    const id = cxPid();
     const box = document.getElementById('cx-preds');
     let d;
     try { d = await (await fetch(`/api/chain/${id}/predictions`)).json(); } catch {
         box.innerHTML = `<p class="cx-err">${T('common.couldNotLoad')}</p>`; return;
     }
-    if (cx.id !== id) return;
+    if (cxPid() !== id) return;
     const job = d.job && d.job.status === 'running' ? d.job : null;
     if (job) cx.timers.preds = setTimeout(predsLoad, 4000);
     if (!d.tagged) {
@@ -1095,8 +1623,13 @@ async function compareRun(e) {
             body: JSON.stringify({ chains: ids, question: q }) })).json();
     } catch (err) { r = { error: String(err) }; }
     if (r.error) { out.innerHTML = `<p class="cx-err">${escapeHtml(r.error)}</p>`; return; }
+    out.innerHTML = cmpResultHtml(r, q);
+    wireCitations(out, r.citations);
+}
+
+function cmpResultHtml(r, q) {
     rememberCites(r.citations);
-    out.innerHTML = `<div class="cmp-result">
+    return `<div class="cmp-result">
         <div class="cx-answer md-body">${citedHtml(r.answer, r.citations)}</div>
         ${sourcesHtml(r.citations, r.answer)}
         <div class="cx-cov">${(r.creators || []).map(c => `${escapeHtml(c.author)}: ${c.cards}`).join(' · ')} ${T('cmp.cards')}
@@ -1104,7 +1637,128 @@ async function compareRun(e) {
                 title: `${T('cmp.title')}：${q}`.slice(0, 80),
                 sub: (r.creators || []).map(c => c.author).join(' · '),
                 blocks: [{ md: r.answer, citations: r.citations }] })) : ''}</div></div>`;
-    wireCitations(out, r.citations);
+}
+
+// ================= 格子的设置框：立场 / 预测对账 / 原话、对比 =================
+// 跟「人物画像」的选择框一样弹在页面中间：看谁（项目里不止一个人时）、现在是什么状态、要不要花钱；
+// 「生成」= 在工作台下面的列表里记一条（要先打标签的，打完那条才能点开）。做过的直接「打开」。
+function stPickOverlay() {
+    let ov = document.getElementById('rd-pick');
+    if (!ov) {
+        ov = document.createElement('div');
+        ov.id = 'rd-pick';
+        ov.className = 'settings-overlay hidden';
+        document.body.appendChild(ov);
+    }
+    toolOverlay('rd-pick');
+    return ov;
+}
+
+async function viewPicker(tab, pid) {
+    if (pid && pid !== cxPid()) cxSetPerson(pid);
+    const ov = stPickOverlay();
+    const tile = document.querySelector(`#chain-explore .nb-tile[data-cx="${tab}"] .nb-tl`);
+    const isCol = cx.chain && !cx.chain.url && !cxMulti();
+    const colKey = 'cx.desc.' + tab + 'Col';
+    const desc = T(isCol && T(colKey) !== colKey ? colKey : 'cx.desc.' + tab);
+    const who = cxPid();
+    const made = (stState.items || []).find(o => o.kind === 'view' && o.view === tab && o.chain === who);
+    const render = (status, act) => {
+        ov.innerHTML = `<div class="cx-modal rd-pick vp-pick" role="dialog" aria-modal="true" aria-labelledby="vp-t">
+            <button class="settings-x" type="button" data-close aria-label="${escapeHtml(T('common.close'))}">×</button>
+            <h2 class="cx-modal-title" id="vp-t">${escapeHtml(tile ? tile.textContent : '')}</h2>
+            <p class="cx-muted">${escapeHtml(desc)}</p>
+            ${cxMulti() ? `<div class="pp-bar" id="vp-pp">${peopleChipsHtml()}</div>` : ''}
+            <div class="vp-foot"><span class="rd-pick-s">${status}</span>${act}</div></div>`;
+        ov.querySelectorAll('#vp-pp [data-pid]').forEach(b => b.onclick = () => viewPicker(tab, b.dataset.pid));
+        const go = ov.querySelector('[data-go]');
+        if (go) go.onclick = () => viewMake(tab, who, go.dataset.go === 'tag', ov);
+        const op = ov.querySelector('[data-open]');
+        if (op) op.onclick = () => { ov.classList.add('hidden'); stOpenView(made); };
+    };
+    const me = cxPerson();
+    if (me && !me.has_cards) { render(escapeHtml(T('pp.notYet')), ''); ov.classList.remove('hidden'); return; }
+    if (made) {
+        render(escapeHtml(made.status === 'running' ? T('vp.running') : T('vp.made', { at: String(made.created_at || '').slice(5, 16) })),
+            made.status === 'running' ? '' : `<button type="button" class="rd-pick-go primary" data-open>${T('rd.open')}</button>`);
+        ov.classList.remove('hidden');
+        return;
+    }
+    render(`<span class="st-spin" aria-hidden="true"></span>${T('cx.loading')}`, '');
+    ov.classList.remove('hidden');
+    // 现在是什么状态：立场 / 预测要先给卡打标签（花钱，先说清楚）
+    let d = {};
+    try { d = await (await fetch(`/api/chain/${who}/topics`)).json(); } catch { /* 当不知道 */ }
+    if (cxPid() !== who || ov.classList.contains('hidden')) return;
+    const st = d.status || {};
+    const job = d.job && d.job.status === 'running';
+    const demo = !!window.VERBATIM_DEMO;
+    if (tab !== 'cards' && !d.tagged) {
+        render(escapeHtml(job ? T('vp.running') : T('vp.needTag', { n: st.cards || 0, cost: fmtUsd(Math.max(0.01, st.est_cost_usd || 0)) })),
+            demo ? '' : `<button type="button" class="rd-pick-go primary" data-go="tag">${job ? T('rd.generate') : T('vp.genCost', { cost: fmtUsd(Math.max(0.01, st.est_cost_usd || 0)) })}</button>`);
+        return;
+    }
+    const info = tab === 'topics' ? T('vp.topicsN', { n: (d.topics || []).length })
+        : tab === 'cards' ? T('vp.cardsN', { n: d.cards_total || 0 }) : T('vp.ready');
+    render(escapeHtml(info), demo ? '' : `<button type="button" class="rd-pick-go primary" data-go="1">${T('rd.generate')}</button>`);
+}
+
+async function viewMake(tab, who, tag, ov) {
+    let r;
+    try {
+        r = await (await fetch(`/api/chain/${cx.id}/studio/view`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ view: tab, chain: who, generate: !!tag }) })).json();
+    } catch (e) { r = { error: String(e) }; }
+    if (r.error) { showToast(r.error); return; }
+    ov.classList.add('hidden');
+    showToast(T(tag ? 'vp.queued' : 'vp.added'));
+    stLoad();
+}
+
+// 列表里的一条「谁的立场 / 预测 / 原话」：换到那个人，在工作台栏里展开
+function stOpenView(o) {
+    if (!o) return;
+    if (o.status === 'running') { showToast(T('vp.running')); return; }
+    if (o.chain && o.chain !== cxPid()) cxSetPerson(o.chain);
+    cxShowTab(o.view);
+}
+
+function comparePicker() {
+    const ov = stPickOverlay();
+    const ppl = (cx.people || []).filter(p => p.has_cards);
+    const saved = (cxStore('pc.pick.' + cx.id) || '').split(',').filter(Boolean);
+    const on = p => (saved.length ? saved.includes(p.chain_id) : ppl.indexOf(p) < 4);
+    ov.innerHTML = `<div class="cx-modal rd-pick vp-pick" role="dialog" aria-modal="true" aria-labelledby="pc-t">
+        <button class="settings-x" type="button" data-close aria-label="${escapeHtml(T('common.close'))}">×</button>
+        <h2 class="cx-modal-title" id="pc-t">${escapeHtml(T('cx.tab.compare'))}</h2>
+        <p class="cx-muted">${escapeHtml(T('cx.desc.compare'))}</p>
+        <form id="pc-form" class="pc-form">
+            <div class="pp-bar pc-pick">${ppl.map(p => `<label class="pp-chip pc-chip">
+                <input type="checkbox" value="${escapeHtml(p.chain_id)}" ${on(p) ? 'checked' : ''}>${personFace(p)}<span>${escapeHtml(personName(p))}</span></label>`).join('')}</div>
+            <textarea id="pc-q" class="st-prompt" rows="3" maxlength="500" placeholder="${escapeHtml(T('pc.ph'))}"></textarea>
+            <div class="vp-foot"><span class="rd-pick-s" id="pc-msg">${T('pc.hint')}</span>
+                <button type="submit" class="rd-pick-go primary">${T('rd.generate')}</button></div>
+        </form></div>`;
+    ov.classList.remove('hidden');
+    const q = ov.querySelector('#pc-q');
+    setTimeout(() => q.focus(), 30);
+    ov.querySelector('#pc-form').addEventListener('submit', async e => {
+        e.preventDefault();
+        const ids = [...ov.querySelectorAll('.pc-pick input:checked')].map(i => i.value);
+        const msg = ov.querySelector('#pc-msg');
+        if (ids.length < 2 || ids.length > 4) { msg.textContent = T('cmp.pickN'); return; }
+        if (!q.value.trim()) { q.focus(); return; }
+        cxStore('pc.pick.' + cx.id, ids.join(','));
+        let r;
+        try {
+            r = await (await fetch(`/api/chain/${cx.id}/studio/compare`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ chains: ids, question: q.value.trim() }) })).json();
+        } catch (err) { r = { error: String(err) }; }
+        if (r.error) { msg.textContent = r.error; return; }
+        ov.classList.add('hidden');
+        showToast(T('pc.started'));
+        stLoad();
+    });
 }
 
 // ================= 分享图 =================

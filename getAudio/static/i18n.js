@@ -11,7 +11,7 @@ const STRINGS = {
         'nav.tagline': 'Audio → transcript → insight · local',
         'nav.transcribe': 'Transcribe',
         'nav.xhs': 'Xiaohongshu',
-        'nav.creators': 'Creators',
+        'nav.creators': 'Projects',
         'nav.library': 'Library',
 
         'transcribe.title': 'Transcribe',
@@ -65,8 +65,343 @@ const STRINGS = {
         'xhs.reportZh': 'Report: 中文',
         'xhs.analyzeBtn': 'Analyze this batch',
 
-        'creators.title': 'Creators',
-        "creators.subtitle": "Paste a channel and Verbatim transcribes every episode, pulls out what the creator actually said, and writes a portrait. Then ask anything (every answer cites the second it was said), see their stances over time, check their predictions, and keep it synced as new videos come out.",
+        "common.cancel": "Cancel",
+
+        "pj.new": "New project",
+
+        "pj.newTitle": "What are you working on?",
+
+        "pj.t.creator": "Research a creator",
+
+        "pj.t.creatorD": "Follow a channel: how they think, how their views change, whether their predictions hold up.",
+
+        "pj.t.study": "Study a course",
+
+        "pj.t.studyD": "Lecture recordings, handouts, past papers. Ask the original material and review it.",
+
+        "pj.t.topic": "Research a topic",
+
+        "pj.t.topicD": "Several creators plus articles on one subject. Compare who says what.",
+
+        "pj.t.blank": "Blank project",
+        "pj.eyebrow": "Project",
+        "pj.updated": "Updated {d}",
+
+        "pj.t.blankD": "Start empty and add whatever you like.",
+
+        "pj.namePh": "Name it, e.g. Chinese final exam",
+
+        "pj.create": "Create and add sources",
+
+        "pj.nameIt": "Give the project a name",
+
+        "pj.creatorTitle": "Research a creator",
+
+        "pj.openOriginal": "Original file",
+
+        "pj.cardMeta": "{r} recordings · {d} documents",
+
+        "cx.tab.sources": "Sources",
+
+        "src.docs": "Documents",
+
+        "src.recordings": "Recordings and videos",
+
+        "src.addFiles": "Upload files",
+
+        "src.addText": "Paste text",
+
+        "src.addRec": "Upload recordings",
+
+        "src.fromLib": "From library",
+
+        "src.dropHint": "Drop PDF, Word, PPT, Markdown or images here",
+
+        "src.textTitlePh": "Title (optional)",
+
+        "src.textPh": "Paste notes, an outline, an article…",
+
+        "src.textSave": "Add",
+
+        "src.st.converting": "Converting",
+
+        "src.st.ready": "Ready",
+
+        "src.st.failed": "Failed",
+
+        "src.st.missing": "Missing",
+
+        "src.pages": "{n} pages",
+
+        "src.chars": "{n} chars",
+
+        "src.retry": "Retry",
+
+        "src.remove": "Remove",
+
+        "src.open": "Open",
+
+        "src.removeConfirm": "Remove \"{t}\" from this project? The file itself is kept.",
+
+        "src.indexing": "Indexing new sources so you can ask them…",
+
+        "src.moyeOff": "Moye isn't running: PDFs are read from their text layer only, and scanned PDFs can't be read. Start Moye to OCR them.",
+
+        "src.emptyProject": "No sources yet. Add documents or recordings, then ask them anything.",
+
+        "src.uploading": "Uploading…",
+
+        "src.recUploaded": "{n} recording(s) sent for transcription; they appear here when done.",
+
+        "src.channelNote": "This creator's recordings come from the channel. You can still add documents here: articles, books, notes.",
+
+        "src.noRecordings": "No recordings yet.",
+
+        "cx.scope": "Search in",
+
+        "cx.scopeAll": "All sources",
+
+        "cx.scopeMedia": "Recordings only",
+
+        "cx.scopeDocs": "Documents only",
+
+        "cx.scopePick": "Pick sources",
+
+        "cx.scopePicked": "{n} picked",
+
+        "cx.introProject": "Answers come only from this project's {n} sources, and every sentence links back to where it came from.",
+        "cx.introProjectOne": "Answers come only from this project's one source, and every sentence links back to where it came from.",
+        "cx.intro2P": "Click a citation to open the passage it came from: the page of a document, or the second in a recording.",
+        "cx.intro3P": "If your sources don't cover something, you'll be told so instead of getting a guess.",
+        "cx.placeholderP": "Ask anything about these sources…",
+
+        "cx.openDoc": "Open in document",
+
+        "reader.page": "Page {n}",
+
+        "pj.untitled": "Untitled project",
+
+        "nb.sources": "Sources",
+
+        "nb.chat": "Chat",
+
+        "nb.studio": "Studio",
+
+        "nb.backChat": "← Chat",
+
+        "nb.backSources": "← Sources",
+
+        "nb.episodes": "All recordings",
+
+        "nb.nSources": "{n} sources",
+        "nb.nSourcesOne": "1 source",
+
+        "nb.nOfSources": "{n} of {m} sources",
+
+        "nb.srcEmptyT": "Saved sources will appear here",
+
+        "nb.srcEmptyD": "Add files, links or text, then ask questions about them.",
+
+        "nb.emptyT": "Let's start your project",
+
+        "nb.emptyD": "Add the material you're working with: recordings, a channel, documents or notes. Then ask anything, and every answer links back to where it came from.",
+
+        "nb.needsCards": "This needs evidence cards. Extract them in Studio first.",
+
+        "nb.needsCardsShort": "Needs evidence cards",
+        "nb.needsRecShort": "Built from recordings",
+        "nav.menu": "Menu",
+        "nb.backStudio": "Back to Studio",
+        "st.kindRead": "Portrait",
+        "st.kindReadCol": "Overview",
+        "st.kindLens": "Lens",
+        "nb.srcRailAdd": "Add sources",
+        "rd.basedEp": "Based on {n} episodes",
+        "rd.basedRec": "Based on {n} recordings",
+        "rd.madeAt": "Made {at}",
+        "rd.notMade": "Not made yet",
+        "rd.noPortraitShort": "Comes with a finished analysis",
+        "rd.open": "Open",
+        "rd.pickD": "The full portrait is written when the analysis runs. The other five read the same evidence cards from a different angle, made when you ask.",
+        "rd.pickDCol": "The overview is written when the analysis runs. The other five read the same evidence cards from a different angle, made when you ask.",
+        "rd.genStarted": "Making “{name}”. It shows up in the Studio list when it's ready.",
+        "rd.genDone": "“{name}” is ready, in the Studio list.",
+        "rd.regen": "Regenerate",
+        "rd.regenerating": "Regenerating…",
+        "rd.regenConfirm": "Regenerate “{name}”? The current version is kept in history.",
+        "pj.home": "All projects",
+        "st.emptyT": "What you make here is saved here.",
+        "st.emptyD": "Pick a tile above to turn your sources into a report, flashcards, a quiz and more. Answers you save from the chat land here too.",
+        "cx.copy": "Copy",
+        "cx.copied": "Copied.",
+        "cx.copyFailed": "Couldn't copy.",
+        "cx.disclaimer": "Answers come only from what they said in these episodes. Click a number to hear the original.",
+        "cx.disclaimerP": "Answers come only from this project's sources. Click a number to check the original.",
+        "pjm.more": "More",
+        "pjm.rename": "Edit title",
+        "pjm.emoji": "Change emoji",
+        "pjm.addCol": "Add to collection",
+        "pjm.pin": "Pin to top",
+        "pjm.unpin": "Unpin",
+        "pjm.pinned": "Pinned",
+        "pjm.hide": "Hide",
+        "pjm.unhide": "Unhide",
+        "pjm.delete": "Delete",
+        "pjm.emojiPh": "Or type / paste any emoji",
+        "pjm.emojiReset": "Use default",
+        "pjm.colTitle": "Collections",
+        "pjm.colEmpty": "No collections yet.",
+        "pjm.colNewPh": "New collection name",
+        "pjm.colNew": "Create",
+        "pjm.colAdded": "Added to “{name}”.",
+        "pjm.all": "All",
+        "pjm.colDelete": "Delete this collection",
+        "pjm.colDeleteConfirm": "Delete the collection “{name}”? The projects in it stay.",
+        "nb.fold": "Collapse panel",
+        "nb.unfold": "Expand panel",
+        "nav.collapse": "Collapse sidebar",
+        "nav.expand": "Expand sidebar",
+        "theme.system": "Theme: follow system",
+        "theme.light": "Theme: light",
+        "theme.dark": "Theme: dark",
+        "st.k.report": "Report",
+        "st.k.coverage": "Coverage check",
+        "st.d.report": "A written document built from your sources, with every point linked back to where it came from.",
+        "st.d.coverage": "Pick a list (an outline, requirements, a rubric, a set of questions). Each item is checked against the other sources: covered, partly covered, or missing.",
+        "st.fmt": "Format",
+        "st.f.briefing": "Briefing",
+        "st.f.guide": "Study guide",
+        "st.f.faq": "FAQ",
+        "st.f.timeline": "Timeline",
+        "st.f.custom": "Custom",
+        "st.fd.briefing": "Main themes, key facts, quotes, open questions",
+        "st.fd.guide": "Key points by topic, plus key terms",
+        "st.fd.faq": "The questions a newcomer would ask, answered",
+        "st.fd.timeline": "Events in order, plus who's who",
+        "st.fd.custom": "Describe what you want",
+        "st.promptL": "What should it be?",
+        "st.promptPh": "e.g. A one-page comparison of the two authors' views, as a table",
+        "st.promptNeed": "Describe the report you want.",
+        "st.listPick": "Which source is the list to check?",
+        "st.listNeed": "Pick the source that is the list.",
+        "st.fromList": "Checked against {s}, as selected on the left (the list itself is always included).",
+        "st.listAgainst": "List: {t}",
+        "dsc.ph": "Find sources on the web",
+        "dsc.where": "Where to search",
+        "dsc.web": "Web",
+        "dsc.bili": "Bilibili",
+        "dsc.search": "Search",
+        "dsc.searching": "Searching for “{q}”…",
+        "dsc.found": "{n} sources found",
+        "dsc.none": "Nothing found for “{q}”.",
+        "dsc.have": "Already added",
+        "dsc.views": "{n} views",
+        "dsc.toTranscribe": "{d} to transcribe",
+        "dsc.cost": "search {c}",
+        "dsc.add": "Add {n}",
+        "dsc.added": "Added {n}. Pages are being read and videos transcribed.",
+        "st.k.flashcards": "Flashcards",
+        "st.k.quiz": "Quiz",
+        "st.k.note": "Saved answer",
+        "st.d.flashcards": "Question on the front, answer on the back, each answer with its source. Flip through them to test yourself.",
+        "st.d.quiz": "Multiple-choice questions with plausible wrong answers. Pick one to see if you're right, why, and where it comes from.",
+        "st.count": "How many",
+        "st.focus": "Focus (optional)",
+        "st.focusPh": "e.g. Unit 3, or just the poems",
+        "st.generate": "Generate",
+        "st.from": "Made from {s}, as selected on the left.",
+        "st.noSources": "Add a source first.",
+        "st.started": "Generating. It shows up under Saved when it's ready.",
+        "st.generating": "Generating…",
+        "st.failed": "Failed",
+        "st.failedWhy": "Generation failed: {e}",
+        "st.retry": "Retry",
+        "st.delConfirm": "Delete “{t}”?",
+        "st.nItems.flashcards": "{n} cards",
+        "st.nItems.quiz": "{n} questions",
+        "st.covSources": "From {n} sources",
+        "st.covThinned": "the material was too long, so an even sample of {n} of {m} passages was used",
+        "st.covFocus": "used the {n} of {m} passages closest to the focus",
+        "st.fcPos": "Card {i} of {n}",
+        "st.shuffle": "Shuffle",
+        "st.flip": "Flip card",
+        "st.flipHint": "Click or press Space to flip",
+        "st.prev": "Previous",
+        "st.next": "Next",
+        "st.show": "Show answer",
+        "st.hide": "Hide answer",
+        "st.fcAll": "All {n} cards",
+        "st.score": "{r} right out of {d} answered ({n} questions)",
+        "st.retake": "Start over",
+        "st.correct": "Correct.",
+        "st.wrongIs": "Not quite. The answer is {a}.",
+        "st.answer": "Answer",
+        "st.all": "All {n}",
+        "st.olNone": "Nothing here.",
+        "st.s.covered": "Covered",
+        "st.s.partial": "Partly covered",
+        "st.s.missing": "Missing",
+        "st.saveNote": "Save to Studio",
+        "st.saved1": "Saved",
+        "st.noteSaved": "Saved to Studio.",
+        "nb.needsRec": "These views are built from recordings. Documents are answered from directly in Chat.",
+
+        "nb.openFull": "Open full transcript ↗",
+
+        "nb.tile.read": "Portrait and five lenses",
+
+        "nb.tile.readCol": "Overview and other angles",
+
+        "nb.tile.topics": "Their stance on each topic, over time",
+
+        "nb.tile.topicsCol": "Who says what on each topic",
+
+        "nb.tile.predictions": "Predictions, checked against what happened",
+
+        "nb.tile.predictionsCol": "Predictions, checked against what happened",
+
+        "nb.tile.cards": "Every extracted quote",
+
+        "nb.tile.cardsCol": "Every extracted quote",
+
+        "nb.tile.episodes": "Every episode, with transcripts",
+
+        "nb.tile.episodesCol": "Every recording, with transcripts",
+
+        "as.title": "Add sources",
+
+        "as.dropTitle": "Drop files here or click to choose",
+
+        "as.dropSub": "PDF, Word, PPT, Markdown, text, images · audio and video get transcribed",
+
+        "as.linkPh": "Paste a link: a video, a playlist, or a whole channel",
+
+        "as.linkGo": "Add link",
+
+        "as.queued": "{n} video(s) sent for transcription; they'll appear in Sources when done.",
+
+        "as.channelHas": "This project already has a channel. Start a new project for another one.",
+
+        "as.channelElsewhere": "This channel is already in another project. Opening it.",
+
+        "as.skipped": "{n} file(s) skipped (unsupported type)",
+
+        "src.selectAll": "Select all sources",
+
+        "src.nEpisodes": "{n} episodes",
+
+        "src.transcribing": "Transcribing",
+
+        "cards.cta": "Topics, predictions and an overview need evidence cards. Extract them from {n} recordings (about {cost}).",
+
+        "cards.ctaUpdate": "{n} recording(s) have no evidence cards yet.",
+
+        "cards.ctaBtn": "Extract evidence cards",
+
+        "cards.building": "Extracting…",
+
+        'creators.title': 'Projects',
+        'creators.subtitle': 'Put recordings, channels and documents together, then ask them anything. Every answer links back to where it came from: the exact second in a recording, or the page in a document.',
         'creators.urlPlaceholder': 'https://www.youtube.com/@creator  ·  a channel / homepage (for one video, use Transcribe)',
         'creators.authorPlaceholder': 'Author (optional)',
         'creators.engineTitle': 'Transcription engine.',
@@ -90,6 +425,7 @@ const STRINGS = {
             + 'Transcribe only = download + transcribe everything and stop there. Every episode lands '
             + 'in the Library and you still get one merged full-text doc, with no analysis cost.',
         'creators.nTranscripts': '{n} transcripts',
+        'creators.nTranscriptsOne': '1 transcript',
         'creators.moreOptions': '⚙ More options',
         'creators.maxVideos': 'Max videos',
         'creators.langTitle': "Language of the analysis documents (portrait, per-episode notes, lenses). Auto = follow the content's language. Verbatim quotes always stay original.",
@@ -117,7 +453,7 @@ const STRINGS = {
         'creators.hint': 'YouTube tip: use <code>channel/videos</code>. Bilibili &amp; other '
             + 'yt-dlp sites work too. <b>Prefer subtitles</b> skips download + transcription when a '
             + 'video already has captions.',
-        'creators.empty': 'No creators yet. Paste a link above to analyze one.',
+        'creators.empty': 'No projects yet. Click "New project" to start one.',
         'creators.bangumiHidden': '{n} anime/show transcripts are not listed here, since a series has no creator behind it. Find them in the Library.',
 
         'library.title': 'Library',
@@ -347,11 +683,11 @@ const STRINGS = {
         'videoStatus.failed': 'Failed',
         'videoStatus.download_failed': 'Download failed',
 
-        "lens.roast": "🔥 Hot take",
-        "lens.craft": "✍️ How he makes it",
-        "lens.fun": "😂 Worth watching?",
-        "lens.quotes": "💬 Best lines",
-        "lens.worldview": "🗺 Views at a glance",
+        "lens.roast": "Hot take",
+        "lens.craft": "How he makes it",
+        "lens.fun": "Worth watching?",
+        "lens.quotes": "Best lines",
+        "lens.worldview": "Views at a glance",
 
         'gtSource.transcribe': 'Transcribe',
         'gtSource.chains': 'Creator',
@@ -582,6 +918,8 @@ const STRINGS = {
         "sub.nextRun": "Next sync: {at}",
         "exp.export": "Export",
         "exp.word": "Word (.docx)",
+        "exp.pdf": "PDF (via Moye)",
+        "exp.pdfWorking": "Making the PDF in Moye…",
         "exp.markdown": "Markdown (.md) for Notion, Obsidian",
         "exp.sources": "Sources",
         "exp.video": "video",
@@ -594,9 +932,9 @@ const STRINGS = {
         "clip.loading": "Cutting this part from the original video (about 10 seconds the first time)…",
         "clip.download": "Download clip",
         "clip.failed": "Couldn’t get the audio.",
-        "col.open": "New collection",
-        "col.newTitle": "New collection",
-        "col.addTitle": "Add to this collection",
+        "col.open": "New project",
+        "col.newTitle": "New project",
+        "col.addTitle": "Add recordings from your library",
         "col.sub": "Put any recordings together (interviews, lectures, meetings, several creators) and ask, compare stances and export them as one.",
         "col.namePh": "Name, e.g. User interviews · September",
         "col.k.interview": "Interviews",
@@ -608,30 +946,30 @@ const STRINGS = {
         "col.tabCreators": "Whole creators",
         "col.searchPh": "Search titles…",
         "col.cost": "Anything already analysed is reused for free; new recordings cost about 5¢ each.",
-        "col.create": "Build collection",
+        "col.create": "Build project",
         "col.none": "Nothing matches.",
         "col.picked": "{n} transcripts · {m} creators picked",
         "col.pickSome": "Pick at least one transcript or creator.",
         "col.nameIt": "Give it a name.",
         "col.creating": "Starting…",
         "col.started": "Building. Reused material is instant, new recordings take a minute or two each.",
-        "col.section": "Collections",
-        "col.creatorsSection": "Creators",
+        'col.section': 'Projects',
+        'col.creatorsSection': 'Creators',
         "col.cardMeta": "{kind} · {n} items",
-        "col.fromCart": "Make a collection",
-        "col.eyebrow": "COLLECTION · {kind} · {n} ITEMS",
+        "col.fromCart": "Make a project",
+        "col.eyebrow": "PROJECT · {kind} · {n} ITEMS",
         "col.add": "Add recordings",
         "col.rebuild": "Rebuild",
         "col.actionsHint": "Add recordings = pick more transcripts; only the new ones are analysed. Rebuild = redo the overview and tags.",
         "col.items": "All items",
         "cx.tab.readCol": "Overview",
-        "rd.overview": "📄 Overview",
+        "rd.overview": "Overview",
         "rd.overviewDesc": "What these recordings cover, who thinks what, agreements and disagreements",
         "cx.introTitleCol": "Ask across “{name}”",
         "cx.desc.readCol": "What these recordings cover, where speakers agree and disagree, and the same material from other angles.",
         "cx.desc.askCol": "Ask across all of them; answers say who said what, in which recording, with the quote.",
         "cx.desc.topicsCol": "For each topic: who is for or against it, across the recordings.",
-        "cx.desc.episodesCol": "Every recording in this collection.",
+        "cx.desc.episodesCol": "Every recording in this project.",
         "cards.speaker": "Speaker",
         "cards.allSpeakers": "All speakers",
         "radar.open": "Topic radar",
@@ -687,8 +1025,34 @@ const STRINGS = {
         "cx.intro2": "Every sentence links to the verbatim quote; click it to jump to that second in the transcript or the video.",
         "cx.intro3": "If they never talked about it, you’ll be told so. That’s an answer too.",
         "cx.tab.read": "Portrait",
+        "nb.tile.compare": "How the creators in this project answer the same question",
+        "nb.tile.compareCol": "How the creators in this project answer the same question",
+        "cx.desc.compare": "Ask one question and see how each creator answers it, side by side, with their own words.",
+        "cx.tab.compare": "Compare",
+        "vp.needTag": "First its {n} evidence cards need topic tags (about {cost}). When that's done it appears in the list below.",
+        "vp.genCost": "Generate (≈{cost})",
+        "vp.running": "Being prepared. It appears in the list below when ready.",
+        "vp.made": "Already made · {at}",
+        "vp.topicsN": "{n} topics ready.",
+        "vp.cardsN": "{n} evidence cards ready.",
+        "vp.ready": "Ready.",
+        "vp.queued": "Tagging started. It appears in the list below when it's done.",
+        "vp.added": "Added to the list below.",
+        "pc.started": "Generating. It appears in the list below when it's ready.",
+        "st.k.compare": "Compare",
+        "src.openCreator": "Open their own page",
+        "pc.ph": "One question for all of them…",
+        "pc.hint": "Pick 2 to 4 people.",
+        "pp.loose": "Recordings in this project",
+        "pp.unnamed": "Unnamed",
+        "pp.wait": "processing",
+        "pp.notYet": "Still being transcribed and analysed",
+        "src.removeCreator": "Remove from project",
+        "src.removeCreatorConfirm": "Remove {t} from this project? Their transcripts and analysis stay in your library (other projects may use them).",
+        "src.sharedHint": "This creator's transcripts and analysis are shared with other projects",
+        "as.channelShared": "This channel is already in your library, so the project reuses it (no re-transcribing).",
         "rd.docs": "Pick one to read",
-        "rd.portrait": "📄 Full portrait",
+        "rd.portrait": "Full portrait",
         "rd.portraitDesc": "Worldview, ways of thinking, rhetoric, blind spots",
         "rd.openFull": "Open full page ↗",
         "rd.generate": "Generate",
@@ -702,8 +1066,8 @@ const STRINGS = {
         "lens.quotes.desc": "His most representative lines",
         "lens.worldview.desc": "Where he stands on everything, in one table",
         "sub.unfollow": "Turn off auto-sync",
-        "creators.yours": "Your creators",
-        "creators.search": "Find a creator…",
+        'creators.yours': 'Your projects',
+        'creators.search': 'Find a project…',
         "creators.noMatch": "No creator matches.",
         "creators.nEpisodes": "{n} episodes",
         "creators.chipPortrait": "Portrait",
@@ -726,12 +1090,38 @@ const STRINGS = {
         "cx.modeAboutHint": "Answers only from what they actually said; every sentence links to the quote.",
         "cx.modeAsHint": "An AI imitates how they would answer. These are not their words. The real quotes it rests on are listed under each answer.",
         "cx.simLabel": "AI simulation, not their words. The real quotes it rests on are below.",
-        "cx.placeholder": "Ask anything about what they said… (Enter to send, Shift+Enter for a new line)",
+        "cx.placeholder": "Ask anything about what they said…",
         "cx.send": "Ask",
         "cx.clear": "Clear conversation",
+        "cx.chat": "Chat",
+        "cx.cfg": "How answers are written",
+        "cx.cfgAbout": "What they said",
+        "cx.cfgAboutD": "Third person. Every sentence cites a quote.",
+        "cx.cfgAboutDP": "Third person, each point attributed to the person who said it. Every sentence cites a quote.",
+        "cx.cfgAs": "In their voice (AI simulation)",
+        "cx.cfgAsD": "First person, imitating how they talk. Still built only from their own quotes, which are listed under each answer.",
+        "cx.asChip": "As {name}",
+        "cx.asOff": "Back to normal answers",
+        "cx.asPh": "Ask {name} something…",
+        "cx.disclaimerAs": "An AI is imitating them. These are not their words; the real quotes it rests on are under each answer.",
+        "cx.more": "More",
+        "cx.exportConv": "Export conversation",
+        "cx.clearConfirm": "Clear this conversation? Saved Studio items stay.",
         "cx.tryAsking": "Try asking",
         "cx.reading": "Reading through the quotes…",
+        "cx.stageSearch": "Finding the relevant quotes",
+        "cx.stageWrite": "Writing",
+        "cx.stageRewrite": "Putting the answer into your language",
+        "cx.stop": "Stop",
+        "cx.stopped": "Stopped",
+        "cx.stoppedEmpty": "Stopped before answering.",
         "cx.demoOff": "Asking is turned off in this demo. Browse the Stances, Predictions and Quotes tabs instead.",
+        "cx.covAllP": "Searched all {n} passages from {m} sources",
+        "cx.covSearchP": "Searched {n} passages from {m} sources: {h} matched, read the {k} most relevant",
+        "cx.covSpreadP": "{n} passages from {m} sources: read {k}, spread evenly",
+        "cx.desc.askProj": "Ask your sources. Every sentence links back to the page or the second it came from.",
+        "cx.desc.episodesProj": "Everything in this project: documents, notes, recordings and videos.",
+        "cx.desc.readProj": "An overview written from the sources, and the same material read from other angles.",
         "cx.covAll": "Searched all {n} cards from {m} episodes",
         "cx.covSearch": "Searched {n} cards from {m} episodes: {h} matched, read the {k} most relevant",
         "cx.covTopic": "Topic: {t}",
@@ -754,7 +1144,7 @@ const STRINGS = {
         "rh.hedgeHint": "Qualifiers like “not yet verified”, “unproven”, “check it yourself” per episode.",
         "rh.tradeHint": "When they introduce a technology, how often they also mention its cost or downside ({a} of {b}).",
         "rh.note": "Counted across {n} episodes",
-        "sub.follow": "↻ Auto-sync",
+        "sub.follow": "Auto-sync",
         "sub.following": "Auto-sync on",
         "sub.offHint": "Check this channel for new videos on a schedule: only new episodes are downloaded, transcribed and analysed (nothing already here is touched), and the portrait is updated on top of the old one.",
         "sub.onHint": "Only new videos are processed; existing episodes, quotes and tags stay as they are. The portrait is updated in place (old versions are kept).",
@@ -920,7 +1310,7 @@ const STRINGS = {
         'nav.tagline': '音频 → 转写 → 洞察 · 本地部署',
         'nav.transcribe': '转写',
         'nav.xhs': '小红书',
-        'nav.creators': '博主',
+        'nav.creators': '项目',
         'nav.library': '资料库',
 
         'transcribe.title': '转写',
@@ -972,8 +1362,343 @@ const STRINGS = {
         'xhs.reportZh': '报告语言：中文',
         'xhs.analyzeBtn': '分析这一批',
 
-        'creators.title': '博主',
-        "creators.subtitle": "粘贴一个频道，Verbatim 会转写每一期、摘出博主真正说过的原话，并写一份人物画像。之后可以随便提问（每句回答都能点回他说这话的那一秒）、看他的立场怎么变、对一对他的预测准不准——有新视频还能自动同步进来。",
+        "common.cancel": "取消",
+
+        "pj.new": "新建项目",
+
+        "pj.newTitle": "你要做什么？",
+
+        "pj.t.creator": "研究一个博主",
+
+        "pj.t.creatorD": "跟踪一个频道：他怎么想、立场怎么变、预测准不准。",
+
+        "pj.t.study": "学习 / 备考",
+
+        "pj.t.studyD": "课堂录音、讲义、旧试卷。对着原始材料提问、复习。",
+
+        "pj.t.topic": "研究一个话题",
+
+        "pj.t.topicD": "几个博主加几篇文章，围绕一个话题，对比各方怎么说。",
+
+        "pj.t.blank": "空白项目",
+        "pj.eyebrow": "项目",
+        "pj.updated": "更新于 {d}",
+
+        "pj.t.blankD": "从空的开始，想放什么放什么。",
+
+        "pj.namePh": "起个名字，比如：语文期末",
+
+        "pj.create": "创建，开始加来源",
+
+        "pj.nameIt": "给项目起个名字",
+
+        "pj.creatorTitle": "研究一个博主",
+
+        "pj.openOriginal": "原文件",
+
+        "pj.cardMeta": "{r} 段录音 · {d} 份文档",
+
+        "cx.tab.sources": "来源",
+
+        "src.docs": "文档",
+
+        "src.recordings": "录音和视频",
+
+        "src.addFiles": "上传文件",
+
+        "src.addText": "粘贴文字",
+
+        "src.addRec": "上传录音",
+
+        "src.fromLib": "从资料库选",
+
+        "src.dropHint": "把 PDF、Word、PPT、Markdown 或图片拖到这里",
+
+        "src.textTitlePh": "标题（可选）",
+
+        "src.textPh": "粘贴笔记、提纲、文章……",
+
+        "src.textSave": "添加",
+
+        "src.st.converting": "转换中",
+
+        "src.st.ready": "已就绪",
+
+        "src.st.failed": "失败",
+
+        "src.st.missing": "找不到了",
+
+        "src.pages": "{n} 页",
+
+        "src.chars": "{n} 字",
+
+        "src.retry": "重试",
+
+        "src.remove": "移除",
+
+        "src.open": "打开",
+
+        "src.removeConfirm": "从这个项目里移除「{t}」？文件本身不会删。",
+
+        "src.indexing": "正在给新来源建索引，建好就能提问……",
+
+        "src.moyeOff": "墨页没开：PDF 只能读自带的文字层，扫描件读不出来。打开墨页可以做 OCR。",
+
+        "src.emptyProject": "还没有来源。加点文档或录音，就能对它们提问。",
+
+        "src.uploading": "上传中……",
+
+        "src.recUploaded": "已提交 {n} 个录音去转写，转完会出现在这里。",
+
+        "src.channelNote": "这个博主的录音来自频道本身；这里可以再加文档：文章、书、笔记。",
+
+        "src.noRecordings": "还没有录音。",
+
+        "cx.scope": "查找范围",
+
+        "cx.scopeAll": "全部来源",
+
+        "cx.scopeMedia": "只看录音",
+
+        "cx.scopeDocs": "只看文档",
+
+        "cx.scopePick": "手动挑",
+
+        "cx.scopePicked": "已挑 {n} 个",
+
+        "cx.introProject": "只凭这个项目的 {n} 个来源回答，每句都能点回出处。",
+        "cx.introProjectOne": "只凭这个项目的 1 个来源回答，每句都能点回出处。",
+        "cx.intro2P": "点引用就能打开出处：文档的那一页，或录音的那一秒。",
+        "cx.intro3P": "来源里没有的内容会直说没有，不会替你猜。",
+        "cx.placeholderP": "问这些资料里的任何事……",
+
+        "cx.openDoc": "在文档里打开",
+
+        "reader.page": "第 {n} 页",
+
+        "pj.untitled": "未命名项目",
+
+        "nb.sources": "来源",
+
+        "nb.chat": "问答",
+
+        "nb.studio": "工作台",
+
+        "nb.backChat": "← 问答",
+
+        "nb.backSources": "← 来源",
+
+        "nb.episodes": "全部录音",
+
+        "nb.nSources": "{n} 个来源",
+        "nb.nSourcesOne": "1 个来源",
+
+        "nb.nOfSources": "{m} 个来源里选了 {n} 个",
+
+        "nb.srcEmptyT": "加进来的来源会出现在这里",
+
+        "nb.srcEmptyD": "加文件、链接或文字，然后对它们提问。",
+
+        "nb.emptyT": "开始你的项目",
+
+        "nb.emptyD": "把手头的材料加进来：录音、频道、文档或笔记。然后随便问，每句回答都能点回出处。",
+
+        "nb.needsCards": "这个要用证据卡，先在右边的工作台里抽一下。",
+
+        "nb.needsCardsShort": "需要证据卡",
+        "nb.needsRecShort": "要有录音才有",
+        "nav.menu": "菜单",
+        "nb.backStudio": "回到工作台",
+        "st.kindRead": "人物画像",
+        "st.kindReadCol": "综述",
+        "st.kindLens": "镜头",
+        "nb.srcRailAdd": "添加来源",
+        "rd.basedEp": "基于 {n} 期",
+        "rd.basedRec": "基于 {n} 条录音",
+        "rd.madeAt": "生成于 {at}",
+        "rd.notMade": "还没生成",
+        "rd.noPortraitShort": "跑完分析才有",
+        "rd.open": "打开",
+        "rd.pickD": "完整画像是分析时写好的；另外五篇是换个角度读同一批证据卡，用到时再生成。",
+        "rd.pickDCol": "综述是分析时写好的；另外五篇是换个角度读同一批证据卡，用到时再生成。",
+        "rd.genStarted": "正在生成「{name}」，好了会出现在工作台列表里。",
+        "rd.genDone": "「{name}」生成好了，在工作台列表里。",
+        "rd.regen": "重新生成",
+        "rd.regenerating": "正在重新生成……",
+        "rd.regenConfirm": "重新生成「{name}」？现在这一版会留在历史记录里。",
+        "pj.home": "所有项目",
+        "st.emptyT": "生成的内容会存在这里。",
+        "st.emptyD": "点上面的格子，用来源生成报告、闪卡、自测题等；对话里「存进工作台」的回答也放在这里。",
+        "cx.copy": "复制",
+        "cx.copied": "已复制。",
+        "cx.copyFailed": "复制失败。",
+        "cx.disclaimer": "回答只来自这些视频里的原话，点数字可以核对原话、跳到那一秒。",
+        "cx.disclaimerP": "回答只来自这个项目的来源，点数字可以核对原文。",
+        "pjm.more": "更多",
+        "pjm.rename": "改名",
+        "pjm.emoji": "换表情",
+        "pjm.addCol": "加入合集",
+        "pjm.pin": "置顶",
+        "pjm.unpin": "取消置顶",
+        "pjm.pinned": "已置顶",
+        "pjm.hide": "隐藏",
+        "pjm.unhide": "取消隐藏",
+        "pjm.delete": "删除",
+        "pjm.emojiPh": "或者输入 / 粘贴任意表情",
+        "pjm.emojiReset": "恢复默认",
+        "pjm.colTitle": "合集",
+        "pjm.colEmpty": "还没有合集。",
+        "pjm.colNewPh": "新合集的名字",
+        "pjm.colNew": "新建",
+        "pjm.colAdded": "已加入「{name}」。",
+        "pjm.all": "全部",
+        "pjm.colDelete": "删除这个合集",
+        "pjm.colDeleteConfirm": "删除合集「{name}」？里面的项目不会被删。",
+        "nb.fold": "收起这一栏",
+        "nb.unfold": "展开这一栏",
+        "nav.collapse": "收起侧栏",
+        "nav.expand": "展开侧栏",
+        "theme.system": "主题：跟随系统",
+        "theme.light": "主题：浅色",
+        "theme.dark": "主题：深色",
+        "st.k.report": "报告",
+        "st.k.coverage": "对照检查",
+        "st.d.report": "从来源写成一份文档，每一条都能点回出处。",
+        "st.d.coverage": "选一份清单（提纲、要求、评分标准、问题列表），逐条对照其他来源：覆盖了、只提到一点，还是没覆盖。",
+        "st.fmt": "格式",
+        "st.f.briefing": "简报",
+        "st.f.guide": "学习指南",
+        "st.f.faq": "常见问题",
+        "st.f.timeline": "时间线",
+        "st.f.custom": "自定义",
+        "st.fd.briefing": "主要议题、关键事实、原话、待解的问题",
+        "st.fd.guide": "按主题整理要点，附关键词",
+        "st.fd.faq": "新手会问的问题，逐个回答",
+        "st.fd.timeline": "按时间排的事件，附人物表",
+        "st.fd.custom": "写下你想要什么",
+        "st.promptL": "想要什么样的？",
+        "st.promptPh": "比如：把两位作者的观点对比成一页表格",
+        "st.promptNeed": "写一下想要什么样的报告。",
+        "st.listPick": "哪份是要对照的清单？",
+        "st.listNeed": "选一下哪份是清单。",
+        "st.fromList": "跟左边勾选的{s}对照（清单本身总会带上）。",
+        "st.listAgainst": "清单：{t}",
+        "dsc.ph": "在网上找来源",
+        "dsc.where": "在哪里找",
+        "dsc.web": "网页",
+        "dsc.bili": "B 站",
+        "dsc.search": "搜索",
+        "dsc.searching": "正在找「{q}」……",
+        "dsc.found": "找到 {n} 个来源",
+        "dsc.none": "没找到「{q}」相关的。",
+        "dsc.have": "已添加",
+        "dsc.views": "{n} 次播放",
+        "dsc.toTranscribe": "要转写 {d}",
+        "dsc.cost": "搜索 {c}",
+        "dsc.add": "添加 {n} 个",
+        "dsc.added": "已添加 {n} 个。网页在读取，视频在转写。",
+        "st.k.flashcards": "闪卡",
+        "st.k.quiz": "自测题",
+        "st.k.note": "存下的回答",
+        "st.d.flashcards": "正面是问题，背面是答案，答案都带出处。一张张翻着自测。",
+        "st.d.quiz": "选择题，干扰项都是容易混的。选一个就告诉你对不对、为什么、出自哪里。",
+        "st.count": "数量",
+        "st.focus": "侧重（可不填）",
+        "st.focusPh": "比如：第三单元，或者只要古诗词",
+        "st.generate": "生成",
+        "st.from": "用左边勾选的{s}。",
+        "st.noSources": "先添加来源。",
+        "st.started": "正在生成，好了会出现在「已生成」里。",
+        "st.generating": "生成中……",
+        "st.failed": "失败了",
+        "st.failedWhy": "生成失败：{e}",
+        "st.retry": "重试",
+        "st.delConfirm": "删除「{t}」？",
+        "st.nItems.flashcards": "{n} 张",
+        "st.nItems.quiz": "{n} 题",
+        "st.covSources": "来自 {n} 个来源",
+        "st.covThinned": "材料太长，按来源均匀取了 {m} 段里的 {n} 段",
+        "st.covFocus": "取了 {m} 段里跟侧重最相关的 {n} 段",
+        "st.fcPos": "第 {i} / {n} 张",
+        "st.shuffle": "打乱",
+        "st.flip": "翻面",
+        "st.flipHint": "点一下或按空格翻面",
+        "st.prev": "上一张",
+        "st.next": "下一张",
+        "st.show": "看答案",
+        "st.hide": "收起答案",
+        "st.fcAll": "全部 {n} 张",
+        "st.score": "答了 {d} 题，对 {r} 题（共 {n} 题）",
+        "st.retake": "重新做",
+        "st.correct": "答对了。",
+        "st.wrongIs": "不对，答案是 {a}。",
+        "st.answer": "答案",
+        "st.all": "全部 {n}",
+        "st.olNone": "这一类没有。",
+        "st.s.covered": "覆盖了",
+        "st.s.partial": "只提到一点",
+        "st.s.missing": "没覆盖",
+        "st.saveNote": "存进工作台",
+        "st.saved1": "已存",
+        "st.noteSaved": "已存进工作台。",
+        "nb.needsRec": "这几栏是从录音里抽出来的；文档直接在对话里问就行。",
+
+        "nb.openFull": "打开完整转写 ↗",
+
+        "nb.tile.read": "人物画像和五个镜头",
+
+        "nb.tile.readCol": "综述和其他角度",
+
+        "nb.tile.topics": "每个话题的立场和变化",
+
+        "nb.tile.topicsCol": "每个话题各方怎么说",
+
+        "nb.tile.predictions": "预测，对照实际结果",
+
+        "nb.tile.predictionsCol": "预测，对照实际结果",
+
+        "nb.tile.cards": "抽出来的全部原话",
+
+        "nb.tile.cardsCol": "抽出来的全部原话",
+
+        "nb.tile.episodes": "每一期和它的转写",
+
+        "nb.tile.episodesCol": "每段录音和它的转写",
+
+        "as.title": "添加来源",
+
+        "as.dropTitle": "把文件拖到这里，或点一下选择",
+
+        "as.dropSub": "PDF、Word、PPT、Markdown、文字、图片 · 音频和视频会自动转写",
+
+        "as.linkPh": "粘贴链接：一个视频、一个播放列表，或者整个频道",
+
+        "as.linkGo": "添加",
+
+        "as.queued": "已提交 {n} 个视频去转写，转完会出现在来源里。",
+
+        "as.channelHas": "这个项目已经有一个频道了；研究另一个频道请新建一个项目。",
+
+        "as.channelElsewhere": "这个频道已经在另一个项目里了，帮你打开那个项目。",
+
+        "as.skipped": "跳过了 {n} 个不支持的文件",
+
+        "src.selectAll": "全选",
+
+        "src.nEpisodes": "{n} 期",
+
+        "src.transcribing": "转写中",
+
+        "cards.cta": "立场、预测和综述要用证据卡。从 {n} 段录音里抽一次（约 {cost}）。",
+
+        "cards.ctaUpdate": "有 {n} 段录音还没抽证据卡。",
+
+        "cards.ctaBtn": "抽证据卡",
+
+        "cards.building": "正在抽……",
+
+        'creators.title': '项目',
+        'creators.subtitle': '把录音、频道和文档放在一起，对它们随便提问。每句回答都能点回出处：录音里的那一秒，或者文档里的那一页。',
         'creators.urlPlaceholder': 'https://www.youtube.com/@creator  ·  频道/主页链接（单个视频请用「转写」）',
         'creators.authorPlaceholder': '作者（可选）',
         'creators.engineTitle': '转写引擎。',
@@ -996,6 +1721,7 @@ const STRINGS = {
         'creators.modeTitle': '分析 = 每期转写完再写一份人物解读。'
             + '只转写 = 下载 + 转写全部就停，逐期稿进资料库，另外照样合出一份完整全文，不花分析的钱。',
         'creators.nTranscripts': '{n} 条转写',
+        'creators.nTranscriptsOne': '1 条转写',
         'creators.moreOptions': '⚙ 更多选项',
         'creators.maxVideos': '最多视频数',
         'creators.langTitle': '分析文档（画像、逐期笔记、镜头）使用的语言。自动 = 跟随内容语言。逐字引文始终保持原文。',
@@ -1022,7 +1748,7 @@ const STRINGS = {
         'toast.summaryFailed': '摘要生成失败',
         'creators.hint': 'YouTube 小技巧：用 <code>channel/videos</code> 这种链接。B站和其它 yt-dlp '
             + '支持的网站也可以。<b>优先字幕</b>会在视频已有字幕时跳过下载+转写。',
-        'creators.empty': '还没有博主——在上面粘贴一个链接开始分析。',
+        'creators.empty': '还没有项目。点「新建项目」开始。',
         'creators.bangumiHidden': '另有 {n} 条番剧转写没列在这里——番剧背后没有博主。去资料库找它们。',
 
         'library.title': '资料库',
@@ -1245,11 +1971,11 @@ const STRINGS = {
         'videoStatus.failed': '失败',
         'videoStatus.download_failed': '下载失败',
 
-        "lens.roast": "🔥 锐评",
-        "lens.craft": "✍️ 内容拆解",
-        "lens.fun": "😂 值不值得看",
-        "lens.quotes": "💬 金句",
-        "lens.worldview": "🗺 观点一览",
+        "lens.roast": "锐评",
+        "lens.craft": "内容拆解",
+        "lens.fun": "值不值得看",
+        "lens.quotes": "金句",
+        "lens.worldview": "观点一览",
 
         'gtSource.transcribe': '转写',
         'gtSource.chains': '博主',
@@ -1479,6 +2205,8 @@ const STRINGS = {
         "sub.nextRun": "下次同步：{at}",
         "exp.export": "导出",
         "exp.word": "Word（.docx）",
+        "exp.pdf": "PDF（墨页排版）",
+        "exp.pdfWorking": "正在用墨页生成 PDF……",
         "exp.markdown": "Markdown（.md）— 可直接拖进 Notion / Obsidian",
         "exp.sources": "出处",
         "exp.video": "视频",
@@ -1491,9 +2219,9 @@ const STRINGS = {
         "clip.loading": "正在从原视频截这一段（第一次约 10 秒）……",
         "clip.download": "下载这段音频",
         "clip.failed": "没拿到音频。",
-        "col.open": "新建合集",
-        "col.newTitle": "新建合集",
-        "col.addTitle": "往合集里加内容",
+        "col.open": "新建项目",
+        "col.newTitle": "新建项目",
+        "col.addTitle": "从资料库添加录音",
         "col.sub": "把任意一批录音放在一起——访谈、课程、会议、好几个博主——当成一个整体来提问、看立场、导出。",
         "col.namePh": "起个名字，比如：九月用户访谈",
         "col.k.interview": "访谈",
@@ -1505,30 +2233,30 @@ const STRINGS = {
         "col.tabCreators": "整个博主",
         "col.searchPh": "搜标题……",
         "col.cost": "分析过的直接复用、不花钱；新的每条约 5 美分。",
-        "col.create": "建合集",
+        "col.create": "建项目",
         "col.none": "没有匹配的。",
         "col.picked": "已选 {n} 条转写 · {m} 个博主",
         "col.pickSome": "至少选一条转写或一个博主。",
         "col.nameIt": "先起个名字。",
         "col.creating": "开始建……",
         "col.started": "正在建——复用的马上好，新的每条一两分钟。",
-        "col.section": "合集",
-        "col.creatorsSection": "博主",
+        'col.section': '项目',
+        'col.creatorsSection': '博主',
         "col.cardMeta": "{kind} · {n} 条",
-        "col.fromCart": "建成合集",
-        "col.eyebrow": "合集 · {kind} · {n} 条",
+        "col.fromCart": "建成项目",
+        "col.eyebrow": "项目 · {kind} · {n} 条",
         "col.add": "加内容",
         "col.rebuild": "重新构建",
         "col.actionsHint": "加内容 = 再挑几条转写，只分析新加的。重新构建 = 重写综述、重打标签。",
         "col.items": "全部内容",
         "cx.tab.readCol": "综述",
-        "rd.overview": "📄 综述",
+        "rd.overview": "综述",
         "rd.overviewDesc": "这批材料讲了什么、谁怎么看、共识和分歧",
         "cx.introTitleCol": "在「{name}」里找答案",
         "cx.desc.readCol": "这批录音讲了什么、各方在哪里一致、在哪里分歧；也可以换角度读。",
-        "cx.desc.askCol": "在整个合集里问；回答会说清是谁、在哪一条里说的，附原话。",
+        "cx.desc.askCol": "在整个项目里问；回答会说清是谁、在哪一条里说的，附原话。",
         "cx.desc.topicsCol": "每个话题上，不同的人是看好还是看空。",
-        "cx.desc.episodesCol": "这个合集里的每一条录音。",
+        "cx.desc.episodesCol": "这个项目里的每一条录音。",
         "cards.speaker": "说话人",
         "cards.allSpeakers": "所有说话人",
         "radar.open": "话题雷达",
@@ -1584,8 +2312,34 @@ const STRINGS = {
         "cx.intro2": "每句话都挂着原话出处，点一下跳到转写或原视频的那一秒。",
         "cx.intro3": "他没谈过的事会直说没谈过——这本身也是答案。",
         "cx.tab.read": "人物画像",
+        "nb.tile.compare": "同一个问题，项目里的几个博主各怎么说",
+        "nb.tile.compareCol": "同一个问题，项目里的几个博主各怎么说",
+        "cx.desc.compare": "问一个问题，几个博主的回答并排放，各自带原话出处。",
+        "cx.tab.compare": "对比",
+        "vp.needTag": "要先给 {n} 张证据卡打话题标签（约 {cost}），打完会出现在下面的列表里。",
+        "vp.genCost": "生成（约 {cost}）",
+        "vp.running": "正在准备，好了会出现在下面的列表里。",
+        "vp.made": "已经做过 · {at}",
+        "vp.topicsN": "已整理 {n} 个话题。",
+        "vp.cardsN": "共 {n} 张证据卡。",
+        "vp.ready": "可以生成。",
+        "vp.queued": "开始打标签了，好了会出现在下面的列表里。",
+        "vp.added": "已放进下面的列表。",
+        "pc.started": "正在生成，好了会出现在下面的列表里。",
+        "st.k.compare": "对比",
+        "src.openCreator": "打开他的单独页面",
+        "pc.ph": "问他们同一个问题……",
+        "pc.hint": "选 2 到 4 个人。",
+        "pp.loose": "项目里的录音",
+        "pp.unnamed": "未命名",
+        "pp.wait": "处理中",
+        "pp.notYet": "还在转写和分析",
+        "src.removeCreator": "从项目里移除",
+        "src.removeCreatorConfirm": "把 {t} 从这个项目移除？他的转写和分析还留在资料库里（别的项目可能在用）。",
+        "src.sharedHint": "这个博主的转写和分析跟别的项目共用",
+        "as.channelShared": "资料库里已经有这个频道了，项目直接共用（不重新转写）。",
         "rd.docs": "选一篇读",
-        "rd.portrait": "📄 完整画像",
+        "rd.portrait": "完整画像",
         "rd.portraitDesc": "世界观、思考方式、说话风格、盲区",
         "rd.openFull": "单独打开 ↗",
         "rd.generate": "生成",
@@ -1599,8 +2353,8 @@ const STRINGS = {
         "lens.quotes.desc": "他最有代表性的原话",
         "lens.worldview.desc": "他对各类事的立场，一张表",
         "sub.unfollow": "关闭定期同步",
-        "creators.yours": "你的博主",
-        "creators.search": "找博主……",
+        'creators.yours': '我的项目',
+        'creators.search': '找项目……',
         "creators.noMatch": "没有匹配的博主。",
         "creators.nEpisodes": "{n} 期",
         "creators.chipPortrait": "画像",
@@ -1623,12 +2377,38 @@ const STRINGS = {
         "cx.modeAboutHint": "只凭他说过的原话回答，每句话都挂着出处。",
         "cx.modeAsHint": "AI 模仿他的口吻回答，不是他本人说的。每条回答下面列着它依据的真实原话。",
         "cx.simLabel": "AI 模拟，不是他本人说的。依据的真实原话在下面。",
-        "cx.placeholder": "问他说过的任何事……（回车发送，Shift+回车换行）",
+        "cx.placeholder": "问他说过的任何事……",
         "cx.send": "问",
         "cx.clear": "清空对话",
+        "cx.chat": "对话",
+        "cx.cfg": "回答方式",
+        "cx.cfgAbout": "讲他们说过什么",
+        "cx.cfgAboutD": "第三人称，每句都带原话出处。",
+        "cx.cfgAboutDP": "第三人称，每一点写明是谁说的，每句都带原话出处。",
+        "cx.cfgAs": "用他的口吻回答（AI 模拟）",
+        "cx.cfgAsD": "第一人称，模仿他说话的样子。仍然只凭他说过的话，依据的原话列在每条回答下面。",
+        "cx.asChip": "{name} 的口吻",
+        "cx.asOff": "换回正常回答",
+        "cx.asPh": "问问 {name}……",
+        "cx.disclaimerAs": "这是 AI 模仿他的回答，不是他本人说的；依据的真实原话列在每条回答下面。",
+        "cx.more": "更多",
+        "cx.exportConv": "导出对话",
+        "cx.clearConfirm": "清空这段对话？存进工作台的不受影响。",
         "cx.tryAsking": "可以这样问",
         "cx.reading": "正在翻他的原话……",
+        "cx.stageSearch": "正在找相关的原话",
+        "cx.stageWrite": "正在写",
+        "cx.stageRewrite": "正在改成你提问的语言",
+        "cx.stop": "停止",
+        "cx.stopped": "已停止",
+        "cx.stoppedEmpty": "还没开始回答就停止了。",
         "cx.demoOff": "演示版没开提问。可以看看「立场」「预测对账」「原话」这几页。",
+        "cx.covAllP": "查了全部 {n} 段原文，来自 {m} 个来源",
+        "cx.covSearchP": "在 {m} 个来源的 {n} 段原文里查，{h} 段相关，读了最相关的 {k} 段",
+        "cx.covSpreadP": "{m} 个来源里有 {n} 段原文，均匀读了 {k} 段",
+        "cx.desc.askProj": "对你的来源提问。每句回答都能点回出处：文档的那一页，或者录音的那一秒。",
+        "cx.desc.episodesProj": "这个项目里的所有东西：文档、笔记、录音和视频。",
+        "cx.desc.readProj": "根据来源写的综述，以及换个角度读同一批材料。",
         "cx.covAll": "查了全部 {n} 张卡，来自 {m} 期",
         "cx.covSearch": "在 {m} 期的 {n} 张卡里查，{h} 张相关，读了最相关的 {k} 张",
         "cx.covTopic": "话题：{t}",
@@ -1651,7 +2431,7 @@ const STRINGS = {
         "rh.hedgeHint": "每期平均用多少次「待验证」「尚未」「存疑」「自己核一下」这类留余地的说法。",
         "rh.tradeHint": "介绍一项技术时，有多大比例同时提到它的代价或短板（{b} 个里 {a} 个）。",
         "rh.note": "基于 {n} 期统计",
-        "sub.follow": "↻ 定期同步",
+        "sub.follow": "定期同步",
         "sub.following": "已开启定期同步",
         "sub.offHint": "按设定的频率检查这个频道有没有新视频：只下载、转写、分析新出的几期，已有的一律不动；画像在原来的基础上补进新内容。",
         "sub.onHint": "只处理新视频；已有的期、原话、标签都不动。画像在原基础上更新，旧版本会留底。",

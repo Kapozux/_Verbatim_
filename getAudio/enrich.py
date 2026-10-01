@@ -37,6 +37,28 @@ filename_meaningful 的判断标准：上面的文件名（去掉后缀和 [视�
 若内容明显是废稿/空白/无意义，title 写"（内容为空或无效）"。"""
 
 
+def _enrich_text(prompt):
+    """标题 / 标签 / 文件名判断这类机械活：内容跟中国议题无关走 DeepSeek（llmroute），
+    否则 Gemini flash 且不开思考。失败返回 None。"""
+    import llmroute
+    out = llmroute.text(prompt, 'enrich')
+    if out:
+        return out.strip()
+    api_key = config.gemini_key()
+    if not api_key:
+        return None
+    try:
+        from google.genai import types
+        client = make_gemini_client(api_key)
+        resp = client.models.generate_content(
+            model=GEMINI_ENRICH_MODEL, contents=prompt,
+            config=types.GenerateContentConfig(thinking_config=types.ThinkingConfig(thinking_budget=0)))
+        usage.record_gemini(resp, GEMINI_ENRICH_MODEL, 'enrich')
+        return (resp.text or '').strip() or None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def generate_card_meta(filename, content):
     """生成 {title, one_line, tags}；失败返回 None（调用方自行兜底）。"""
     api_key = config.gemini_key()
@@ -46,15 +68,8 @@ def generate_card_meta(filename, content):
     # 控制输入长度：overview 本来就短；退回正文时只取开头
     content = content.strip()[:3000]
 
-    try:
-        client = make_gemini_client(api_key)
-        resp = client.models.generate_content(
-            model=GEMINI_ENRICH_MODEL,
-            contents=ENRICH_PROMPT.format(filename=filename, content=content),
-        )
-        usage.record_gemini(resp, GEMINI_ENRICH_MODEL, 'enrich')
-        raw = (resp.text or '').strip()
-    except Exception:
+    raw = _enrich_text(ENRICH_PROMPT.format(filename=filename, content=content))
+    if not raw:
         return None
 
     return _parse_json(raw)
@@ -118,15 +133,8 @@ def _gemini_translate(tags):
         "严格输出一个 JSON 对象，key 是原中文、value 是英文，不要输出别的：\n"
         + json.dumps(tags, ensure_ascii=False)
     )
-    try:
-        client = make_gemini_client(api_key)
-        resp = client.models.generate_content(
-            model=GEMINI_ENRICH_MODEL,
-            contents=prompt,
-        )
-        usage.record_gemini(resp, GEMINI_ENRICH_MODEL, 'enrich')
-        raw = (resp.text or '').strip()
-    except Exception:
+    raw = _enrich_text(prompt)
+    if not raw:
         return None
     data = _parse_json_obj(raw)
     if not isinstance(data, dict):
@@ -242,16 +250,10 @@ def judge_filenames(names):
     api_key = config.gemini_key()
     if not api_key or not names:
         return None
-    try:
-        client = make_gemini_client(api_key)
-        resp = client.models.generate_content(
-            model=GEMINI_ENRICH_MODEL,
-            contents=FILENAME_JUDGE_PROMPT.format(names=json.dumps(names, ensure_ascii=False)),
-        )
-        usage.record_gemini(resp, GEMINI_ENRICH_MODEL, 'enrich')
-        data = _parse_json_obj((resp.text or '').strip())
-    except Exception:
+    raw = _enrich_text(FILENAME_JUDGE_PROMPT.format(names=json.dumps(names, ensure_ascii=False)))
+    if not raw:
         return None
+    data = _parse_json_obj(raw)
     if not isinstance(data, dict):
         return None
     return {str(k): bool(v) for k, v in data.items()}

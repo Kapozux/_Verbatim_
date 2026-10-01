@@ -202,14 +202,14 @@ NARRATIVE_PROMPT = """下面是一个人在 {period} 期间用转写工具转写
 
 每种语言都输出三部分：
 1. headline：一句话概括这段时间在听什么，直接陈述，不要冒号、感叹号、书名号。
-   中文不超过 20 个字，例如「主要在听中国政治评论和立党的求职讲座」；
+   中文不超过 20 个字，例如「主要在听播客访谈和求职讲座」；
    英文不超过 12 个词，例如 "Mostly Chinese political commentary and Lidang's career talks"。
 2. narrative：一段话。第一句说最主要在听什么；然后说第二、第三大的内容是什么；如果有明显变化
    （比如后半段转向了别的主题）说一句；最后可以提一个反复出现的具体话题或人。
    中文 80-130 字，英文 60-100 词。
 3. topics：对下面每个主题标签，说清在这个标签下实际听的是什么——
    name 不要照抄标签本身（标签是"时政评论"就别再写"时政评论"），要比标签更具体，
-   例如「中国政治与高层人事分析」、"Chinese politics and elite power struggles"。
+   例如「创业公司融资与早期增长」、"Startup fundraising and early growth"。
    name_zh 不超过 10 个字，name_en 不超过 5 个词；desc_zh 不超过 35 字，desc_en 不超过 16 词，直接说内容。
    tag 一栏必须原样抄下面的标签，包括 "__other__" 这个写法本身，不要翻译、不要换成别的词。
    "__other__" 这项 name_zh 固定写「其它」、name_en 固定写 "Everything else"，desc 说剩下零散的是什么。
@@ -307,8 +307,10 @@ def _gemini_text(prompt):
 
 
 def _call_model(prompt):
-    """默认 Gemini flash-lite；配了 REFLECT_OPENROUTER_MODEL 就优先用它。返回原始文本或 None。"""
-    for fn in (_openrouter_text, _gemini_text):
+    """配了 REFLECT_OPENROUTER_MODEL 就优先用它；否则内容跟中国议题无关走 DeepSeek（llmroute），
+    再不行 Gemini flash-lite。返回原始文本或 None。"""
+    import llmroute
+    for fn in (_openrouter_text, lambda p: llmroute.text(p, 'reflect'), _gemini_text):
         try:
             text = fn(prompt)
         except Exception:

@@ -36,3 +36,31 @@ verbatim-mcp/*.egg-info/
 verbatim-mcp/dist/
 verbatim-mcp/mcp-publisher
 verbatim-mcp/*.egg-info/
+
+# Verbatim 模型调用记账（本地数据）+ 用户自定义价格表
+usage.db*
+prices.json
+
+# Ephemeris（聊天日记）：只有代码进仓库，白名单在 ephemeris/.gitignore。
+# 这里再兜一层底 —— 就算那份白名单被改坏了，下面这些也绝不会进去。
+ephemeris/.env
+ephemeris/chats.db*
+ephemeris/*.bak
+ephemeris/.cache/
+ephemeris/.chrome/
+ephemeris/imports/
+ephemeris/logs/
+ephemeris/diaries*.json
+ephemeris/*.pdf
+chat_diary/
+
+# 任何地方的聊天导出、数据库和登录态
+*.db
+*.db-shm
+*.db-wal
+*.db.bak
+.chrome/
+**/imports/
+
+# Ephemeris 是自己的独立仓库（ephemeris/.git），父仓库整个跳过
+ephemeris/

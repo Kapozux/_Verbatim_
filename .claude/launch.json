@@ -4,8 +4,18 @@
     {
       "name": "flask-app",
       "runtimeExecutable": "bash",
-      "runtimeArgs": ["/Users/kapozux/Documents/CODEelse/run.sh"],
+      "runtimeArgs": [
+        "/Users/kapozux/Documents/CODEelse/run.sh"
+      ],
       "port": 5001
+    },
+    {
+      "name": "ephemeris",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "/Users/kapozux/Documents/CODEelse/ephemeris/run.sh"
+      ],
+      "port": 5055
     }
   ]
 }

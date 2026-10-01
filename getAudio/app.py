@@ -123,7 +123,7 @@ DEMO_MODE = os.environ.get('VERBATIM_DEMO') == '1'
 
 
 _DEMO_LENS_POST = re.compile(r'^/api/chain/([0-9a-f]{32})/lens$')
-_DEMO_ASK_POST = re.compile(r'^/api/chain/[0-9a-f]{32}/ask$')
+_DEMO_ASK_POST = re.compile(r'^/api/chain/[0-9a-f]{32}/ask(/stream)?$')
 DEMO_ASK = DEMO_MODE and os.environ.get('VERBATIM_DEMO_ASK') == '1'
 
 
@@ -886,6 +886,11 @@ def _run_transcription(task_id, filepath, engine, original_filename, q,
                 _net_breaker.record_ok()           # 云端调通了一条，断网计数清零
             _reflect_touch()
             taskdb.set_status(task_id, 'done')
+            if (extra_meta or {}).get('project_id'):          # 在项目里直接传的录音：转完加进那个项目
+                try:
+                    _project_on_transcribed(extra_meta['project_id'], task_id)
+                except Exception as e:  # noqa: BLE001  加不进项目不影响转写本身
+                    print(f'[project] add {task_id[:8]} failed: {e}')
             q.put(json.dumps({
                 'type': 'done',
                 'task_id': task_id,
@@ -1203,7 +1208,7 @@ def _static_version():
     文件一变这串数字就变，浏览器才会当成新资源重新拉取。
     """
     try:
-        paths = [os.path.join(app.static_folder, name) for name in ('app.js', 'style.css', 'i18n.js', 'explore.js', 'tools.js')]
+        paths = [os.path.join(app.static_folder, name) for name in ('app.js', 'style.css', 'i18n.js', 'explore.js', 'tools.js', 'projects.js', 'study.js')]
         return str(int(max(os.path.getmtime(p) for p in paths if os.path.isfile(p))))
     except (ValueError, OSError):
         return '0'
@@ -1226,7 +1231,7 @@ def _parse_speaker_count(raw):
         return None
 
 
-def _enqueue_task(file, engine, speaker_count=None):
+def _enqueue_task(file, engine, speaker_count=None, extra_meta=None):
     """校验并保存单个文件，建队列并提交到线程池。
 
     返回 (task_id, None) 成功，或 (None, error_message) 失败。
@@ -1254,7 +1259,7 @@ def _enqueue_task(file, engine, speaker_count=None):
     # 本地 Whisper 转的（多半是为隐私留本地的）不送云体检。
     submit_transcription(
         engine, run_transcription, task_id, filepath, engine, file.filename, q,
-        speaker_count, False, engine != 'whisper',
+        speaker_count, False, engine != 'whisper', extra_meta=extra_meta,
     )
 
     return task_id, None
@@ -1475,7 +1480,7 @@ def _clean_sub_mode(raw):
 
 
 def _download_then_transcribe(task_id, url, engine, q, section=None, offset_sec=0,
-                              sub_mode='auto'):
+                              sub_mode='auto', project_id=None):
     """单个视频链接：先下音频，再走正常转写任务（进 Library，和上传的稿一样）。
 
     section/offset_sec：只转某时间段（如 10:00–25:00）时，section 传给 yt-dlp
@@ -1520,6 +1525,8 @@ def _download_then_transcribe(task_id, url, engine, q, section=None, offset_sec=
                     q.put(json.dumps({'type': 'done', 'task_id': task_id,
                                       'segments': saved, 'summary': None,
                                       'subtitle_lang': sub_lang}))
+                    if project_id:                 # 在项目里贴的链接：字幕直接落盘这条路也要进项目
+                        _project_on_transcribed(project_id, task_id)
                     return
                 except Exception as e:  # noqa: BLE001  存字幕失败也别让任务死：转写兜底
                     q.put(json.dumps({'type': 'progress', 'percent': 1,
@@ -1549,7 +1556,8 @@ def _download_then_transcribe(task_id, url, engine, q, section=None, offset_sec=
                           None, False, engine != 'whisper', offset_sec=offset_sec,
                           extra_meta={'source_url': url,
                                       'video_id': item.get('video_id') or _video_id_from_url(url),
-                                      'creator': item.get('uploader')},
+                                      'creator': item.get('uploader'),
+                                      **({'project_id': project_id} if project_id else {})},
                           timing=timing)
     except Exception as e:  # noqa: BLE001
         taskdb.set_status(task_id, 'failed', error=str(e)[:300])
@@ -1618,6 +1626,8 @@ def api_transcribe_urls():
     body = request.get_json(silent=True) or {}
     engine = body.get('engine', 'gemini35')
     sub_mode = _clean_sub_mode(body.get('subs'))
+    project_id = str(body.get('project_id') or '')          # 在项目里贴的：转完加进那个项目
+    project_id = project_id if _chain_ok(project_id) else None
     try:
         max_videos = max(1, min(_MAX_CHAIN_VIDEOS, int(body.get("max_videos") or 20)))   # 和博主链同一个上限
     except (TypeError, ValueError):
@@ -1655,7 +1665,7 @@ def api_transcribe_urls():
         q = queue.Queue()
         tasks[task_id] = q
         submit_transcription(engine, _download_then_transcribe, task_id, url, engine, q,
-                        section, offset_sec, sub_mode)
+                        section, offset_sec, sub_mode, project_id)
         out.append({'url': url, 'title': title, 'task_id': task_id})
     return jsonify({'tasks': out, 'errors': errors})
 
@@ -3336,6 +3346,28 @@ def api_chain_create():
     max_videos = min(max_videos, _MAX_CHAIN_VIDEOS) if max_videos > 0 else None
 
     chain_id = uuid.uuid4().hex
+    # 在项目里加频道：项目还没有博主、这个频道别处也没跑过 → 就用这个项目（跟以前一样）；
+    # 项目里已经有博主了 → 另起一条博主链条，按引用加进项目（owner_project 记着是谁建的，首页不单独列）；
+    # 这个频道别处已经有链条 → 直接引用那条，不重跑
+    host = str(data.get('project_id') or '')
+    host_state = None
+    owner = None
+    if _CHAIN_ID_RE.match(host) and os.path.isfile(os.path.join(_chain_dir(host), 'chain.json')):
+        hs = _read_chain(host)
+        existing = _find_chain_by_url(url, skip=host)
+        if hs.get('url') and _norm_chain_url(hs['url']) == _norm_chain_url(url):
+            return jsonify({'error': 'This channel is already in this project'}), 400
+        if existing:
+            try:
+                _project_add_channels(host, [existing])
+            except ValueError as e:
+                return jsonify({'error': str(e)}), 400
+            return jsonify({'chain_id': existing, 'project_id': host, 'existing': True})
+        if hs.get('url') or _reg(host)['channels']:
+            owner = host
+        else:
+            host_state = hs
+            chain_id = host
     os.makedirs(_chain_dir(chain_id), exist_ok=True)
     state = {
         'id': chain_id,
@@ -3362,6 +3394,23 @@ def api_chain_create():
         'created_at': __import__('datetime').datetime.now().strftime(
             '%Y-%m-%d %H:%M:%S'),
     }
+    if host_state is not None:
+        # 名字：用户自己起过名就留着；还是「未命名」就让频道名顶上（run_chain 只在 author 是占位时替换）
+        if host_state.get('renamed'):
+            state['author'] = host_state.get('author') or state['author']
+        state['created_at'] = host_state.get('created_at') or state['created_at']
+        for k in ('analysis_preset', 'lang'):
+            if host_state.get(k) and not data.get(k):
+                state[k] = host_state[k]
+        # 项目里原来的录音挪进登记表：chain.json 的视频表从现在起归频道管，下面 run_chain 会整份重写
+        old = [v.get('task_id') for v in host_state.get('videos') or [] if v.get('task_id')]
+        if old:
+            with _chain_write_lock:
+                reg = _reg(chain_id)
+                have = {r.get('task_id') for r in reg['recordings']}
+                now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                reg['recordings'] += [{'task_id': t, 'added_at': now} for t in old if t not in have]
+                _reg_save(chain_id, reg)
     # 建之前在预览里挑好的那些期：就处理这些，不再按「最新 N 期」去探测
     picked = data.get('targets')
     if isinstance(picked, list) and picked:
@@ -3374,7 +3423,14 @@ def api_chain_create():
         if clean:
             state['fixed_targets'] = clean
             state['max_videos'] = len(clean)
+    if owner:
+        state['owner_project'] = owner
     _save_chain(state)
+    if owner:
+        try:
+            _project_add_channels(owner, [chain_id])
+        except ValueError as e:
+            return jsonify({'error': str(e)}), 400
     iv = data.get('sync_interval_h')
     if iv:                                        # 建的时候就开了定期同步
         try:
@@ -3385,7 +3441,7 @@ def api_chain_create():
             _write_sub(chain_id, {'on': True, 'interval_h': iv, 'last_run': time.time(),
                                   'since': datetime.now().strftime('%Y-%m-%d %H:%M:%S')})
     threading.Thread(target=run_chain, args=(state,), daemon=True).start()
-    return jsonify({'chain_id': chain_id})
+    return jsonify({'chain_id': chain_id, 'project_id': owner or host_state and chain_id or None})
 
 
 # ---- 建博主之前的预览：是谁、一共多少期、每期多长、哪些已经转写过、之前分析过没有 ----
@@ -3436,7 +3492,7 @@ def api_chain_preview():
                 st = json.load(f)
         except Exception:  # noqa: BLE001
             continue
-        if st.get('kind') == 'collection' or not st.get('url') or _norm_chain_url(st['url']) != key:
+        if st.get('kind') in ('collection', 'project') or not st.get('url') or _norm_chain_url(st['url']) != key:
             continue
         done = sum(1 for v in st.get('videos') or [] if v.get('status') == 'done')
         # 同一个频道跑过好几次：优先「分析过的」，再比期数
@@ -3666,6 +3722,601 @@ def api_transcripts_pick():
                     mimetype='application/json')
 
 
+# ===== 项目：任意来源（频道 / 录音 / 文档 / 粘贴的文字）放在一起问 =====
+# 存法跟博主链条、合集一样（results/_chains/<id>/chain.json），kind='project'，没有 url。
+# template 只决定默认设置：study / blank 不抽证据卡、转写全文入索引；topic 抽卡并写综述（跟合集一样）。
+# 文档全局存在 results/_docs/<doc_id>/（sources.py），项目里只记 docs: [{doc_id, added_at}]。
+# 提问时文档 / 转写的原文段落跟证据卡一起检索（ask.load(passages=True)），出处能点回原文那一段。
+
+_MAX_PROJECT_DOCS = 300
+_project_jobs = {}            # cid -> 'running' | 'dirty'（跑的时候又有新来源进来：跑完再来一轮）
+_project_jobs_lock = threading.Lock()
+
+
+def _read_chain(cid):
+    with open(os.path.join(_chain_dir(cid), 'chain.json'), 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+
+def _project_ok(cid):
+    return _chain_ok(cid)
+
+
+# ---- 来源登记表 sources.json：用户自己加的文档、（有频道的项目里）额外加的录音 ----
+# 不放 chain.json：频道项目的 chain.json 由 run_chain 整份重写（同步时视频表会重排），
+# 文档 / 额外录音放那里会在并发时被覆盖。没有频道的项目，录音照旧放 chain.json 的 videos
+# （跟合集一样，抽卡 / 综述都现成能用）。
+def _reg_path(cid):
+    return os.path.join(_chain_dir(cid), 'sources.json')
+
+
+def _reg(cid):
+    try:
+        with open(_reg_path(cid), 'r', encoding='utf-8') as f:
+            reg = json.load(f)
+    except Exception:  # noqa: BLE001
+        reg = {}
+    reg.setdefault('docs', [])
+    reg.setdefault('recordings', [])
+    reg.setdefault('channels', [])
+    return reg
+
+
+def _reg_save(cid, reg):
+    tmp = _reg_path(cid) + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(reg, f, ensure_ascii=False, indent=1)
+    os.replace(tmp, _reg_path(cid))
+
+
+def _reg_doc_ids(cid):
+    return [d.get('doc_id') for d in _reg(cid)['docs'] if d.get('doc_id')]
+
+
+# ---- 一个项目里可以有好几个博主：除了项目自己的频道（有 url 的那个），别的博主按引用放在登记表的 channels 里 ----
+# 博主的转写、证据卡、画像、镜头、立场、预测都在他自己的链条里算一次，几个项目共用，不重抽、不重复花钱。
+# 每个引用有个固定字母（B、C……）：项目里提问时他的卡片 id 写成 B:3-12，聊天记录里的出处靠它对上人，
+# 所以拿掉的字母不再发给别人（retired_tags），免得旧回答的出处指到另一个人身上。
+_REF_TAGS = 'BCDEFGHIJKLMNOPQRSTUVWXYZ'
+
+
+def _ref_rows(cid, reg=None):
+    reg = reg or _reg(cid)
+    out = []
+    for r in reg['channels']:
+        rid = r.get('chain_id')
+        if not _chain_ok(rid):
+            continue
+        try:
+            st = _read_chain(rid)
+        except Exception:  # noqa: BLE001
+            continue
+        out.append({'chain_id': rid, 'tag': r.get('tag') or '', 'added_at': r.get('added_at'), 'state': st})
+    return out
+
+
+def _project_add_channels(cid, chain_ids):
+    """把已有的博主链条加进项目（引用，不拷贝）。返回真加进去的。"""
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    new = []
+    with _chain_write_lock:
+        reg = _reg(cid)
+        have = {r.get('chain_id') for r in reg['channels']}
+        used = {r.get('tag') for r in reg['channels']} | set(reg.get('retired_tags') or [])
+        for rid in chain_ids:
+            if rid == cid or rid in have or not _chain_ok(rid):
+                continue
+            tag = next((t for t in _REF_TAGS if t not in used), None)
+            if not tag:
+                raise ValueError('Too many creators in one project')
+            used.add(tag)
+            have.add(rid)
+            reg['channels'].append({'chain_id': rid, 'tag': tag, 'added_at': now})
+            new.append(rid)
+        if new:
+            _reg_save(cid, reg)
+    if new:
+        import ask
+        for rid in new:                       # 他的卡多半早有向量了；没有的话后台补（项目里按意思检索要用）
+            ask.ensure_embeddings_async(_chain_dir(rid))
+    return new
+
+
+def _find_chain_by_url(url, skip=None):
+    """同一个频道已经有链条了吗（几个项目共用一个博主）。有好几条取卡最多的。"""
+    import glob as _glob
+    want = _norm_chain_url(url)
+    best = None
+    for d in _glob.glob(os.path.join(CHAINS_DIR, '*')):
+        name = os.path.basename(d)
+        if not _CHAIN_ID_RE.match(name) or name == skip:
+            continue
+        st = _read_json_safe(os.path.join(d, 'chain.json'))
+        if not st.get('url') or st.get('merged_into') or _norm_chain_url(st['url']) != want:
+            continue
+        n = len(_glob.glob(os.path.join(d, 'cards_*.json')))
+        if best is None or n > best[1]:
+            best = (name, n)
+    return best[0] if best else None
+
+
+def _person_row(cid, st, tag='', is_self=False):
+    cdir = _chain_dir(cid)
+    try:
+        names = os.listdir(cdir)
+    except OSError:
+        names = []
+    vids = st.get('videos') or []
+    return {'chain_id': cid, 'tag': tag, 'self': is_self, 'name': st.get('author') or '',
+            'avatar': st.get('avatar') or '', 'url': st.get('url') or '', 'stage': st.get('stage') or '',
+            'kind': st.get('kind') or 'creator', 'emoji': (_chain_prefs().get('emoji') or {}).get(cid) or '',
+            'episodes': sum(1 for v in vids if v.get('task_id') and v.get('status') == 'done'),
+            'has_cards': any(f.startswith('cards_') and _cards_file_has_cards(os.path.join(cdir, f)) for f in names),
+            'portrait': bool(st.get('final_doc')) and st.get('final_doc') in names, 'final_doc': st.get('final_doc') or '',
+            'lenses': sorted(n[3:-3] for n in names if n.startswith('镜头_') and n.endswith('.md'))}
+
+
+def _project_people(cid):
+    """项目里的「人」：项目自己的频道（或抽过卡的零散录音）+ 引用的博主。画像 / 立场 / 预测 / 原话按人看。"""
+    st = _read_chain(cid)
+    out = []
+    own = _person_row(cid, st, is_self=True)
+    if st.get('url') or own['has_cards']:
+        out.append(own)
+    out += [_person_row(r['chain_id'], r['state'], tag=r['tag']) for r in _ref_rows(cid)]
+    return out
+
+
+@app.route('/api/chain/<chain_id>/people')
+def api_project_people(chain_id):
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    return Response(json.dumps({'people': _project_people(chain_id)}, ensure_ascii=False),
+                    mimetype='application/json')
+
+
+@app.route('/api/chain/<chain_id>/sources/channels', methods=['POST'])
+def api_project_add_channels(chain_id):
+    """把资料库里已有的博主加进项目：{chain_ids: [...]}（共用他的分析，不重抽）。"""
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    ids = [c for c in ((request.get_json(silent=True) or {}).get('chain_ids') or []) if isinstance(c, str)]
+    try:
+        new = _project_add_channels(chain_id, ids)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    return jsonify({'ok': True, 'added': len(new)})
+
+
+@app.route('/api/projects', methods=['POST'])
+def api_project_create():
+    """新建项目：马上建一个空的（名字前端给「未命名项目」），进去再加来源。频道也是一种来源。"""
+    body = request.get_json(silent=True) or {}
+    name = str(body.get('name') or '').strip()[:60] or 'Untitled project'
+    cid = uuid.uuid4().hex
+    os.makedirs(_chain_dir(cid), exist_ok=True)
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    state = {'id': cid, 'kind': 'project', 'template': 'blank', 'url': '', 'author': name,
+             'engine': '', 'analyze': False, 'collection_kind': 'mixed', 'index_transcripts': True,
+             'analysis_preset': body.get('analysis_preset') or 'gemini', 'lang': body.get('lang') or 'auto',
+             'stage': 'done', 'created_at': now, 'finished_at': now,
+             'videos': [], 'download_total': 0, 'download_done': 0}
+    _save_chain(state)
+    _reg_save(cid, {'docs': [], 'recordings': []})
+    return jsonify({'ok': True, 'id': cid})
+
+
+@app.route('/api/chain/<chain_id>/rename', methods=['POST'])
+def api_project_rename(chain_id):
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    name = str((request.get_json(silent=True) or {}).get('name') or '').strip()[:60]
+    if not name:
+        return jsonify({'error': 'Empty name'}), 400
+    with _chain_write_lock:
+        state = _read_chain(chain_id)
+        state['author'] = name
+        state['author_checked'] = True        # 改过名就别再拿频道名覆盖
+        state['renamed'] = True
+        _save_chain(state)
+    return jsonify({'ok': True, 'name': name})
+
+
+def _doc_rows(cid):
+    import sources
+    out = []
+    for ref in _reg(cid)['docs']:
+        m = sources.doc_meta(ref.get('doc_id')) or {}
+        out.append({'doc_id': ref.get('doc_id'), 'added_at': ref.get('added_at'),
+                    'title': m.get('title') or '(missing)', 'ext': m.get('ext') or '',
+                    'status': m.get('status') or 'missing', 'error': m.get('error') or '',
+                    'pages': m.get('pages'), 'chars': m.get('chars') or 0, 'converter': m.get('converter') or '',
+                    'url': m.get('url') or ''})
+    return out
+
+
+def _rec_rows(cid):
+    out = []
+    for r in _reg(cid)['recordings']:
+        tid = r.get('task_id')
+        if not tid:
+            continue
+        done = os.path.isfile(os.path.join(config.RESULTS_FOLDER, tid, 'transcript.json'))
+        out.append({'task_id': tid, 'title': _transcript_title(tid) if done else (r.get('title') or tid),
+                    'status': 'done' if done else 'transcribing', 'added_at': r.get('added_at')})
+    return out
+
+
+@app.route('/api/chain/<chain_id>/sources')
+def api_project_sources(chain_id):
+    """左栏「来源」：频道（有的话）、频道里的每期 / 项目里的录音、额外录音、文档。"""
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    import sources
+    state = _read_chain(chain_id)
+    vids = [{k: v.get(k) for k in ('task_id', 'title', 'status', 'source', 'video_url', 'creator', 'index',
+                                   'upload_date', 'thumbnail')}
+            for v in state.get('videos') or []]
+    have_cards = _cards_file_index(_chain_dir(chain_id))
+    channel = None
+    if state.get('url'):
+        channel = {'url': state['url'], 'name': state.get('author') or '', 'avatar': state.get('avatar') or '',
+                   'followers': state.get('followers') or 0, 'stage': state.get('stage')}
+    missing = [v for v in vids if v.get('task_id') and v.get('status') == 'done' and v['task_id'] not in have_cards]
+    # 引用的博主：每个一组，期列在下面（勾选 = 提问范围，跟自己的期一样）
+    channels = []
+    for r in _ref_rows(chain_id):
+        st = r['state']
+        channels.append({'chain_id': r['chain_id'], 'tag': r['tag'], 'url': st.get('url') or '',
+                         'name': st.get('author') or '', 'avatar': st.get('avatar') or '',
+                         'stage': st.get('stage'), 'kind': st.get('kind') or 'creator',
+                         'videos': [{k: v.get(k) for k in ('task_id', 'title', 'status', 'video_url', 'index',
+                                                            'upload_date')}
+                                    for v in st.get('videos') or [] if v.get('task_id')]})
+    return Response(json.dumps({
+        'kind': state.get('kind') or 'creator', 'channel': channel, 'channels': channels,
+        'index_transcripts': bool(state.get('index_transcripts')), 'analyze': bool(state.get('analyze')),
+        'videos': vids, 'recordings': _rec_rows(chain_id), 'docs': _doc_rows(chain_id),
+        'indexing': chain_id in _project_jobs, 'moye': sources.moye_alive(timeout=1),
+        'has_cards': bool(have_cards), 'cards_missing': len(missing) if not state.get('url') else 0,
+    }, ensure_ascii=False), mimetype='application/json')
+
+
+def _project_add_docs(cid, doc_ids):
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    with _chain_write_lock:
+        reg = _reg(cid)
+        have = {d.get('doc_id') for d in reg['docs']}
+        new = [d for d in doc_ids if d not in have]
+        if len(have) + len(new) > _MAX_PROJECT_DOCS:
+            raise ValueError(f'At most {_MAX_PROJECT_DOCS} documents per project')
+        reg['docs'] += [{'doc_id': d, 'added_at': now} for d in new]
+        _reg_save(cid, reg)
+    return new
+
+
+def _project_add_recordings(cid, task_ids):
+    """有频道的项目：记进登记表（chain.json 的视频表归频道管）；没频道的：进 chain.json 的 videos。"""
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    with _chain_write_lock:
+        state = _read_chain(cid)
+        if state.get('url'):
+            reg = _reg(cid)
+            have = {r.get('task_id') for r in reg['recordings']} | \
+                   {v.get('task_id') for v in state.get('videos') or []}
+            new = [t for t in task_ids if t not in have]
+            reg['recordings'] += [{'task_id': t, 'added_at': now} for t in new]
+            _reg_save(cid, reg)
+            return new
+        vids = state.get('videos') or []
+        have = {v.get('task_id') for v in vids}
+        new = [t for t in task_ids if t not in have]
+        if len(have) + len(new) > _MAX_COLLECTION_ITEMS:
+            raise ValueError(f'At most {_MAX_COLLECTION_ITEMS} recordings per project')
+        state['videos'] = vids + [_collection_video(t, len(vids) + i) for i, t in enumerate(new)]
+        state['download_total'] = state['download_done'] = len(state['videos'])
+        _save_chain(state)
+        return new
+
+
+@app.route('/api/chain/<chain_id>/sources/docs', methods=['POST'])
+def api_project_add_docs(chain_id):
+    """上传文档（multipart: files）或粘贴文字（JSON: {text, title}）。转换在后台，转完自动建索引。"""
+    if not _project_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    import sources
+    made, errors = [], []
+    if request.files:
+        for f in request.files.getlist('files'):
+            try:
+                made.append(sources.create_doc(filename=f.filename, data=f.read()))
+            except ValueError as e:
+                errors.append({'filename': f.filename, 'error': str(e)})
+    else:
+        body = request.get_json(silent=True) or {}
+        try:
+            made.append(sources.create_doc(text=body.get('text'), title=body.get('title')))
+        except ValueError as e:
+            errors.append({'filename': '', 'error': str(e)})
+    if not made:
+        return jsonify({'error': (errors[0]['error'] if errors else 'Nothing to add'), 'errors': errors}), 400
+    try:
+        _project_add_docs(chain_id, [m['id'] for m in made])
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    _project_refresh(chain_id)
+    return jsonify({'ok': True, 'docs': [{'doc_id': m['id'], 'title': m['title'], 'status': m['status']}
+                                         for m in made], 'errors': errors})
+
+
+@app.route('/api/chain/<chain_id>/sources/web', methods=['POST'])
+def api_project_add_web(chain_id):
+    """网页 / 文件链接当来源：{urls: [...]}。后台抓取，抓完自动建索引。"""
+    if not _project_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    import sources
+    body = request.get_json(silent=True) or {}
+    urls = body.get('urls') or []
+    if isinstance(urls, str):
+        urls = urls.split()
+    urls = [u.strip() for u in urls if isinstance(u, str) and u.strip()][:30]
+    have = {(sources.doc_meta(d) or {}).get('url') for d in _reg_doc_ids(chain_id)}
+    made, errors = [], []
+    for u in urls:
+        if u in have:
+            continue
+        try:
+            made.append(sources.create_web_doc(u))
+            have.add(u)
+        except ValueError as e:
+            errors.append({'url': u, 'error': str(e)})
+    if not made:
+        return jsonify({'error': (errors[0]['error'] if errors else 'Already in this project'), 'errors': errors}), 400
+    _project_add_docs(chain_id, [m['id'] for m in made])
+    _project_refresh(chain_id)
+    return jsonify({'ok': True, 'added': len(made), 'errors': errors})
+
+
+@app.route('/api/chain/<chain_id>/discover', methods=['POST'])
+def api_project_discover(chain_id):
+    """找来源：{query, kind: web|youtube|bilibili} → 候选列表（不加进项目），已经在项目里的标 have。"""
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    import discover
+    import sources
+    body = request.get_json(silent=True) or {}
+    kind = body.get('kind') if body.get('kind') in ('web', 'youtube', 'bilibili') else 'web'
+    ref = f'discover:{uuid.uuid4().hex[:12]}'
+    try:
+        with usage.scope(ref=ref, chain=chain_id):
+            items = discover.search(body.get('query'), kind)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:  # noqa: BLE001
+        return jsonify({'error': str(e)[:300]}), 502
+    state = _read_chain(chain_id)
+    have = {(sources.doc_meta(d) or {}).get('url') for d in _reg_doc_ids(chain_id)}
+    vid_ids = set()
+    for v in state.get('videos') or []:
+        vid_ids.add(_video_key(v.get('video_url')))
+    for r in _reg(chain_id)['recordings']:
+        m = _read_json_safe(os.path.join(config.RESULTS_FOLDER, r.get('task_id') or '-', 'meta.json'))
+        vid_ids.add(_video_key(m.get('url') or m.get('source_url') or m.get('video_url')))
+    vid_ids.discard('')
+    for it in items:
+        it['have'] = it['url'] in have or (it['type'] == 'video' and _video_key(it['url']) in vid_ids)
+    return Response(json.dumps({'items': items, 'cost_usd': (usage.cost_for(ref=ref) or {}).get('cost_usd', 0)},
+                               ensure_ascii=False), mimetype='application/json')
+
+
+def _video_key(url):
+    """视频链接 → 平台 + 视频号（同一个视频的不同写法认成一个）。"""
+    u = str(url or '')
+    m = re.search(r'(?:v=|youtu\.be/|shorts/)([A-Za-z0-9_-]{11})', u)
+    if m:
+        return 'yt:' + m.group(1)
+    m = re.search(r'(BV[0-9A-Za-z]{10})', u)
+    if m:
+        return 'bili:' + m.group(1)
+    return ''
+
+
+def _read_json_safe(path):
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f) or {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+@app.route('/api/chain/<chain_id>/sources/transcripts', methods=['POST'])
+def api_project_add_transcripts(chain_id):
+    """从资料库挑已经转写好的（task_ids）或整个博主（chain_ids）。"""
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    body = dict(request.get_json(silent=True) or {})
+    # 整个博主（有频道的链条）：作为引用加进来，共用他的分析；合集 / 项目还是展开成一条条录音
+    creators, others = [], []
+    for ch in body.get('chain_ids') or []:
+        st = _read_json_safe(os.path.join(_chain_dir(ch), 'chain.json')) if _CHAIN_ID_RE.match(str(ch)) else {}
+        (creators if st.get('url') and st.get('kind') not in ('collection', 'project') else others).append(ch)
+    body['chain_ids'] = others
+    try:
+        refs = _project_add_channels(chain_id, creators)
+        new = _project_add_recordings(chain_id, _collection_members(body)) if body.get('task_ids') or others else []
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    if new:
+        _project_refresh(chain_id)
+    return jsonify({'ok': True, 'added': len(new) + len(refs)})
+
+
+@app.route('/api/chain/<chain_id>/sources/upload', methods=['POST'])
+def api_project_upload(chain_id):
+    """往项目里直接传录音 / 视频：照常转写，转完自己加进这个项目。multipart: audios, engine"""
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    engine = request.form.get('engine', 'gemini35')
+    results = []
+    for f in request.files.getlist('audios'):
+        tid, err = _enqueue_task(f, engine, _parse_speaker_count(request.form.get('speaker_count')),
+                                 extra_meta={'project_id': chain_id})
+        results.append({'filename': f.filename, 'task_id': tid, 'error': err})
+    if not any(r['task_id'] for r in results):
+        return jsonify({'error': 'Nothing to transcribe', 'tasks': results}), 400
+    return jsonify({'ok': True, 'tasks': results})
+
+
+def _project_on_transcribed(cid, task_id):
+    """项目里直接传 / 贴链接的录音转完了：加进这个项目（只加一次），再建索引。"""
+    if not _CHAIN_ID_RE.match(cid or '') or not os.path.isfile(os.path.join(_chain_dir(cid), 'chain.json')):
+        return
+    try:
+        new = _project_add_recordings(cid, [task_id])
+    except ValueError as e:
+        print(f'[project {cid[:8]}] {e}')
+        return
+    if new:
+        _project_refresh(cid)
+
+
+@app.route('/api/chain/<chain_id>/sources/<source_id>', methods=['DELETE'])
+def api_project_remove_source(chain_id, source_id):
+    """从项目里拿掉一个来源（文档 doc_id 或录音 task_id）。全局的文档 / 转写不删——别的项目可能还在用。
+    频道里的期不在这里删（那是频道的一部分，删了下次同步又会回来）。"""
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    with _chain_write_lock:
+        reg = _reg(chain_id)
+        n0 = len(reg['docs']) + len(reg['recordings']) + len(reg['channels'])
+        reg['docs'] = [d for d in reg['docs'] if d.get('doc_id') != source_id]
+        reg['recordings'] = [r for r in reg['recordings'] if r.get('task_id') != source_id]
+        # 引用的博主：只是从这个项目拿掉，他自己的链条（别的项目可能在用）不动；字母作废不再发
+        gone = [r for r in reg['channels'] if r.get('chain_id') == source_id]
+        if gone:
+            reg['retired_tags'] = sorted(set(reg.get('retired_tags') or []) | {r.get('tag') for r in gone if r.get('tag')})
+        reg['channels'] = [r for r in reg['channels'] if r.get('chain_id') != source_id]
+        removed = len(reg['docs']) + len(reg['recordings']) + len(reg['channels']) != n0
+        if removed:
+            _reg_save(chain_id, reg)
+        state = _read_chain(chain_id)
+        if not removed and not state.get('url'):
+            vids = [v for v in state.get('videos') or [] if v.get('task_id') != source_id]
+            removed = len(vids) != len(state.get('videos') or [])
+            if removed:
+                for i, v in enumerate(vids):
+                    v['index'] = i
+                state['videos'] = vids
+                state['download_total'] = state['download_done'] = len(vids)
+                _save_chain(state)
+                # 这期的卡片文件也拿掉（项目自己的那份拷贝；别处的不动）
+                import glob as _glob
+                for f in _glob.glob(os.path.join(_chain_dir(chain_id), 'cards_*.json')):
+                    try:
+                        with open(f, 'r', encoding='utf-8') as fh:
+                            if json.load(fh).get('task_id') == source_id:
+                                os.remove(f)
+                    except Exception:  # noqa: BLE001
+                        pass
+    if not removed:
+        return jsonify({'error': 'Not in this project'}), 404
+    return jsonify({'ok': True})
+
+
+@app.route('/api/chain/<chain_id>/sources/docs/<doc_id>/retry', methods=['POST'])
+def api_project_retry_doc(chain_id, doc_id):
+    import sources
+    if not _chain_ok(chain_id) or not sources.valid_doc_id(doc_id) or not sources.doc_meta(doc_id):
+        return jsonify({'error': 'Not found'}), 404
+    sources.start_convert(doc_id)
+    _project_refresh(chain_id)
+    return jsonify({'ok': True})
+
+
+@app.route('/api/chain/<chain_id>/cards/build', methods=['POST'])
+def api_project_build_cards(chain_id):
+    """没有频道的项目：按需给录音抽证据卡（立场 / 预测 / 画像要用），并写一份综述。已经抽过的复用。"""
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    with _chain_write_lock:
+        state = _read_chain(chain_id)
+        if state.get('url'):
+            return jsonify({'error': 'Channel projects extract cards as part of the channel run'}), 400
+        if not any(v.get('task_id') for v in state.get('videos') or []):
+            return jsonify({'error': 'Add some recordings first'}), 400
+        state['analyze'] = True
+        _save_chain(state)
+    _project_refresh(chain_id, force_build=True)
+    return jsonify({'ok': True})
+
+
+@app.route('/api/docs/<doc_id>')
+def api_doc_get(doc_id):
+    """阅读器用：元信息 + 整份 Markdown + 切好的段落（定位高亮）。"""
+    import sources
+    meta = sources.doc_meta(doc_id) if sources.valid_doc_id(doc_id) else None
+    if not meta:
+        return jsonify({'error': 'Not found'}), 404
+    return Response(json.dumps({'meta': meta, 'markdown': sources.doc_markdown(doc_id),
+                                'passages': sources.doc_passages(doc_id)}, ensure_ascii=False),
+                    mimetype='application/json')
+
+
+@app.route('/api/docs/<doc_id>/original')
+def api_doc_original(doc_id):
+    import sources
+    meta = sources.doc_meta(doc_id) if sources.valid_doc_id(doc_id) else None
+    if not meta or not meta.get('filename'):
+        return jsonify({'error': 'Not found'}), 404
+    path = os.path.join(sources.doc_dir(doc_id), f"original.{meta['ext']}")
+    if not os.path.isfile(path):
+        return jsonify({'error': 'Not found'}), 404
+    return send_file(path, download_name=meta['filename'], as_attachment=False)
+
+
+def _project_refresh(cid, force_build=False):
+    """来源变了：后台等文档转完 → （开了抽卡的、没频道的项目）给新录音抽卡、更新综述 → 补向量。
+    同一个项目不并发跑；跑的时候又有新来源进来，就标个 dirty，跑完再来一轮。"""
+    with _project_jobs_lock:
+        if cid in _project_jobs:
+            _project_jobs[cid] = 'dirty'
+            return
+        _project_jobs[cid] = 'running'
+
+    def run():
+        import ask
+        import sources
+        build = force_build            # 第二轮起不再强制（只给新来的录音抽卡）
+        try:
+            while True:
+                t0 = time.time()
+                while time.time() - t0 < 2400:             # 等这个项目里的文档都转完（OCR 慢的最多等 40 分钟）
+                    if not any((sources.doc_meta(d) or {}).get('status') == 'converting' for d in _reg_doc_ids(cid)):
+                        break
+                    time.sleep(3)
+                state = _read_chain(cid)
+                if state.get('analyze') and not state.get('url'):
+                    have = _cards_file_index(_chain_dir(cid))
+                    if build or any(v.get('task_id') and v['task_id'] not in have
+                                          for v in state.get('videos') or []):
+                        _build_collection(state)           # 已有的卡复用，只抽新的；顺带写综述、打话题
+                with usage.scope(ref=f'index:{cid[:8]}', chain=cid):
+                    ask.embed_chain(_chain_dir(cid))
+                with _project_jobs_lock:
+                    if _project_jobs.get(cid) == 'dirty':
+                        _project_jobs[cid] = 'running'
+                        build = False
+                        continue
+                    _project_jobs.pop(cid, None)
+                    return
+        except Exception as e:  # noqa: BLE001
+            print(f'[project {cid[:8]}] refresh failed: {e}')
+            with _project_jobs_lock:
+                _project_jobs.pop(cid, None)
+
+    threading.Thread(target=run, daemon=True).start()
+
+
 def _analysed_chain_dirs(include_hidden=False):
     """有证据卡的博主 / 合集目录（按 URL 去重：同一个频道跑过几次只取卡最多的那条）。"""
     import glob as _glob
@@ -3683,7 +4334,7 @@ def _analysed_chain_dirs(include_hidden=False):
                 st = json.load(f)
         except Exception:  # noqa: BLE001
             continue
-        if st.get('kind') == 'collection':              # 合集的卡是从博主那借来的，放进来会重复计数
+        if st.get('kind') in ('collection', 'project'):  # 合集 / 项目的卡是从博主那借来的，放进来会重复计数
             continue
         key = st.get('url') or name
         if key not in best or n > best[key][1]:
@@ -3807,6 +4458,163 @@ def api_export_docx():
                              __import__('urllib.parse').parse.quote(re.sub(r'[\\/:*?"<>|]', '_', title) + '.docx')})
 
 
+@app.route('/api/export/pdf', methods=['POST'])
+def api_export_pdf():
+    """带出处的 Markdown → PDF：交给墨页（/api/md2pdf，无头 Chrome 打印，不进它的队列和资料库）。"""
+    body = request.get_json(silent=True) or {}
+    md = str(body.get('markdown') or '')
+    if not md.strip():
+        return jsonify({'error': 'Nothing to export'}), 400
+    import requests
+    import sources
+    title = str(body.get('title') or 'Verbatim')[:80]
+    try:
+        r = requests.post(sources.MOYE_URL + '/api/md2pdf', json={'markdown': md, 'title': title},
+                          timeout=180, proxies={'http': None, 'https': None})
+    except requests.RequestException:
+        return jsonify({'error': 'Moye is not running, so PDF export is unavailable. Word and Markdown still work.'}), 503
+    if r.status_code != 200 or not r.content.startswith(b'%PDF'):
+        try:
+            err = (r.json() or {}).get('error')
+        except ValueError:
+            err = None
+        return jsonify({'error': err or f'Moye could not make the PDF ({r.status_code})'}), 502
+    return Response(r.content, mimetype='application/pdf',
+                    headers={'Content-Disposition': "attachment; filename*=UTF-8''" +
+                             __import__('urllib.parse').parse.quote(re.sub(r'[\\/:*?"<>|]', '_', title) + '.pdf')})
+
+
+# ================= 项目工作台：复习工具（study.py）=================
+
+@app.route('/api/chain/<chain_id>/studio')
+def api_studio_list(chain_id):
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    import study
+    items = study.list_outputs(_chain_dir(chain_id))
+    for o in items:              # 立场 / 预测要先打标签：那个人的标签还在打，这条就显示「在做」
+        if o.get('kind') == 'view' and o.get('view') in ('topics', 'predictions') and \
+                (_job_view(o.get('chain'), 'tag') or {}).get('status') == 'running':
+            o['status'] = 'running'
+    return Response(json.dumps({'items': items}, ensure_ascii=False), mimetype='application/json')
+
+
+def _project_person_ids(chain_id):
+    return {p['chain_id']: p for p in _project_people(chain_id)} or \
+        {chain_id: _person_row(chain_id, _read_chain(chain_id), is_self=True)}
+
+
+@app.route('/api/chain/<chain_id>/studio/view', methods=['POST'])
+def api_studio_view(chain_id):
+    """格子「立场 / 预测 / 原话」做一份：{view, chain（看谁）, generate（没打标签就顺手开始打）}。
+    同一个人的同一样已经有了就返回那条。"""
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    import ask
+    import study
+    body = request.get_json(silent=True) or {}
+    who = str(body.get('chain') or chain_id)
+    people = _project_person_ids(chain_id)
+    if who not in people:
+        return jsonify({'error': 'Not in this project'}), 400
+    p = people[who]
+    try:
+        item, new = study.add_view(_chain_dir(chain_id), body.get('view'), who,
+                                   person=p['name'] if p.get('url') else '')
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    started = False
+    if body.get('generate') and item['view'] in ('topics', 'predictions') and not DEMO_MODE:
+        cdir = _chain_dir(who)
+        if not ask.topics(cdir).get('tagged'):
+            started = _start_card_job(who, 'tag', lambda prog: ask.tag_chain(cdir, progress=prog))
+    return jsonify({'ok': True, 'item': item, 'new': new, 'started': started})
+
+
+@app.route('/api/chain/<chain_id>/studio/compare', methods=['POST'])
+def api_studio_compare(chain_id):
+    """格子「对比」做一份：{chains: [项目里的 2–4 个人], question}，后台生成，好了出现在列表里。"""
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    import study
+    body = request.get_json(silent=True) or {}
+    people = _project_person_ids(chain_id)
+    ids = [c for c in dict.fromkeys(body.get('chains') or []) if c in people]
+    try:
+        o = study.start_compare(_chain_dir(chain_id), chain_id, [(_chain_dir(c), c) for c in ids],
+                                body.get('question'))
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    return jsonify({'ok': True, 'item': study._summary(o)})
+
+
+@app.route('/api/chain/<chain_id>/studio', methods=['POST'])
+def api_studio_create(chain_id):
+    """生成一份：body {kind: report|flashcards|quiz|coverage, format?（报告：briefing|guide|faq|timeline|custom）,
+    prompt?（自定义报告的要求）, focus?, n?, scope?, outline?（对照检查：哪个来源是清单）}"""
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    import study
+    body = request.get_json(silent=True) or {}
+    kind = body.get('kind')
+    if kind not in study.KINDS:
+        return jsonify({'error': 'Unknown tool'}), 400
+    if kind == 'coverage' and not body.get('outline'):
+        return jsonify({'error': 'Pick the source that is the list to check'}), 400
+    if not config.gemini_key():
+        return jsonify({'error': 'Add a Gemini API key in Settings first'}), 400
+    try:
+        o = study.start(_chain_dir(chain_id), chain_id, kind, focus=body.get('focus'), n=body.get('n'),
+                        scope=body.get('scope') if isinstance(body.get('scope'), dict) else None,
+                        outline=str(body.get('outline') or '') or None, lang=body.get('lang'),
+                        fmt=body.get('format'), prompt=body.get('prompt'))
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    return jsonify({'ok': True, 'item': study._summary(o)})
+
+
+@app.route('/api/chain/<chain_id>/studio/note', methods=['POST'])
+def api_studio_note(chain_id):
+    """把问答里的一条回答存进工作台。body {at, head}：那条回答的时间和开头几个字，
+    用来在聊天记录里找到它——内容和出处都从记录里取，不信前端传的。"""
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    import ask
+    import study
+    cdir = _chain_dir(chain_id)
+    msgs = ask.load_history(cdir)
+    body = request.get_json(silent=True) or {}
+    at, head = str(body.get('at') or ''), str(body.get('head') or '')[:80]
+    i = next((k for k in range(len(msgs) - 1, -1, -1)
+              if msgs[k].get('role') == 'assistant' and msgs[k].get('content') and at
+              and msgs[k].get('at') == at and msgs[k]['content'].startswith(head)), None)
+    if i is None:
+        return jsonify({'error': 'Answer not found'}), 404
+    m = msgs[i]
+    q = next((x.get('content') for x in reversed(msgs[:i]) if x.get('role') == 'user'), '')
+    o = study.save_note(cdir, chain_id, q, m['content'], m.get('citations'))
+    return jsonify({'ok': True, 'item': study._summary(o)})
+
+
+@app.route('/api/chain/<chain_id>/studio/<oid>')
+def api_studio_get(chain_id, oid):
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    import study
+    o = study.get_output(_chain_dir(chain_id), oid)
+    if not o:
+        return jsonify({'error': 'Not found'}), 404
+    return Response(json.dumps(o, ensure_ascii=False), mimetype='application/json')
+
+
+@app.route('/api/chain/<chain_id>/studio/<oid>', methods=['DELETE'])
+def api_studio_delete(chain_id, oid):
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    import study
+    return jsonify({'ok': study.delete_output(_chain_dir(chain_id), oid)})
+
+
 _CHAIN_PREFS = os.path.join(CHAINS_DIR, '_prefs.json')
 
 
@@ -3829,10 +4637,108 @@ def api_chains_hidden():
     hidden = set(prefs.get('hidden') or [])
     (hidden.add if body.get('hidden', True) else hidden.discard)(cid)
     prefs['hidden'] = sorted(hidden)
+    _save_chain_prefs(prefs)
+    return jsonify({'ok': True})
+
+
+_prefs_lock = threading.Lock()
+
+
+def _save_chain_prefs(prefs):
     tmp = _CHAIN_PREFS + '.tmp'
     with open(tmp, 'w', encoding='utf-8') as f:
         json.dump(prefs, f, ensure_ascii=False, indent=1)
     os.replace(tmp, _CHAIN_PREFS)
+
+
+# ---- 项目首页的个人偏好（跟 Gemini Notebook 一样）：置顶、自选表情、分组。都只记在 _prefs.json，
+#      不写 chain.json——频道项目的 chain.json 同步时会整份重写，写进去会丢 ----
+_EMOJI_MAX = 16
+
+
+@app.route('/api/chains/prefs', methods=['POST'])
+def api_chains_prefs():
+    """{id, pinned?: bool, emoji?: "📚" | ""（空 = 恢复默认）}"""
+    body = request.get_json(silent=True) or {}
+    cid = body.get('id') or ''
+    if not _CHAIN_ID_RE.match(cid):
+        return jsonify({'error': 'Invalid chain id'}), 400
+    with _prefs_lock:
+        prefs = _chain_prefs()
+        if 'pinned' in body:
+            pinned = [x for x in (prefs.get('pinned') or []) if x != cid]
+            if body['pinned']:
+                pinned.insert(0, cid)              # 最近置顶的排最前
+            prefs['pinned'] = pinned
+        if 'emoji' in body:
+            em = str(body.get('emoji') or '').strip()
+            emojis = prefs.get('emoji') or {}
+            if em and len(em) <= _EMOJI_MAX and not re.search(r'[<>&"\'\s]', em):
+                emojis[cid] = em
+            else:
+                emojis.pop(cid, None)
+            prefs['emoji'] = emojis
+        _save_chain_prefs(prefs)
+    return jsonify({'ok': True})
+
+
+def _collections(prefs=None):
+    """项目分组（首页筛选用；跟 kind=collection 的「合集」项目是两回事，接口叫 /api/groups 以免撞名）。"""
+    return (prefs or _chain_prefs()).get('collections') or []
+
+
+@app.route('/api/groups')
+def api_groups():
+    return jsonify({'items': [{'id': c['id'], 'name': c['name'], 'count': len(c.get('items') or [])}
+                              for c in _collections()]})
+
+
+@app.route('/api/groups', methods=['POST'])
+def api_group_create():
+    """新建分组：{name, add?: 项目 id}"""
+    body = request.get_json(silent=True) or {}
+    name = str(body.get('name') or '').strip()[:60]
+    if not name:
+        return jsonify({'error': 'Name the collection'}), 400
+    add = body.get('add') if _CHAIN_ID_RE.match(str(body.get('add') or '')) else None
+    with _prefs_lock:
+        prefs = _chain_prefs()
+        cols = _collections(prefs)
+        col = {'id': uuid.uuid4().hex[:10], 'name': name, 'items': [add] if add else []}
+        cols.append(col)
+        prefs['collections'] = cols
+        _save_chain_prefs(prefs)
+    return jsonify({'ok': True, 'id': col['id']})
+
+
+@app.route('/api/groups/<col_id>', methods=['POST'])
+def api_group_update(col_id):
+    """{id, add: bool}：把项目放进 / 拿出分组；{name}：改名"""
+    body = request.get_json(silent=True) or {}
+    with _prefs_lock:
+        prefs = _chain_prefs()
+        col = next((c for c in _collections(prefs) if c['id'] == col_id), None)
+        if not col:
+            return jsonify({'error': 'Not found'}), 404
+        if body.get('name'):
+            col['name'] = str(body['name']).strip()[:60] or col['name']
+        cid = str(body.get('id') or '')
+        if _CHAIN_ID_RE.match(cid):
+            items = [x for x in (col.get('items') or []) if x != cid]
+            if body.get('add', True):
+                items.append(cid)
+            col['items'] = items
+        _save_chain_prefs(prefs)
+    return jsonify({'ok': True})
+
+
+@app.route('/api/groups/<col_id>', methods=['DELETE'])
+def api_group_delete(col_id):
+    """删分组只删这个分组，里面的项目不动。"""
+    with _prefs_lock:
+        prefs = _chain_prefs()
+        prefs['collections'] = [c for c in _collections(prefs) if c['id'] != col_id]
+        _save_chain_prefs(prefs)
     return jsonify({'ok': True})
 
 
@@ -3859,7 +4765,14 @@ def _cards_file_has_cards(path):
 
 @app.route('/api/chains')
 def api_chains():
-    hidden = set(_chain_prefs().get('hidden') or [])
+    prefs = _chain_prefs()
+    hidden = set(prefs.get('hidden') or [])
+    pinned = {cid: i for i, cid in enumerate(prefs.get('pinned') or [])}
+    emojis = prefs.get('emoji') or {}
+    in_cols = {}
+    for col in _collections(prefs):
+        for cid in col.get('items') or []:
+            in_cols.setdefault(cid, []).append(col['id'])
     entries = []
     if os.path.isdir(CHAINS_DIR):
         for name in os.listdir(CHAINS_DIR):
@@ -3878,6 +4791,14 @@ def api_chains():
                                              for f in names)
                     state['has_tags'] = 'tags.json' in names
                     state['hidden'] = name in hidden
+                    state['pin'] = pinned.get(name)            # None = 没置顶；数字越小越靠前
+                    state['emoji'] = emojis.get(name) or ''
+                    state['collections'] = in_cols.get(name) or []
+                    # 在项目里加的第二个、第三个博主：首页不单独列（在项目里看）；那个项目删了才露出来
+                    own = state.get('owner_project')
+                    state['ref_only'] = bool(own) and _CHAIN_ID_RE.match(own or '') is not None and \
+                        os.path.isfile(os.path.join(CHAINS_DIR, own, 'chain.json'))
+                    _attach_sources(state, name, names)
                     sub = _read_sub(name)
                     state['sub_on'] = bool(sub.get('on'))
                     state['sub_new'] = bool((sub.get('digest') or {}).get('new_videos')
@@ -3943,6 +4864,7 @@ def api_chain_detail(chain_id):
         return jsonify({'error': 'Not found'}), 404
     with open(cpath, 'r', encoding='utf-8') as f:
         data = json.load(f)
+    data['emoji'] = (_chain_prefs().get('emoji') or {}).get(chain_id) or ''   # 只给前端看，不落盘
     # 打开详情时顺手校对：transcribing 的视频按 taskdb 真实状态回写并落盘
     # （任务级 recover 转完后，链条循环已死不会更新——靠这里自愈）
     healed = False
@@ -3954,7 +4876,7 @@ def api_chain_detail(chain_id):
     # 会拿旧快照覆盖它刚写进去的字段。演示实例只读，不写
     if healed and not DEMO_MODE and data.get('stage') in ('done', 'failed', 'cancelled'):
         try:
-            _save_chain(data)
+            _save_chain({k: v for k, v in data.items() if k != 'emoji'})
         except Exception:  # noqa: BLE001
             pass
 
@@ -3988,7 +4910,23 @@ def api_chain_detail(chain_id):
             if t and t != v['task_id']:
                 v['title'] = t
     data['cost'] = usage.cost_for(chain=chain_id)
+    _attach_sources(data, chain_id)
     return jsonify(data)
+
+
+def _attach_sources(state, cid, names=None):
+    """列表 / 详情里带上：文档、额外录音、来源总数（频道的每期 + 录音 + 文档）、最近动过的时间。"""
+    reg = _reg(cid) if names is None or 'sources.json' in names else {'docs': [], 'recordings': []}
+    state['docs'] = reg['docs']
+    state['recordings'] = reg['recordings']
+    n_vid = sum(1 for v in state.get('videos') or [] if v.get('task_id') and v.get('status') == 'done')
+    state['n_sources'] = n_vid + len(reg['recordings']) + len(reg['docs'])
+    try:
+        mt = max(os.path.getmtime(os.path.join(_chain_dir(cid), f)) for f in ('chain.json', 'sources.json')
+                 if os.path.isfile(os.path.join(_chain_dir(cid), f)))
+        state['updated_at'] = datetime.fromtimestamp(mt).strftime('%Y-%m-%d %H:%M:%S')
+    except ValueError:
+        state['updated_at'] = state.get('finished_at') or state.get('created_at') or ''
 
 
 @app.route('/api/chain/<chain_id>/reanalyze', methods=['POST'])
@@ -4144,19 +5082,23 @@ def api_chain_lens(chain_id):
     if not _CHAIN_ID_RE.match(chain_id or ''):
         return jsonify({'error': 'Invalid chain id'}), 400
     from analyze import LENSES
-    lens = (request.get_json(silent=True) or {}).get('lens')
+    body = request.get_json(silent=True) or {}
+    lens = body.get('lens')
+    force = bool(body.get('force'))          # 重新生成：旧的挪进 history/，再跑一遍
     if lens not in LENSES:
         return jsonify({'error': '未知镜头'}), 400
+    if force and DEMO_MODE:
+        return jsonify({'error': 'This is a read-only demo.'}), 403
     cpath = os.path.join(_chain_dir(chain_id), 'chain.json')
     if not os.path.isfile(cpath):
         return jsonify({'error': 'Not found'}), 404
     fpath = os.path.join(_chain_dir(chain_id), f'镜头_{lens}.md')
-    if os.path.isfile(fpath):   # 已生成过，直接给
-        with open(fpath, 'r', encoding='utf-8') as f:
-            return jsonify({'ok': True, 'ready': True, 'markdown': f.read()})
     key = (chain_id, lens)
     if _lens_jobs.get(key) == 'running':
         return jsonify({'ok': True, 'ready': False, 'status': 'running'})
+    if os.path.isfile(fpath) and not force:   # 已生成过，直接给
+        with open(fpath, 'r', encoding='utf-8') as f:
+            return jsonify({'ok': True, 'ready': True, 'markdown': f.read()})
     with open(cpath, 'r', encoding='utf-8') as f:
         state = json.load(f)
     eps = _load_chain_cards(chain_id)
@@ -4170,9 +5112,16 @@ def api_chain_lens(chain_id):
                 md = render_lens(eps, lens, author=state.get('author', '该博主'),
                                  preset=state.get('analysis_preset'),
                                  lang=state.get('lang', 'auto'))
-            with open(fpath, 'w', encoding='utf-8') as fh:
-                fh.write(md or '')
-            _lens_jobs[key] = 'done'
+            if md and os.path.isfile(fpath):        # 重新生成：旧版本留底，不覆盖掉
+                hdir = os.path.join(_chain_dir(chain_id), 'history')
+                os.makedirs(hdir, exist_ok=True)
+                shutil.copy2(fpath, os.path.join(hdir, f'镜头_{lens}_{datetime.now().strftime("%Y%m%d-%H%M%S")}.md'))
+            if md:
+                with open(fpath, 'w', encoding='utf-8') as fh:
+                    fh.write(md)
+                _lens_jobs[key] = 'done'
+            else:
+                _lens_jobs[key] = 'error:empty result'
         except Exception as e:  # noqa: BLE001
             _lens_jobs[key] = f'error:{e}'
 
@@ -4187,10 +5136,12 @@ def api_chain_lens_get(chain_id, lens):
     if not _CHAIN_ID_RE.match(chain_id or ''):
         return jsonify({'error': 'Invalid chain id'}), 400
     fpath = os.path.join(_chain_dir(chain_id), f'镜头_{lens}.md')
+    st = _lens_jobs.get((chain_id, lens), '')
+    if st == 'running':                       # 重新生成时旧文件还在：别把旧的当成新结果
+        return jsonify({'ready': False, 'status': 'running'})
     if os.path.isfile(fpath):
         with open(fpath, 'r', encoding='utf-8') as f:
             return jsonify({'ready': True, 'markdown': f.read()})
-    st = _lens_jobs.get((chain_id, lens), '')
     if st.startswith('error:'):
         return jsonify({'ready': False, 'error': st[6:]})
     return jsonify({'ready': False, 'status': st or 'idle'})
@@ -4260,13 +5211,14 @@ def api_chain_ask(chain_id):
         return jsonify({'error': 'Question too long (max 2000 characters)'}), 400
     mode = body.get('mode') if body.get('mode') in ('about', 'as') else 'about'
     topic = str(body.get('topic') or '').strip() or None
+    scope = body.get('scope') if isinstance(body.get('scope'), dict) else None
     cdir = _chain_dir(chain_id)
     history = [] if body.get('ephemeral') else ask.load_history(cdir)
     try:
         ref = f'ask:{uuid.uuid4().hex[:12]}'      # 单独一个 ref 才数得出这一问花了多少
         with usage.scope(ref=ref, chain=chain_id):
             r = ask.answer(cdir, q, mode=mode, history=history, topic=topic,
-                           ui_lang=body.get('ui_lang'))
+                           ui_lang=body.get('ui_lang'), scope=scope, persona=body.get('persona'))
         r['cost_usd'] = (usage.cost_for(ref=ref) or {}).get('cost_usd', 0)
     except Exception as e:  # noqa: BLE001
         return jsonify({'error': str(e)[:300]}), 502
@@ -4285,6 +5237,84 @@ def api_chain_ask(chain_id):
     ask.append_history(cdir, user_msg, bot_msg)
     return Response(json.dumps({'ok': True, 'message': bot_msg}, ensure_ascii=False),
                     mimetype='application/json')
+
+
+@app.route('/api/chain/<chain_id>/ask/stream', methods=['POST'])
+def api_chain_ask_stream(chain_id):
+    """流式提问：一行一个 JSON 事件（NDJSON）。stage(search/write/rewrite) → delta… → done。
+    浏览器中途断开（点了停止）：已写出的半截照样校验出处、标「已停止」存进聊天记录。"""
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    import ask
+    body = request.get_json(silent=True) or {}
+    q = str(body.get('question') or '').strip()
+    if not q:
+        return jsonify({'error': 'Empty question'}), 400
+    if len(q) > 2000:
+        return jsonify({'error': 'Question too long (max 2000 characters)'}), 400
+    mode = body.get('mode') if body.get('mode') in ('about', 'as') else 'about'
+    topic = str(body.get('topic') or '').strip() or None
+    scope = body.get('scope') if isinstance(body.get('scope'), dict) else None
+    ui_lang = body.get('ui_lang')
+    cdir = _chain_dir(chain_id)
+    history = ask.load_history(cdir)
+    at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    user_msg = {'role': 'user', 'content': q, 'mode': mode, 'topic': topic, 'at': at}
+
+    def line(obj):
+        return json.dumps(obj, ensure_ascii=False) + '\n'
+
+    # 项目里有好几个博主时「用他的口吻回答」要说清楚是谁（只在模拟时有用）
+    persona = str(body.get('persona') or '') if mode == 'as' else ''
+
+    def bot_msg(r, ref, **extra):
+        return {'role': 'assistant', 'content': r['answer'], 'mode': mode, 'topic': topic,
+                **({'persona': r.get('persona')} if r.get('persona') else {}),
+                'citations': r['citations'], 'coverage': r['coverage'],
+                'dropped_citations': r['dropped_citations'], 'dropped_ids': r.get('dropped_ids'),
+                'cost_usd': (usage.cost_for(ref=ref) or {}).get('cost_usd', 0), 'at': at, **extra}
+
+    def gen():
+        ref = f'ask:{uuid.uuid4().hex[:12]}'      # 单独一个 ref 才数得出这一问花了多少
+        ctx, parts, finished = None, [], False
+        with usage.scope(ref=ref, chain=chain_id):
+            stream = ask.answer_stream(cdir, q, mode=mode, history=history, topic=topic, ui_lang=ui_lang,
+                                       scope=scope, persona=persona)
+            try:
+                for ev in stream:
+                    if ev['type'] == 'ctx':
+                        ctx = ev['ctx']
+                        continue
+                    if ev['type'] == 'delta':
+                        parts.append(ev['text'])
+                    if ev['type'] == 'result':
+                        r = {k: v for k, v in ev.items() if k != 'type'}
+                        msg = bot_msg(r, ref)
+                        ask.append_history(cdir, user_msg, msg)
+                        finished = True
+                        yield line({'type': 'done', 'message': msg})
+                        continue
+                    yield line(ev)
+            except GeneratorExit:
+                # 浏览器断开了：先关掉模型那头（它会按已收到的字记一笔账），再存半截回答
+                stream.close()
+                if not finished:
+                    try:
+                        if ctx is not None and parts:
+                            msg = bot_msg(ask.finish_partial(''.join(parts), ctx), ref, stopped=True)
+                        else:                  # 还在挑卡就停了：留一条空的，记录仍是一问一答成对
+                            msg = {'role': 'assistant', 'content': '', 'mode': mode, 'topic': topic,
+                                   'citations': {}, 'stopped': True, 'at': at,
+                                   'cost_usd': (usage.cost_for(ref=ref) or {}).get('cost_usd', 0)}
+                        ask.append_history(cdir, user_msg, msg)
+                    except Exception:  # noqa: BLE001
+                        pass
+                raise
+            except Exception as e:  # noqa: BLE001
+                yield line({'type': 'error', 'error': str(e)[:300]})
+
+    return Response(gen(), mimetype='application/x-ndjson',
+                    headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
 
 
 @app.route('/api/chain/<chain_id>/ask', methods=['DELETE'])
@@ -4570,7 +5600,7 @@ def _subscription_run(chain_id):
         with open(cpath, 'r', encoding='utf-8') as f:
             state = json.load(f)
         if state.get('stage') in ('downloading', 'transcribing', 'analyzing', 'synthesizing') \
-                or state.get('kind') == 'collection':
+                or state.get('kind') in ('collection', 'project'):
             return
         before = {v.get('task_id') for v in state.get('videos') or [] if v.get('task_id')}
         _cancel_chains.discard(chain_id)
@@ -4715,6 +5745,9 @@ def api_chain_retry(chain_id):
         if k in body:
             state[k] = bool(body[k])
     _cancel_chains.discard(chain_id)          # 清掉可能残留的取消标记
+    if state.get('kind') == 'project':        # 项目没有链接：重新建索引（topic 模板顺带给新录音抽卡）
+        _project_refresh(chain_id)
+        return jsonify({'ok': True})
     if state.get('kind') == 'collection':     # 合集没有链接可探测：直接重建（已有的卡复用）
         threading.Thread(target=_build_collection, args=(state,), daemon=True).start()
         return jsonify({'ok': True})
@@ -4863,9 +5896,33 @@ def api_chain_delete(chain_id):
     # 正在跑的先停：链条线程看 _cancel_chains 收手；已排队的转写看到目录没了
     # 也会自己放弃（_chain_stopped），不会删了链还接着转写计费
     _cancel_chains.add(chain_id)
+    try:
+        doc_ids = _reg_doc_ids(chain_id)
+    except Exception:  # noqa: BLE001
+        doc_ids = []
     # 只删链条目录（分析产物）；转写结果仍留在历史里
     shutil.rmtree(cdir, ignore_errors=True)
+    _drop_orphan_docs(doc_ids)
     return jsonify({'ok': True})
+
+
+def _drop_orphan_docs(doc_ids):
+    """项目删了：它的文档如果别的项目都没在用，一起删掉（文档不像转写那样在资料库里单独可见，留着就是垃圾）。"""
+    import glob as _glob
+    import sources
+    doc_ids = [d for d in doc_ids if sources.valid_doc_id(d)]
+    if not doc_ids:
+        return
+    used = set()
+    for rp in _glob.glob(os.path.join(CHAINS_DIR, '*', 'sources.json')):
+        try:
+            with open(rp, 'r', encoding='utf-8') as f:
+                used |= {d.get('doc_id') for d in (json.load(f).get('docs') or [])}
+        except Exception:  # noqa: BLE001
+            used |= set(doc_ids)          # 读不了某个项目：保守起见一份都不删
+    for d in doc_ids:
+        if d not in used:
+            shutil.rmtree(sources.doc_dir(d), ignore_errors=True)
 
 
 @app.route('/api/chain/<chain_id>/file')
@@ -4893,6 +5950,9 @@ def api_chain_files(chain_id):
     if not os.path.isdir(cdir):
         return jsonify({'error': 'Not found'}), 404
     files = sorted(f for f in os.listdir(cdir) if f.endswith('.md'))
+    if request.args.get('detail'):           # 工作台列表要显示生成时间；默认格式（纯文件名）MCP 在用，不动
+        return jsonify([{'name': f, 'mtime': datetime.fromtimestamp(os.path.getmtime(os.path.join(cdir, f)))
+                         .strftime('%Y-%m-%d %H:%M')} for f in files])
     return jsonify(files)
 
 

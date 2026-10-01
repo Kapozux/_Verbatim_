@@ -34,7 +34,7 @@ function safeName(s) {
     return String(s || 'Verbatim').replace(/[\\/:*?"<>|\n]+/g, ' ').trim().slice(0, 70) || 'Verbatim';
 }
 
-// ================= 导出（Markdown / Word），出处变成编号脚注 =================
+// ================= 导出（PDF / Word / Markdown），出处变成编号脚注 =================
 // 调用方给一份 { title, blocks: [{ heading?, md, citations? } ...] }；[#3-12] 按出现顺序编号，
 // 文末列出处：原话 — 说话人 · 第几期 标题 · 日期 · [▶ 时间](原视频那一秒)
 function buildExportMd(doc) {
@@ -57,7 +57,9 @@ function buildExportMd(doc) {
         lines.push(`## ${T('exp.sources')}`, '');
         order.forEach((cid, i) => {
             const c = refs[cid];
-            const where = [c.creator, c.speaker, `EP${c.ep_no} ${c.episode || ''}`.trim(), c.date].filter(Boolean).join(' · ');
+            const page = c.kind === 'doc' ? [c.page ? T('reader.page', { n: c.page }) : '', c.heading || ''].filter(Boolean).join(' · ') : '';
+            const where = [c.creator, c.speaker, `${c.label || 'EP' + c.ep_no} ${c.episode || ''}`.trim(), page, c.date]
+                .filter(Boolean).join(' · ');
             const link = c.video_url ? ` · [▶ ${c.ts || T('exp.video')}](${c.video_url})` : (c.ts ? ` · ${c.ts}` : '');
             lines.push(`${i + 1}. “${(c.quote || c.obs || '').replace(/\n/g, ' ')}” — ${where}${link}`);
         });
@@ -74,11 +76,13 @@ async function runExport(fmt, doc) {
         downloadBlob(new Blob([md], { type: 'text/markdown;charset=utf-8' }), name + '.md');
         return;
     }
+    // Word 本机生成；PDF 交给墨页排版打印（要几秒，墨页没开会提示）
+    if (fmt === 'pdf') showToast(T('exp.pdfWorking'));
     try {
-        const r = await fetch('/api/export/docx', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ title: doc.title, markdown: md }) });
+        const r = await fetch(`/api/export/${fmt === 'pdf' ? 'pdf' : 'docx'}`, { method: 'POST',
+            headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: doc.title, markdown: md }) });
         if (!r.ok) throw new Error((await r.json()).error || r.status);
-        downloadBlob(await r.blob(), name + '.docx');
+        downloadBlob(await r.blob(), name + (fmt === 'pdf' ? '.pdf' : '.docx'));
     } catch (e) { showToast(T('exp.failed', { e: String(e.message || e) })); }
 }
 
@@ -90,6 +94,7 @@ function exportMenuHtml(getDoc, cls = '') {
     exportSources[key] = getDoc;
     return `<details class="exp-menu ${cls}"><summary class="cx-link">${T('exp.export')} ▾</summary>
         <div class="exp-pop">
+            <button type="button" data-exp="${key}" data-fmt="pdf">${T('exp.pdf')}</button>
             <button type="button" data-exp="${key}" data-fmt="docx">${T('exp.word')}</button>
             <button type="button" data-exp="${key}" data-fmt="md">${T('exp.markdown')}</button>
         </div></details>`;
@@ -188,7 +193,7 @@ async function colLoad(q) {
     if (!colState.chains) {
         try {
             const chains = await (await fetch('/api/chains')).json();
-            colState.chains = chains.filter(c => c.kind !== 'collection' && (c.videos || []).some(v => v.status === 'done') && !c.hidden);
+            colState.chains = chains.filter(c => !['collection', 'project'].includes(c.kind) && (c.videos || []).some(v => v.status === 'done') && !c.hidden);
         } catch { colState.chains = []; }
     }
     colRender();
@@ -231,7 +236,7 @@ async function colSubmit(e) {
     const msg = document.getElementById('col-msg');
     const body = { task_ids: [...colState.picked], chain_ids: [...colState.pickedChains] };
     if (!body.task_ids.length && !body.chain_ids.length) { msg.textContent = T('col.pickSome'); return; }
-    let url = `/api/collections/${colState.id}/add`;
+    let url = `/api/chain/${colState.id}/sources/transcripts`;   // 往项目 / 合集里加（合集会顺带抽新加的那几期的卡）
     if (colState.mode === 'new') {
         body.name = document.getElementById('col-name').value.trim();
         body.kind = document.getElementById('col-kind').value;
@@ -250,6 +255,7 @@ async function colSubmit(e) {
         cxStore('cx.tab', 'episodes');
         if (colState.mode === 'add' && typeof chainDetailId !== 'undefined' && chainDetailId === id) {
             refreshChainDetail();
+            if (typeof srcLoad === 'function') srcLoad();
         } else {
             navigate('chain/' + id);
         }

@@ -44,6 +44,9 @@ PRICES = {
     'gemini-3-flash-preview': {'input': 0.50, 'audio_in': 1.00, 'output': 3.00, 'cached': 0.05},
     'gemini-3.5-flash-lite': {'input': 0.30, 'audio_in': 0.30, 'output': 2.50, 'cached': 0.03},
     'gemini-3.5-flash':      {'input': 1.50, 'audio_in': 1.50, 'output': 9.00, 'cached': 0.15},
+    # 阿里云百炼 DeepSeek V4 Flash：上线时公布输入 1 元、输出 2 元 / 百万 token（按 7.1 折美元）。
+    # 百炼控制台的实价变了就在 prices.json 里覆盖。
+    'deepseek-v4-flash':     {'input': 0.14, 'audio_in': 0.14, 'output': 0.28, 'cached': 0.03},
     # 按音频时长计价的 ASR：美元 / 小时。默认不填（阿里云按 CNY 计、Gemini 3.5 Transcribe 预览期价格未定），
     # 需要时在 prices.json 里加 {"qwen-audio-3.0-asr-flash-filetrans": {"per_audio_hour": 0.xx}}。
 }

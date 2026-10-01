@@ -256,7 +256,13 @@ def _lang_line(lang):
 
 def _call_gemini(prompt, grounded=False, model=None, purpose='analysis'):
     """带重试的 Gemini 调用。grounded=True 开 Google 搜索。model 缺省用合成模型。
-    purpose 只用于记账（usage.db 里按用途汇总）。"""
+    purpose 只用于记账（usage.db 里按用途汇总）。
+    摘要 / 问答 / 打标签这类机械活，内容跟中国议题无关时先走 DeepSeek（llmroute），失败再回到这里。"""
+    if not grounded:
+        import llmroute
+        out = llmroute.text(prompt, purpose)
+        if out:
+            return out
     api_key = config.gemini_key()
     if not api_key:
         raise RuntimeError('GEMINI_API_KEY 未设置')
@@ -301,6 +307,72 @@ def _call_gemini(prompt, grounded=False, model=None, purpose='analysis'):
                 if attempt < _MAX_ATTEMPTS:
                     time.sleep(5 * attempt)
         # 该模型跑不通 → 降级到链条里的下一个
+    raise RuntimeError(f'Gemini 调用失败（已试模型 {ladder}）: {last_err}')
+
+
+_TRANSIENT = ('429', 'RESOURCE_EXHAUSTED', '503', 'UNAVAILABLE', 'overloaded', 'deadline', 'timeout',
+              'EOF occurred', 'SSL', 'Connection reset', 'RemoteProtocolError', 'Server disconnected')
+
+
+def _call_gemini_stream(prompt, model=None, purpose='analysis'):
+    """流式版 _call_gemini：边生成边 yield 文字片段。降级链 / 重试和 _call_gemini 一样，
+    但只在**还没吐出任何字**之前换模型或重试——吐了一半再换模型，前端会看到两段拼起来的话。
+
+    调用方中途不要了（close 生成器，比如用户点了停止）：拿不到 usage_metadata，
+    按已发的 prompt + 已收到的字粗估一笔记账，不让这次花费消失。
+    内容跟中国议题无关时先走 DeepSeek 的流式（llmroute），连不上再回到 Gemini。"""
+    import llmroute
+    cheap = llmroute.stream(prompt, purpose)
+    if cheap is not None:
+        yield from cheap
+        return
+    api_key = config.gemini_key()
+    if not api_key:
+        raise RuntimeError('GEMINI_API_KEY 未设置')
+    client = make_gemini_client(api_key)
+    ladder = []
+    for m in [model or GEMINI_ANALYSIS_MODEL, *GEMINI_FALLBACK_MODELS]:
+        if m and m not in ladder:
+            ladder.append(m)
+
+    def _est(text):
+        cjk = len(re.findall(r'[一-鿿]', text))
+        return cjk + (len(text) - cjk) // 4
+
+    last_err = None
+    for m in ladder:
+        for attempt in range(1, _MAX_ATTEMPTS + 1):
+            got, last = [], None
+            try:
+                for chunk in client.models.generate_content_stream(model=m, contents=prompt):
+                    last = chunk
+                    try:
+                        t = chunk.text or ''
+                    except Exception:  # noqa: BLE001  非文字片段（思考签名之类）
+                        t = ''
+                    if t:
+                        got.append(t)
+                        yield t
+                if getattr(last, 'usage_metadata', None) is not None:
+                    usage.record_gemini(last, m, purpose)
+                else:
+                    usage.record('gemini', m, purpose, input_tokens=_est(prompt),
+                                 output_tokens=_est(''.join(got)))
+                if got:
+                    return
+                last_err = RuntimeError('Gemini 返回空文本')
+            except GeneratorExit:
+                usage.record('gemini', m, purpose, input_tokens=_est(prompt),
+                             output_tokens=_est(''.join(got)))
+                raise
+            except Exception as e:  # noqa: BLE001
+                if got:                  # 已经吐过字：不能悄悄换模型重来，交给调用方
+                    raise
+                last_err = e
+                if not any(k in str(e) for k in _TRANSIENT):
+                    break
+                if attempt < _MAX_ATTEMPTS:
+                    time.sleep(5 * attempt)
     raise RuntimeError(f'Gemini 调用失败（已试模型 {ladder}）: {last_err}')
 
 

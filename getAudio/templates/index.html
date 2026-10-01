@@ -7,12 +7,17 @@
     <link rel="icon" href="/static/logo.svg?v={{ static_version }}" type="image/svg+xml">
     <link rel="alternate icon" href="/static/favicon-32.png?v={{ static_version }}" sizes="32x32">
     <link rel="apple-touch-icon" href="/static/apple-touch-icon.png?v={{ static_version }}">
+    <meta name="color-scheme" content="light dark">
     <link rel="stylesheet" href="/static/style.css?v={{ static_version }}">
+    <!-- 主题 / 侧栏收起：样式表一到就按存好的设置画，不先闪一下浅色或展开的侧栏 -->
+    <script>try{var t=localStorage.getItem('theme');if(t==='light'||t==='dark')document.documentElement.dataset.theme=t;if(localStorage.getItem('sbMini')==='1')document.documentElement.classList.add('sb-mini')}catch(e){}</script>
 </head>
 <body{% if demo %} class="demo"{% endif %}>
     <div class="app">
+        <!-- 打开了一样东西（项目 / 转写 / 文档）时侧栏收起；顶栏的菜单按钮把它叫出来，盖在内容上 -->
+        <div class="sb-scrim" id="sb-scrim" aria-hidden="true"></div>
         <aside class="sidebar" id="sidebar">
-            <div class="sb-brand"><img class="logo" src="/static/logo.svg?v={{ static_version }}" alt="" width="20" height="20"><span>Verbatim</span>{% if demo %}<span class="demo-pill" data-i18n="nav.demo">Demo · sample library</span>{% endif %}</div>
+            <div class="sb-brand"><img class="logo" src="/static/logo.svg?v={{ static_version }}" alt="" width="20" height="20"><span class="sb-name">Verbatim</span>{% if demo %}<span class="demo-pill" data-i18n="nav.demo">Demo · sample library</span>{% endif %}<button type="button" class="sb-collapse" id="sb-collapse" data-i18n-aria-label="nav.collapse" aria-label="Collapse sidebar" data-i18n-title="nav.collapse" title="Collapse sidebar"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M9.5 4.5v15"/></svg></button></div>
             <nav class="sb-nav">
                 <button class="nav-tab active" data-tab="transcribe" type="button"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="M8 7l4-4 4 4"/><path d="M5 15v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3"/></svg><span data-i18n="nav.transcribe">Transcribe</span></button>
                 <button class="nav-tab" data-tab="xhs" type="button"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 12h8"/><path d="M12 8v8"/></svg><span data-i18n="nav.xhs">Xiaohongshu</span></button>
@@ -29,7 +34,12 @@
                 <button id="reflect-open" class="sb-item" type="button" data-i18n-title="reflect.open" title="Reflect"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9"/><path d="M12 7v5l3 2"/><path d="M17 3h4v4"/><path d="M21 3l-5 5"/></svg><span data-i18n="reflect.open">Reflect</span></button>
                 <button id="settings-open" class="sb-item" type="button" data-i18n-title="settings.title" title="Settings"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span data-i18n="settings.title">Settings</span></button>
                 <div class="sb-foot">
-                    <button id="ui-lang-toggle" class="stats-lang ui-lang-toggle" type="button" data-i18n-title="nav.langToggle">中</button>
+                    <div class="sb-prefs">
+                    <button type="button" class="theme-btn" id="theme-btn" data-mode="system"><svg class="ti-system" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 4v16a8 8 0 0 0 0-16z" fill="currentColor"/></svg><svg class="ti-light" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4"/></svg><svg class="ti-dark" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg></button>
+                    <div id="ui-lang-toggle" class="lang-seg" role="radiogroup" data-i18n-aria-label="nav.langToggle" aria-label="Language">
+                        <button type="button" data-lang="en" role="radio">EN</button><button type="button" data-lang="zh" role="radio">中文</button>
+                    </div>
+                    </div>
                     <span class="tagline" data-i18n="nav.tagline">Audio → transcript → insight · local</span>
                 </div>
             </div>
@@ -240,168 +250,15 @@
                     <p data-i18n="creators.subtitle">Paste a channel and Verbatim transcribes every episode, pulls out what the creator actually said, and writes a portrait. Then ask anything (every answer cites the second it was said), see their stances over time, check their predictions, and keep it synced as new videos come out.</p>
                 </div>
 
-                <form class="chain-form-shell nf" onsubmit="return false">
-                    <!-- 第 0 步：粘链接，马上预览（是谁、几期、多长、之前分析过没有）-->
-                    <div class="nf-url-row">
-                        <input type="url" id="chain-url" class="search-input"
-                               data-i18n-placeholder="creators.urlPlaceholder"
-                               placeholder="https://www.youtube.com/@creator  ·  a channel / homepage (for one video, use Transcribe)">
-                        <button id="nf-look" type="button" class="btn-secondary nf-look" data-i18n="nf.look">Look it up</button>
-                    </div>
-                    <p class="chain-hint nf-hint" data-i18n-html="nf.hint">Paste a YouTube channel, a Bilibili space or a playlist. You'll see who it is, how many videos, and what it would cost, before anything runs.</p>
-                    <div id="nf-preview" class="nf-preview hidden"></div>
-
-                    <div id="nf-body" class="nf-body hidden">
-                        <!-- 第 1 步：分析哪些期 -->
-                        <section class="nf-sec">
-                            <h2 class="nf-h"><span class="nf-n">1</span><span data-i18n="nf.whichTitle">Which videos</span></h2>
-                            <div class="nf-quick" id="nf-quick"></div>
-                            <div class="nf-filters">
-                                <label class="nf-field"><span data-i18n="nf.since">Published since</span>
-                                    <input type="date" id="nf-since" class="search-input"></label>
-                                <label class="nf-field nf-grow"><span data-i18n="nf.titleHas">Title contains</span>
-                                    <input type="text" id="nf-kw" class="search-input" data-i18n-placeholder="nf.titleHasPh" placeholder="e.g. interview, Q&amp;A (comma = any of)"></label>
-                            </div>
-                            <details class="nf-pick" id="nf-pick">
-                                <summary id="nf-pick-sum"></summary>
-                                <div class="nf-pick-bar">
-                                    <button type="button" class="cx-link" id="nf-all" data-i18n="nf.selectAll">Select all shown</button>
-                                    <button type="button" class="cx-link" id="nf-none" data-i18n="nf.selectNone">Clear</button>
-                                </div>
-                                <div class="nf-list" id="nf-list"></div>
-                            </details>
-                        </section>
-
-                        <div class="nf-side">
-                        <!-- 第 2 步：要做什么 -->
-                        <section class="nf-sec">
-                            <h2 class="nf-h"><span class="nf-n">2</span><span data-i18n="nf.whatTitle">What to do</span></h2>
-                            <div class="nf-goals">
-                                <label class="nf-goal"><input type="radio" name="nf-goal" value="analyze" checked>
-                                    <span><b data-i18n="nf.goalAnalyze">Full analysis (recommended)</b>
-                                    <small data-i18n="nf.goalAnalyzeD">Transcribe every video, pull out the quotes and write a portrait. Then you can ask questions, see stances and check predictions.</small></span></label>
-                                <label class="nf-goal"><input type="radio" name="nf-goal" value="transcribe">
-                                    <span><b data-i18n="nf.goalTranscribe">Transcripts only</b>
-                                    <small data-i18n="nf.goalTranscribeD">Every video is transcribed and merged into one full text, without the analysis step, which costs far less. You can still analyse later.</small></span></label>
-                            </div>
-                            <div class="nf-opts">
-                                <label class="nf-opt"><input type="checkbox" id="nf-speakers">
-                                    <span><b data-i18n="nf.speakers">It's a call-in / interview channel: tell speakers apart</b>
-                                    <small data-i18n="nf.speakersD">Uses a transcription engine that labels who is speaking, so guests’ words aren’t credited to the host.</small></span></label>
-                                <label class="nf-opt"><input type="checkbox" id="chain-prefer-subs">
-                                    <span><b data-i18n="nf.subs">Use existing subtitles when a video has them</b>
-                                    <small data-i18n="nf.subsD">Faster and free for those videos; auto-captions can be rougher than a real transcript.</small></span></label>
-                                <label class="nf-opt nf-analyze-only"><input type="checkbox" id="nf-predict">
-                                    <span><b data-i18n="nf.predict">Check predictions when done</b>
-                                    <small data-i18n="nf.predictD">Finds the checkable predictions and looks up whether they came true (web search, a few cents).</small></span></label>
-                                <label class="nf-opt"><input type="checkbox" id="nf-sync">
-                                    <span><b data-i18n="nf.sync">Keep it up to date</b>
-                                    <small data-i18n="nf.syncD">Check for new videos on a schedule and add only those. Nothing already here is redone.</small></span>
-                                    <select id="nf-sync-iv" class="nf-sync-iv">
-                                        <option value="168" data-i18n="sub.f.168">Weekly</option>
-                                        <option value="336" data-i18n="sub.f.336">Every 2 weeks</option>
-                                        <option value="720" data-i18n="sub.f.720">Monthly</option>
-                                        <option value="24" data-i18n="sub.f.24">Daily</option>
-                                    </select></label>
-                            </div>
-                        </section>
-
-                        <!-- 开始：预计多少期 / 几小时 / 多少钱 / 多久 -->
-                        <div class="nf-go">
-                            <div class="nf-est" id="nf-est"></div>
-                            <button id="chain-start" type="button" class="btn-primary chain-btn nf-start" data-i18n="creators.analyze">Analyze</button>
-                        </div>
-                        </div>
-
-                        <!-- 高级设置：引擎 / 模型 / 输出语言……默认就够好，懂的人再动 -->
-                        <details class="chain-advanced nf-adv">
-                            <summary data-i18n="nf.advanced">Advanced settings</summary>
-                            <div class="chain-form-row chain-adv-row">
-                                <select id="chain-mode" class="hidden" aria-hidden="true">
-                                    <option value="analyze" selected>analyze</option>
-                                    <option value="transcribe">transcribe</option>
-                                </select>
-                                <input type="number" id="chain-max" class="hidden" aria-hidden="true">
-                                <label class="nf-field"><span data-i18n="nf.engine">Transcription engine</span>
-                                <select id="chain-engine" class="search-input chain-small"
-                                        data-i18n-title="creators.engineTitle" title="Transcription engine.">
-                                    <option value="gemini35" selected data-i18n="creators.engineGemini35">Gemini 3.5 Transcribe (recommended)</option>
-                                    <option value="gemini" data-i18n="creators.engineGemini">Gemini</option>
-                                    <option value="whisper" data-i18n="creators.engineWhisper">Whisper (local)</option>
-                                    <option value="qwenasr" data-i18n="creators.engineQwenasr">Alibaba Qwen-ASR (zh ASR · no Gemini filter)</option>
-                                </select></label>
-                                <label class="nf-field"><span data-i18n="nf.brain">Analysis model</span>
-                                <select id="chain-provider" class="search-input chain-small"
-                                        data-i18n-title="creators.providerTitle"
-                                        title="Which model does the analysis.">
-                                    <option value="gemini" selected data-i18n="creators.providerGemini">Analyze: Gemini</option>
-                                    <option value="opus5" data-i18n="creators.providerOpus5">Analyze: Claude Opus 5  (OpenRouter · thinking)</option>
-                                    <option value="opus46" data-i18n="creators.providerOpus46">Analyze: Claude Opus 4.6  (OpenRouter · thinking)</option>
-                                    <option value="deepseek" data-i18n="creators.providerDeepseek">Analyze: DeepSeek  (Alibaba)</option>
-                                    <option value="kimi" data-i18n="creators.providerKimi">Analyze: Kimi  (Alibaba)</option>
-                                    <option value="glm" data-i18n="creators.providerGlm">Analyze: GLM  (Alibaba)</option>
-                                    <option value="qwen" data-i18n="creators.providerQwen">Analyze: Qwen  (Alibaba)</option>
-                                </select></label>
-                                <label class="nf-field"><span data-i18n="nf.author">Name to use</span>
-                                <input type="text" id="chain-author" class="search-input chain-small"
-                                       data-i18n-placeholder="creators.authorPlaceholder" placeholder="Author (optional)"></label>
-                                <label class="nf-field"><span data-i18n="nf.outLang">Report language</span>
-                                <select id="chain-lang" class="search-input chain-small"
-                                        data-i18n-title="creators.langTitle" title="Language of the analysis documents.">
-                                    <option value="auto" selected data-i18n="creators.langAuto">Output: Auto (follow content)</option>
-                                    <option value="en" data-i18n="creators.langEn">Output: English</option>
-                                    <option value="zh" data-i18n="creators.langZh">Output: 中文</option>
-                                </select></label>
-                                <label class="nf-field"><span data-i18n="nf.tone">Portrait tone</span>
-                                <select id="chain-critique" class="search-input chain-small"
-                                        data-i18n-title="creators.critiqueTitle" title="How sharp the portrait's judgment is.">
-                                    <option value="descriptive" data-i18n="creators.critiqueDescriptive">Descriptive</option>
-                                    <option value="analytical" selected data-i18n="creators.critiqueAnalytical">Analytical</option>
-                                    <option value="sharp" data-i18n="creators.critiqueSharp">Sharp</option>
-                                </select></label>
-                                <label class="nf-field"><span data-i18n="nf.subLang">Subtitle language</span>
-                                <select id="chain-sub-lang" class="search-input chain-small chain-sub-lang"
-                                        data-i18n-title="creators.subLangTitle" title="Which subtitle language counts.">
-                                    <option value="auto" data-i18n="subs.auto">Auto: the video's own language</option>
-                                    <option value="off" data-i18n="subs.off">Off: always transcribe the audio</option>
-                                    <option value="zh">中文</option>
-                                    <option value="en">English</option>
-                                    <option value="ja">日本語</option>
-                                    <option value="ko">한국어</option>
-                                    <option value="es">Español</option>
-                                    <option value="fr">Français</option>
-                                    <option value="de">Deutsch</option>
-                                    <option value="ru">Русский</option>
-                                </select></label>
-                                <label class="chain-check" data-i18n-title="creators.verifyTitle" title="Verify facts with live web search before judging them.">
-                                    <input type="checkbox" id="chain-verify" checked>
-                                    <span data-i18n="creators.verify">Verify facts (web)</span>
-                                </label>
-                                <label class="chain-check" data-i18n-title="creators.selfVerifyTitle" title="Self-critique the portrait against the evidence.">
-                                    <input type="checkbox" id="chain-self-verify" checked>
-                                    <span data-i18n="creators.selfVerify">Self-verify</span>
-                                </label>
-                                <label class="chain-check" data-i18n-title="creators.fallbackWhisperTitle" title="Fall back to local Whisper if the cloud engine fails.">
-                                    <input type="checkbox" id="chain-fallback-whisper">
-                                    <span data-i18n="creators.fallbackWhisper">Whisper fallback</span>
-                                </label>
-                                <label class="chain-check" data-i18n-title="creators.summarizeTitle" title="Also write a summary for every episode (about 1¢ each).">
-                                    <input type="checkbox" id="chain-summarize">
-                                    <span data-i18n="creators.summarize">Episode summaries</span>
-                                </label>
-                            </div>
-                        </details>
-                    </div>
-                </form>
-
-                <div class="creators-tools">
+                                <div class="creators-tools">
                     <h2 class="cr-h"><span data-i18n="creators.yours">Your creators</span> <span id="creators-count" class="cr-count"></span></h2>
                     <input id="creators-search" class="cr-search" type="search" data-i18n-placeholder="creators.search" placeholder="Find a creator…">
                     <button id="radar-open" class="btn-secondary creators-compare" type="button" data-i18n="radar.open">Topic radar</button>
                     <button id="lb-open" class="btn-secondary creators-compare" type="button" data-i18n="lb.open">Prediction ranking</button>
                     <button id="compare-open" class="btn-secondary creators-compare" type="button" data-i18n="cmp.open">Compare creators</button>
-                    <button id="collection-open" class="btn-primary creators-compare" type="button" data-i18n="col.open">New collection</button>
+                    <button id="project-new" class="btn-primary creators-compare" type="button" data-i18n="pj.new">New project</button>
                 </div>
+                <div id="pj-filters" class="pj-filters hidden"></div>
                 <div id="collections-block" class="hidden">
                     <h3 class="cr-sub" data-i18n="col.section">Collections</h3>
                     <div id="collections-grid" class="creators-grid"></div>
@@ -486,6 +343,7 @@
         <!-- ===== Transcript Detail View ===== -->
         <div id="detail-view" class="hidden">
             <div class="detail-top-bar">
+                <button type="button" class="sb-show" data-i18n-aria-label="nav.menu" aria-label="Menu" data-i18n-title="nav.menu" title="Menu"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
                 <button id="detail-back-btn" class="btn-secondary" data-i18n="common.back">← Back</button>
                 <span id="detail-title" class="detail-title"></span>
             </div>
@@ -523,37 +381,110 @@
         <!-- ===== Chain Detail View (info panel + collapsible episode grid) ===== -->
         <div id="chain-detail-view" class="hidden">
             <div class="detail-top-bar">
+                <button type="button" class="sb-show" data-i18n-aria-label="nav.menu" aria-label="Menu" data-i18n-title="nav.menu" title="Menu"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
                 <button id="chain-detail-back" class="btn-secondary" data-i18n="common.back">← Back</button>
+                <!-- 跟 Gemini 一样：项目页左上角就是产品图标，点它回项目列表（☰ 和「返回」在项目页藏起来） -->
+                <button type="button" id="chain-home" class="pj-home" data-i18n-title="pj.home" title="All projects" data-i18n-aria-label="pj.home" aria-label="All projects" onclick="navigate('tab/creators')"><img src="/static/logo.svg?v={{ static_version }}" alt="" width="34" height="34"></button>
                 <span id="chain-detail-title" class="detail-title"></span>
             </div>
             <div id="chain-detail-meta" class="detail-meta"></div>
             <header id="chain-detail-info" class="cp-head"></header>
-            <div id="cx-digest"></div>
-            <section id="chain-explore" class="cx">
-                <div class="cx-tabs" role="tablist">
-                    <button class="cx-tab" type="button" role="tab" data-cx="read" data-i18n="cx.tab.read">Read</button>
-                    <button class="cx-tab" type="button" role="tab" data-cx="ask" data-i18n="cx.tab.ask">Ask</button>
-                    <button class="cx-tab" type="button" role="tab" data-cx="topics" data-i18n="cx.tab.topics">Topics</button>
-                    <button class="cx-tab" type="button" role="tab" data-cx="predictions" data-i18n="cx.tab.predictions">Predictions</button>
-                    <button class="cx-tab" type="button" role="tab" data-cx="cards" data-i18n="cx.tab.cards">Evidence cards</button>
-                    <button class="cx-tab" type="button" role="tab" data-cx="episodes"><span data-i18n="chainDetail.episodes">Episodes</span> <span id="chain-episodes-count" class="cx-tab-n"></span></button>
+            <div class="nb-switch" role="tablist">
+                <button type="button" data-nb="sources" data-i18n="nb.sources">Sources</button>
+                <button type="button" data-nb="main" class="on" data-i18n="nb.chat">Chat</button>
+                <button type="button" data-nb="studio" data-i18n="nb.studio">Studio</button>
+            </div>
+            <section id="chain-explore" class="cx nb" data-nb-active="main">
+                <aside class="nb-pane nb-src" data-nb-pane="sources">
+                    <div class="nb-src-top" id="nb-src-top">
+                        <div class="nb-pane-h"><b data-i18n="nb.sources">Sources</b><button type="button" class="nb-fold" data-fold="src" data-i18n-aria-label="nb.fold" aria-label="Collapse panel" data-i18n-title="nb.fold" title="Collapse panel"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="3"/><path d="M9 4.5v15"/><path class="fold-in" d="M15.5 9.5L13 12l2.5 2.5"/><path class="fold-out" d="M13 9.5l2.5 2.5-2.5 2.5"/></svg></button></div>
+                        <button type="button" class="nb-add" id="nb-add"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span data-i18n="as.title">Add sources</span></button>
+                        <!-- 找来源（discover.py）：搜网页 / YouTube / B 站，挑了再加 -->
+                        <form class="dsc-form" id="dsc-form" autocomplete="off">
+                            <svg class="dsc-ic" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg>
+                            <input id="dsc-q" maxlength="200" data-i18n-placeholder="dsc.ph" placeholder="Find sources on the web" aria-label="Find sources">
+                            <div class="dsc-row">
+                                <div class="dsc-kinds" role="radiogroup" data-i18n-aria-label="dsc.where" aria-label="Where to search">
+                                    <button type="button" data-kind="web" class="on" role="radio" aria-checked="true" data-i18n="dsc.web">Web</button>
+                                    <button type="button" data-kind="youtube" role="radio" aria-checked="false">YouTube</button>
+                                    <button type="button" data-kind="bilibili" role="radio" aria-checked="false" data-i18n="dsc.bili">Bilibili</button>
+                                </div>
+                                <button type="submit" class="dsc-go" data-i18n-aria-label="dsc.search" aria-label="Search"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
+                            </div>
+                        </form>
+                        <div class="dsc-res hidden" id="dsc-res"></div>
+                    </div>
+                    <div id="cx-sources" class="nb-srclist"></div>
+                    <!-- 来源栏收起时：一列图标（添加 + 每个来源一个），点了展开并打开那一份 -->
+                    <div id="nb-src-rail" class="nb-src-rail"></div>
+                    <!-- 频道同步的新视频摘要：属于「来源」这边的事，放在来源清单下面 -->
+                    <div id="cx-digest"></div>
+                    <div id="src-reader" class="src-reader hidden">
+                        <div class="src-reader-head">
+                            <button id="src-reader-x" class="cx-link src-reader-back" type="button" data-i18n="nb.backSources">← Sources</button>
+                            <a id="src-reader-orig" class="cx-link hidden" target="_blank" rel="noopener" data-i18n="pj.openOriginal">Original file</a>
+                        </div>
+                        <div class="src-reader-title"><b id="src-reader-name"></b><span id="src-reader-sub" class="cx-muted"></span></div>
+                        <div id="src-reader-body" class="src-reader-body"></div>
+                    </div>
+                </aside>
+                <div class="nb-pane nb-main" data-nb-pane="main">
+                    <div class="nb-main-h hidden" id="nb-main-h">
+                        <button type="button" class="cx-link" id="nb-back-chat" data-i18n="nb.backChat">← Chat</button>
+                        <b id="nb-main-title"></b>
+                    </div>
+                    <p class="cx-tab-desc" id="cx-tab-desc"></p>
+                    <div id="nb-empty" class="nb-empty hidden"></div>
+                    <div class="cx-panel hidden" id="cx-ask" data-cx-panel="ask"></div>
+                    <div class="cx-panel hidden" id="cx-read" data-cx-panel="read"></div>
+                    <div class="cx-panel hidden" id="cx-topics" data-cx-panel="topics"></div>
+                    <div class="cx-panel hidden" id="cx-preds" data-cx-panel="predictions"></div>
+                    <section id="chain-cards" class="cx-panel cc-wall hidden" data-cx-panel="cards"></section>
+                    <div class="cx-panel hidden" id="cx-studio" data-cx-panel="studio"></div>
+                    <div class="cx-panel hidden" id="cx-episodes" data-cx-panel="episodes">
+                        <div id="cx-ep-bar" class="cx-ep-bar"></div>
+                        <div id="chain-detail-grid" class="video-grid"></div>
+                    </div>
                 </div>
-                <p class="cx-tab-desc" id="cx-tab-desc"></p>
-                <div class="cx-panel" id="cx-read" data-cx-panel="read"></div>
-                <div class="cx-panel hidden" id="cx-ask" data-cx-panel="ask"></div>
-                <div class="cx-panel hidden" id="cx-topics" data-cx-panel="topics"></div>
-                <div class="cx-panel hidden" id="cx-preds" data-cx-panel="predictions"></div>
-                <section id="chain-cards" class="cx-panel cc-wall hidden" data-cx-panel="cards"></section>
-                <div class="cx-panel hidden" id="cx-episodes" data-cx-panel="episodes">
-                    <div id="cx-ep-bar" class="cx-ep-bar"></div>
-                    <div id="chain-detail-grid" class="video-grid"></div>
-                </div>
+                <aside class="nb-pane nb-studio" data-nb-pane="studio">
+                    <div class="nb-pane-h"><b data-i18n="nb.studio">Studio</b><button type="button" class="nb-fold" data-fold="studio" data-i18n-aria-label="nb.fold" aria-label="Collapse panel" data-i18n-title="nb.fold" title="Collapse panel"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="3"/><path d="M15 4.5v15"/><path class="fold-in" d="M8.5 9.5L11 12l-2.5 2.5"/><path class="fold-out" d="M11 9.5L8.5 12l2.5 2.5"/></svg></button></div>
+                    <div id="nb-cards-cta"></div>
+                    <div class="cx-tabs nb-tiles" role="tablist">
+                        <button class="cx-tab nb-ask-tab" type="button" role="tab" data-cx="ask" data-i18n="cx.tab.ask">Ask</button>
+                        <button class="cx-tab nb-tile" type="button" role="tab" data-cx="read"><span class="nb-ic" data-t="read"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h6a3 3 0 0 1 3 3v12a2.5 2.5 0 0 0-2.5-2.5H3z"/><path d="M21 5h-6a3 3 0 0 0-3 3v12a2.5 2.5 0 0 1 2.5-2.5H21z"/></svg></span><span class="nb-tl" data-i18n="cx.tab.read">Read</span></button>
+                        <button class="cx-tab nb-tile" type="button" role="tab" data-cx="topics"><span class="nb-ic" data-t="topics"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v16"/><path d="M7 20h10"/><path d="M4 7h16"/><path d="M7 7l-3 6.5a3 3 0 0 0 6 0z"/><path d="M17 7l-3 6.5a3 3 0 0 0 6 0z"/></svg></span><span class="nb-tl" data-i18n="cx.tab.topics">Topics</span></button>
+                        <button class="cx-tab nb-tile" type="button" role="tab" data-cx="predictions"><span class="nb-ic" data-t="predictions"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r=".8"/></svg></span><span class="nb-tl" data-i18n="cx.tab.predictions">Predictions</span></button>
+                        <button class="cx-tab nb-tile" type="button" role="tab" data-cx="cards"><span class="nb-ic" data-t="cards"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 6h14a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-8l-4 3v-3H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1z"/><path d="M9 10.5h.01M12 10.5h.01M15 10.5h.01"/></svg></span><span class="nb-tl" data-i18n="cx.tab.cards">Evidence cards</span></button>
+                        <button class="cx-tab nb-tile hidden" type="button" role="tab" data-cx="compare"><span class="nb-ic" data-t="compare"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="3.2"/><circle cx="16" cy="8" r="3.2"/><path d="M2.5 19.5c.6-3 2.8-5 5.5-5s4.9 2 5.5 5"/><path d="M13.6 15.2c.7-.5 1.5-.7 2.4-.7 2.7 0 4.9 2 5.5 5"/></svg></span><span class="nb-tl" data-i18n="cx.tab.compare">Compare</span></button>
+                        <!-- 从来源生成（study.js）：跟上面的格子摆在一起，生成的放在下面的列表里 -->
+                        <button class="st-tool" type="button" data-st="report"><span class="nb-ic" data-t="report"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h4"/></svg></span><span class="nb-tl" data-i18n="st.k.report">Report</span></button>
+                        <button class="st-tool" type="button" data-st="flashcards"><span class="nb-ic" data-t="flashcards"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="8" width="13" height="12" rx="2"/><path d="M8 4h11a2 2 0 0 1 2 2v10"/></svg></span><span class="nb-tl" data-i18n="st.k.flashcards">Flashcards</span></button>
+                        <button class="st-tool" type="button" data-st="quiz"><span class="nb-ic" data-t="quiz"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M9.6 9.4a2.5 2.5 0 1 1 3.4 2.4c-.6.3-1 .8-1 1.5v.4"/><path d="M12 16.8h.01"/></svg></span><span class="nb-tl" data-i18n="st.k.quiz">Quiz</span></button>
+                        <button class="st-tool" type="button" data-st="coverage"><span class="nb-ic" data-t="coverage"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6.5l1.6 1.6L8.5 5"/><path d="M4 13.5l1.6 1.6 2.9-3.1"/><path d="M11.5 7h8.5M11.5 14h8.5M11.5 20h8.5"/><path d="M5.5 20h.01"/></svg></span><span class="nb-tl" data-i18n="st.k.coverage">Coverage check</span></button>
+                    </div>
+                    <div class="st-list" id="st-list"></div>
+                    <!-- 工作台里打开的东西（画像 / 立场 / 报告 / 闪卡……）：就在这一栏里展开，这一栏变宽、中间的对话往左收
+                         （跟 Gemini 一样）。面板由 explore.js 挪进挪出 -->
+                    <div id="nb-viewer" class="nbv hidden" role="region" aria-labelledby="nbv-title">
+                        <div class="nbv-crumb">
+                            <button type="button" class="nbv-back" id="nbv-x"><span data-i18n="nb.studio">Studio</span></button>
+                            <span class="nbv-sep" aria-hidden="true">›</span><span id="nbv-kind" class="nbv-kind"></span>
+                            <button type="button" class="nbv-shrink" id="nbv-shrink" data-i18n-aria-label="nb.backStudio" aria-label="Back to Studio" data-i18n-title="nb.backStudio" title="Back to Studio"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 14h6v6"/><path d="M20 10h-6V4"/><path d="M14 10l7-7"/><path d="M3 21l7-7"/></svg></button>
+                        </div>
+                        <div class="nbv-h">
+                            <div class="nbv-hl"><b id="nbv-title" class="nbv-title"></b><span id="nbv-desc" class="nbv-desc"></span></div>
+                            <div class="nbv-acts" id="nbv-acts"></div>
+                        </div>
+                        <div class="nbv-body" id="nbv-body"></div>
+                    </div>
+                </aside>
             </section>
         </div>
 
         <!-- ===== Analysis Doc Reading View ===== -->
         <div id="doc-view" class="hidden">
             <div class="detail-top-bar">
+                <button type="button" class="sb-show" data-i18n-aria-label="nav.menu" aria-label="Menu" data-i18n-title="nav.menu" title="Menu"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
                 <button id="doc-back-btn" class="btn-secondary" data-i18n="common.back">← Back</button>
                 <span id="doc-title" class="detail-title"></span>
                 <button id="doc-download-btn" class="btn-secondary" data-i18n-title="doc.downloadTitle" title="Download the Markdown file"><span data-i18n="doc.download">Download .md</span></button>
@@ -569,6 +500,30 @@
 
     </div>
     </div><!-- /.app -->
+
+    <!-- ===== 复习工具：生成前的设置 ===== -->
+    <div id="st-overlay" class="settings-overlay hidden">
+        <div class="cx-modal st-modal" role="dialog" aria-modal="true" aria-labelledby="st-dlg-t">
+            <button class="settings-x" type="button" data-close data-i18n-aria-label="common.close" aria-label="Close">×</button>
+            <h2 id="st-dlg-t" class="cx-modal-title"></h2>
+            <p class="cx-muted" id="st-dlg-d"></p>
+            <form id="st-form" class="st-form">
+                <div class="st-field" id="st-fmt-f"><span data-i18n="st.fmt">Format</span>
+                    <div class="st-fmts" id="st-fmts" role="radiogroup"></div></div>
+                <label class="st-field hidden" id="st-prompt-f"><span data-i18n="st.promptL">What should it be?</span>
+                    <textarea id="st-prompt" class="search-input" rows="3" maxlength="2000" data-i18n-placeholder="st.promptPh" placeholder="e.g. A one-page comparison of the two authors' views, as a table"></textarea></label>
+                <label class="st-field" id="st-outline-f"><span data-i18n="st.listPick">Which source is the list to check?</span>
+                    <select id="st-outline" class="search-input"></select></label>
+                <label class="st-field" id="st-n-f"><span data-i18n="st.count">How many</span>
+                    <select id="st-n" class="search-input"><option>10</option><option>15</option><option>20</option><option>30</option></select></label>
+                <label class="st-field"><span data-i18n="st.focus">Focus (optional)</span>
+                    <input id="st-focus" class="search-input" maxlength="200" data-i18n-placeholder="st.focusPh" placeholder="e.g. Unit 3, or just the poems"></label>
+                <p class="cx-muted st-from" id="st-from"></p>
+                <div class="st-go-row"><span class="cx-err" id="st-msg"></span>
+                    <button type="submit" class="btn-primary" id="st-go" data-i18n="st.generate">Generate</button></div>
+            </form>
+        </div>
+    </div>
 
     <!-- ===== 跨博主对比 ===== -->
     <div id="compare-overlay" class="settings-overlay hidden">
@@ -586,6 +541,189 @@
     </div>
 
     <!-- ===== 合集：新建 / 加内容 ===== -->
+    <!-- 添加来源：文件（文档 / 录音自动分）、链接（单个视频 / 播放列表直接转写；频道走预览挑期）、文字、资料库 -->
+    <div id="addsrc-overlay" class="settings-overlay hidden">
+        <div class="cx-modal as-modal" role="dialog" aria-modal="true" aria-labelledby="as-title">
+            <button class="settings-x" type="button" data-close data-i18n-aria-label="common.close" aria-label="Close">×</button>
+            <h2 id="as-title" class="cx-modal-title" data-i18n="as.title">Add sources</h2>
+            <div class="as-drop" id="as-drop">
+                <div class="as-drop-ic">⇪</div>
+                <b data-i18n="as.dropTitle">Drop files here or click to choose</b>
+                <span class="cx-muted" data-i18n="as.dropSub">PDF, Word, PPT, Markdown, text, images · audio and video get transcribed</span>
+            </div>
+            <input type="file" id="as-files" multiple hidden>
+            <div class="as-row">
+                <input id="as-link" class="search-input" type="url" data-i18n-placeholder="as.linkPh" placeholder="Paste a link: a video, a playlist, or a whole channel">
+                <button id="as-link-go" class="btn-secondary as-btn" type="button" data-i18n="as.linkGo">Add link</button>
+            </div>
+            <p id="as-msg" class="cx-muted as-msg"></p>
+            <div id="nf-wrap" class="nf-wrap hidden">
+            <form class="chain-form-shell nf" onsubmit="return false">
+            <!-- 第 0 步：粘链接，马上预览（是谁、几期、多长、之前分析过没有）-->
+            <div class="nf-url-row">
+            <input type="url" id="chain-url" class="search-input"
+            data-i18n-placeholder="creators.urlPlaceholder"
+            placeholder="https://www.youtube.com/@creator  ·  a channel / homepage (for one video, use Transcribe)">
+            <button id="nf-look" type="button" class="btn-secondary nf-look" data-i18n="nf.look">Look it up</button>
+            </div>
+            <p class="chain-hint nf-hint" data-i18n-html="nf.hint">Paste a YouTube channel, a Bilibili space or a playlist. You'll see who it is, how many videos, and what it would cost, before anything runs.</p>
+            <div id="nf-preview" class="nf-preview hidden"></div>
+
+            <div id="nf-body" class="nf-body hidden">
+            <!-- 第 1 步：分析哪些期 -->
+            <section class="nf-sec">
+            <h2 class="nf-h"><span class="nf-n">1</span><span data-i18n="nf.whichTitle">Which videos</span></h2>
+            <div class="nf-quick" id="nf-quick"></div>
+            <div class="nf-filters">
+            <label class="nf-field"><span data-i18n="nf.since">Published since</span>
+            <input type="date" id="nf-since" class="search-input"></label>
+            <label class="nf-field nf-grow"><span data-i18n="nf.titleHas">Title contains</span>
+            <input type="text" id="nf-kw" class="search-input" data-i18n-placeholder="nf.titleHasPh" placeholder="e.g. interview, Q&amp;A (comma = any of)"></label>
+            </div>
+            <details class="nf-pick" id="nf-pick">
+            <summary id="nf-pick-sum"></summary>
+            <div class="nf-pick-bar">
+            <button type="button" class="cx-link" id="nf-all" data-i18n="nf.selectAll">Select all shown</button>
+            <button type="button" class="cx-link" id="nf-none" data-i18n="nf.selectNone">Clear</button>
+            </div>
+            <div class="nf-list" id="nf-list"></div>
+            </details>
+            </section>
+
+            <div class="nf-side">
+            <!-- 第 2 步：要做什么 -->
+            <section class="nf-sec">
+            <h2 class="nf-h"><span class="nf-n">2</span><span data-i18n="nf.whatTitle">What to do</span></h2>
+            <div class="nf-goals">
+            <label class="nf-goal"><input type="radio" name="nf-goal" value="analyze" checked>
+            <span><b data-i18n="nf.goalAnalyze">Full analysis (recommended)</b>
+            <small data-i18n="nf.goalAnalyzeD">Transcribe every video, pull out the quotes and write a portrait. Then you can ask questions, see stances and check predictions.</small></span></label>
+            <label class="nf-goal"><input type="radio" name="nf-goal" value="transcribe">
+            <span><b data-i18n="nf.goalTranscribe">Transcripts only</b>
+            <small data-i18n="nf.goalTranscribeD">Every video is transcribed and merged into one full text, without the analysis step, which costs far less. You can still analyse later.</small></span></label>
+            </div>
+            <div class="nf-opts">
+            <label class="nf-opt"><input type="checkbox" id="nf-speakers">
+            <span><b data-i18n="nf.speakers">It's a call-in / interview channel: tell speakers apart</b>
+            <small data-i18n="nf.speakersD">Uses a transcription engine that labels who is speaking, so guests’ words aren’t credited to the host.</small></span></label>
+            <label class="nf-opt"><input type="checkbox" id="chain-prefer-subs">
+            <span><b data-i18n="nf.subs">Use existing subtitles when a video has them</b>
+            <small data-i18n="nf.subsD">Faster and free for those videos; auto-captions can be rougher than a real transcript.</small></span></label>
+            <label class="nf-opt nf-analyze-only"><input type="checkbox" id="nf-predict">
+            <span><b data-i18n="nf.predict">Check predictions when done</b>
+            <small data-i18n="nf.predictD">Finds the checkable predictions and looks up whether they came true (web search, a few cents).</small></span></label>
+            <label class="nf-opt"><input type="checkbox" id="nf-sync">
+            <span><b data-i18n="nf.sync">Keep it up to date</b>
+            <small data-i18n="nf.syncD">Check for new videos on a schedule and add only those. Nothing already here is redone.</small></span>
+            <select id="nf-sync-iv" class="nf-sync-iv">
+            <option value="168" data-i18n="sub.f.168">Weekly</option>
+            <option value="336" data-i18n="sub.f.336">Every 2 weeks</option>
+            <option value="720" data-i18n="sub.f.720">Monthly</option>
+            <option value="24" data-i18n="sub.f.24">Daily</option>
+            </select></label>
+            </div>
+            </section>
+
+            <!-- 开始：预计多少期 / 几小时 / 多少钱 / 多久 -->
+            <div class="nf-go">
+            <div class="nf-est" id="nf-est"></div>
+            <button id="chain-start" type="button" class="btn-primary chain-btn nf-start" data-i18n="creators.analyze">Analyze</button>
+            </div>
+            </div>
+
+            <!-- 高级设置：引擎 / 模型 / 输出语言……默认就够好，懂的人再动 -->
+            <details class="chain-advanced nf-adv">
+            <summary data-i18n="nf.advanced">Advanced settings</summary>
+            <div class="chain-form-row chain-adv-row">
+            <select id="chain-mode" class="hidden" aria-hidden="true">
+            <option value="analyze" selected>analyze</option>
+            <option value="transcribe">transcribe</option>
+            </select>
+            <input type="number" id="chain-max" class="hidden" aria-hidden="true">
+            <label class="nf-field"><span data-i18n="nf.engine">Transcription engine</span>
+            <select id="chain-engine" class="search-input chain-small"
+            data-i18n-title="creators.engineTitle" title="Transcription engine.">
+            <option value="gemini35" selected data-i18n="creators.engineGemini35">Gemini 3.5 Transcribe (recommended)</option>
+            <option value="gemini" data-i18n="creators.engineGemini">Gemini</option>
+            <option value="whisper" data-i18n="creators.engineWhisper">Whisper (local)</option>
+            <option value="qwenasr" data-i18n="creators.engineQwenasr">Alibaba Qwen-ASR (zh ASR · no Gemini filter)</option>
+            </select></label>
+            <label class="nf-field"><span data-i18n="nf.brain">Analysis model</span>
+            <select id="chain-provider" class="search-input chain-small"
+            data-i18n-title="creators.providerTitle"
+            title="Which model does the analysis.">
+            <option value="gemini" selected data-i18n="creators.providerGemini">Analyze: Gemini</option>
+            <option value="opus5" data-i18n="creators.providerOpus5">Analyze: Claude Opus 5  (OpenRouter · thinking)</option>
+            <option value="opus46" data-i18n="creators.providerOpus46">Analyze: Claude Opus 4.6  (OpenRouter · thinking)</option>
+            <option value="deepseek" data-i18n="creators.providerDeepseek">Analyze: DeepSeek  (Alibaba)</option>
+            <option value="kimi" data-i18n="creators.providerKimi">Analyze: Kimi  (Alibaba)</option>
+            <option value="glm" data-i18n="creators.providerGlm">Analyze: GLM  (Alibaba)</option>
+            <option value="qwen" data-i18n="creators.providerQwen">Analyze: Qwen  (Alibaba)</option>
+            </select></label>
+            <label class="nf-field"><span data-i18n="nf.author">Name to use</span>
+            <input type="text" id="chain-author" class="search-input chain-small"
+            data-i18n-placeholder="creators.authorPlaceholder" placeholder="Author (optional)"></label>
+            <label class="nf-field"><span data-i18n="nf.outLang">Report language</span>
+            <select id="chain-lang" class="search-input chain-small"
+            data-i18n-title="creators.langTitle" title="Language of the analysis documents.">
+            <option value="auto" selected data-i18n="creators.langAuto">Output: Auto (follow content)</option>
+            <option value="en" data-i18n="creators.langEn">Output: English</option>
+            <option value="zh" data-i18n="creators.langZh">Output: 中文</option>
+            </select></label>
+            <label class="nf-field"><span data-i18n="nf.tone">Portrait tone</span>
+            <select id="chain-critique" class="search-input chain-small"
+            data-i18n-title="creators.critiqueTitle" title="How sharp the portrait's judgment is.">
+            <option value="descriptive" data-i18n="creators.critiqueDescriptive">Descriptive</option>
+            <option value="analytical" selected data-i18n="creators.critiqueAnalytical">Analytical</option>
+            <option value="sharp" data-i18n="creators.critiqueSharp">Sharp</option>
+            </select></label>
+            <label class="nf-field"><span data-i18n="nf.subLang">Subtitle language</span>
+            <select id="chain-sub-lang" class="search-input chain-small chain-sub-lang"
+            data-i18n-title="creators.subLangTitle" title="Which subtitle language counts.">
+            <option value="auto" data-i18n="subs.auto">Auto: the video's own language</option>
+            <option value="off" data-i18n="subs.off">Off: always transcribe the audio</option>
+            <option value="zh">中文</option>
+            <option value="en">English</option>
+            <option value="ja">日本語</option>
+            <option value="ko">한국어</option>
+            <option value="es">Español</option>
+            <option value="fr">Français</option>
+            <option value="de">Deutsch</option>
+            <option value="ru">Русский</option>
+            </select></label>
+            <label class="chain-check" data-i18n-title="creators.verifyTitle" title="Verify facts with live web search before judging them.">
+            <input type="checkbox" id="chain-verify" checked>
+            <span data-i18n="creators.verify">Verify facts (web)</span>
+            </label>
+            <label class="chain-check" data-i18n-title="creators.selfVerifyTitle" title="Self-critique the portrait against the evidence.">
+            <input type="checkbox" id="chain-self-verify" checked>
+            <span data-i18n="creators.selfVerify">Self-verify</span>
+            </label>
+            <label class="chain-check" data-i18n-title="creators.fallbackWhisperTitle" title="Fall back to local Whisper if the cloud engine fails.">
+            <input type="checkbox" id="chain-fallback-whisper">
+            <span data-i18n="creators.fallbackWhisper">Whisper fallback</span>
+            </label>
+            <label class="chain-check" data-i18n-title="creators.summarizeTitle" title="Also write a summary for every episode (about 1¢ each).">
+            <input type="checkbox" id="chain-summarize">
+            <span data-i18n="creators.summarize">Episode summaries</span>
+            </label>
+            </div>
+            </details>
+            </div>
+            </form>
+            </div>
+            <div class="as-more">
+                <button type="button" class="btn-secondary as-btn" id="as-text-btn" data-i18n="src.addText">Paste text</button>
+                <button type="button" class="btn-secondary as-btn" id="as-lib-btn" data-i18n="src.fromLib">From library</button>
+            </div>
+            <form id="as-text" class="src-text hidden">
+                <input class="search-input" id="as-text-title" maxlength="120" data-i18n-placeholder="src.textTitlePh" placeholder="Title (optional)">
+                <textarea class="search-input" id="as-text-body" rows="7" data-i18n-placeholder="src.textPh" placeholder="Paste notes, an outline, an article…"></textarea>
+                <div class="src-text-foot"><button type="submit" class="btn-primary cx-send" data-i18n="src.textSave">Add</button></div>
+            </form>
+        </div>
+    </div>
+
     <div id="collection-overlay" class="settings-overlay hidden">
         <div class="cx-modal" role="dialog" aria-modal="true" aria-labelledby="col-title">
             <button class="settings-x" type="button" data-close data-i18n-aria-label="common.close" aria-label="Close">×</button>
@@ -940,5 +1078,7 @@
     <script src="/static/app.js?v={{ static_version }}"></script>
     <script src="/static/explore.js?v={{ static_version }}"></script>
     <script src="/static/tools.js?v={{ static_version }}"></script>
+    <script src="/static/projects.js?v={{ static_version }}"></script>
+    <script src="/static/study.js?v={{ static_version }}"></script>
 </body>
 </html>
