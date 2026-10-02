@@ -254,9 +254,9 @@ def _lang_line(lang):
     return _LANG_LINES.get(lang or 'auto', _LANG_LINES['auto'])
 
 
-def _call_gemini(prompt, grounded=False, model=None, purpose='analysis'):
+def _call_gemini(prompt, grounded=False, model=None, purpose='analysis', thinking=None):
     """带重试的 Gemini 调用。grounded=True 开 Google 搜索。model 缺省用合成模型。
-    purpose 只用于记账（usage.db 里按用途汇总）。
+    purpose 只用于记账（usage.db 里按用途汇总）。thinking：思考 token 上限（None = 模型自己定）。
     摘要 / 问答 / 打标签这类机械活，内容跟中国议题无关时先走 DeepSeek（llmroute），失败再回到这里。"""
     if not grounded:
         import llmroute
@@ -269,10 +269,11 @@ def _call_gemini(prompt, grounded=False, model=None, purpose='analysis'):
 
     client = make_gemini_client(api_key)
     cfg = None
-    if grounded:
+    if grounded or thinking is not None:
         from google.genai import types
         cfg = types.GenerateContentConfig(
-            tools=[types.Tool(google_search=types.GoogleSearch())]
+            tools=[types.Tool(google_search=types.GoogleSearch())] if grounded else None,
+            thinking_config=types.ThinkingConfig(thinking_budget=thinking) if thinking is not None else None,
         )
 
     # 模型降级链：主模型 → 兜底模型（去重保序）。某个模型限流/挂了就换下一个。
@@ -447,6 +448,94 @@ def _parse_json_obj(raw):
         return None
 
 
+# 长节目分段抽卡。整期一次抽：两小时的节目要吐出几十张卡和原话，输出被截断、JSON 不闭合，整期判失败
+# （2026-10-02 All-In 两小时那期就是这样，说话人也因此没认）。超过 45 分钟按 20 分钟一段、前后重叠 2 分钟分别抽，
+# 再合起来：重叠处抽重的同一句只留一张，按时间排好。一段失败不连累别的段。
+CHUNK_FROM_S = 45 * 60
+CHUNK_S = 20 * 60
+CHUNK_OVERLAP_S = 2 * 60
+_TS_LINE = re.compile(r'^\[(\d{1,3}:\d{2}(?::\d{2})?)\]')
+
+
+def _ts_seconds(ts):
+    parts = [int(x) for x in ts.split(':')]
+    return parts[0] * 3600 + parts[1] * 60 + parts[2] if len(parts) == 3 else parts[0] * 60 + parts[1]
+
+
+def _split_transcript(text, longer_than=None):
+    """「[时间] 正文」一行一句的转写 → [(起秒, 止秒, 这一段的文字)]；不到 longer_than 秒（缺省 45 分钟）、或看不出时间的 → 一段。"""
+    lines = text.splitlines()
+    timed = []
+    for ln in lines:
+        m = _TS_LINE.match(ln)
+        if m:
+            timed.append((_ts_seconds(m.group(1)), ln))
+        elif timed:
+            timed[-1] = (timed[-1][0], timed[-1][1] + '\n' + ln)
+    if not timed or timed[-1][0] < (CHUNK_FROM_S if longer_than is None else longer_than):
+        return [(0, timed[-1][0] if timed else 0, text)]
+    end = timed[-1][0]
+    out, start = [], 0
+    while start <= end:
+        part = [ln for s, ln in timed if start - (CHUNK_OVERLAP_S if start else 0) <= s < start + CHUNK_S]
+        if part:
+            out.append((start, min(start + CHUNK_S, end), '\n'.join(part)))
+        start += CHUNK_S
+    return out
+
+
+def _merge_metrics(ms):
+    """几段的修辞计数合起来：数字相加，列表接上，其余取第一段的。"""
+    out = {}
+    for m in ms:
+        for k, v in (m or {}).items():
+            if isinstance(v, dict):
+                cur = out.setdefault(k, {})
+                for kk, vv in v.items():
+                    if isinstance(vv, (int, float)) and not isinstance(vv, bool):
+                        cur[kk] = (cur.get(kk) or 0) + vv
+                    elif isinstance(vv, list):
+                        cur[kk] = (cur.get(kk) or []) + vv
+                    else:
+                        cur.setdefault(kk, vv)
+            elif isinstance(v, (int, float)) and not isinstance(v, bool):
+                out[k] = (out.get(k) or 0) + v
+            else:
+                out.setdefault(k, v)
+    return out
+
+
+def _extract_cards_chunked(title, chunks, author, provider, model):
+    """分段抽、再合起来。全失败 → None；部分失败 → 留下抽出来的，并记 extract_partial。"""
+    def one(ch):
+        start, stop, text = ch
+        note = (f'（这是这期的第 {chunks.index(ch) + 1}/{len(chunks)} 段，'
+                f'约 {start // 3600:02d}:{start // 60 % 60:02d}–{stop // 3600:02d}:{stop // 60 % 60:02d}；只抽这一段里的）\n')
+        return _extract_cards(title, note + text, author, provider, model)
+    got = fanout(chunks, one, concurrency=3)
+    ok = [g for g in got if isinstance(g, dict)]
+    if not ok:
+        return None
+    seen, cards = set(), []
+    for g in ok:
+        for c in g.get('cards') or []:
+            if not isinstance(c, dict):
+                continue
+            key = re.sub(r'\W+', '', str(c.get('quote') or c.get('obs') or ''))[:40]
+            if key and key in seen:
+                continue                     # 重叠的那两分钟里两段都抽到的同一句
+            seen.add(key)
+            cards.append(c)
+    cards.sort(key=lambda c: _ts_seconds(c['timestamp']) if _TS_LINE.match(f"[{c.get('timestamp') or ''}]") else 10 ** 9)
+    asr = []
+    for g in ok:
+        asr += [a for a in g.get('asr_suspects') or [] if a not in asr]
+    data = {'cards': cards, 'metrics': _merge_metrics([g.get('metrics') for g in ok]), 'asr_suspects': asr}
+    if len(ok) < len(chunks):
+        data['extract_partial'] = f'{len(chunks) - len(ok)}/{len(chunks)} 段没抽出来'
+    return data
+
+
 def _extract_cards(title, transcript_text, author, provider, model):
     """逐期抽取证据卡。返回 {cards, metrics, asr_suspects} 或 None。
 
@@ -519,7 +608,16 @@ def analyze_episode(title, transcript_text, author='该博主', verify=False, pr
         if not ok:
             return unusable_episode(title, reason)
     provider, extract_model, _ = resolve_analysis(preset)
-    data = _extract_cards(title, transcript_text, author, provider, extract_model)
+    chunks = _split_transcript(transcript_text)
+    if len(chunks) > 1:
+        data = _extract_cards_chunked(title, chunks, author, provider, extract_model)
+    else:
+        data = _extract_cards(title, transcript_text, author, provider, extract_model)
+        if not isinstance(data, dict) and chunks and chunks[0][1] >= CHUNK_S:
+            # 不到 45 分钟但一次也抽不出来（多半是输出被截断）：再按段抽一次
+            longer = _split_transcript(transcript_text, longer_than=0)
+            if len(longer) > 1:
+                data = _extract_cards_chunked(title, longer, author, provider, extract_model)
     failed = not isinstance(data, dict)          # 抽取失败要留痕，别洗成"成功但空卡"
     if failed:
         data = {'cards': [], 'metrics': {}, 'asr_suspects': []}
@@ -540,7 +638,7 @@ def analyze_episode(title, transcript_text, author='该博主', verify=False, pr
             except Exception:  # noqa: BLE001
                 pass
 
-    return {
+    out = {
         'title': title,
         'cards': data.get('cards', []),
         'metrics': data.get('metrics', {}),
@@ -548,6 +646,9 @@ def analyze_episode(title, transcript_text, author='该博主', verify=False, pr
         'markdown': md,
         'extract_failed': failed,
     }
+    if data.get('extract_partial'):
+        out['extract_partial'] = data['extract_partial']
+    return out
 
 
 def _digest(episodes, budget):

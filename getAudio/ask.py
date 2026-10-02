@@ -36,6 +36,9 @@ ASK_MODEL = os.environ.get('ASK_MODEL') or 'gemini-3.5-flash-lite'
 TAG_MODEL = os.environ.get('CARD_TAG_MODEL') or 'gemini-3.5-flash-lite'
 # 联网核对要 Google 搜索 grounding，用抽卡那档 flash
 CHECK_MODEL = os.environ.get('PREDICTION_CHECK_MODEL') or config.GEMINI_EXTRACT_MODEL
+# 核对时的思考上限（token）。不设的话 3.x 联网核对一条要想好几千 token、约 $0.007（2026-10-02 外联会话）；
+# 判「是不是预测、到没到期、找到的证据算不算数」用不了那么多。PREDICTION_CHECK_THINKING=-1 = 不设上限
+CHECK_THINKING = int(os.environ.get('PREDICTION_CHECK_THINKING') or 1024)
 
 # 估算 token 在这以下就整批送（一次问答约一两美分）；超过就检索
 FULL_BUDGET_TOKENS = 60_000
@@ -87,9 +90,9 @@ def _write_json(path, data):
     os.replace(tmp, path)
 
 
-def _llm(prompt, model=ASK_MODEL, purpose='ask', grounded=False):
+def _llm(prompt, model=ASK_MODEL, purpose='ask', grounded=False, thinking=None):
     from analyze import _call_gemini
-    return _call_gemini(prompt, grounded=grounded, model=model, purpose=purpose)
+    return _call_gemini(prompt, grounded=grounded, model=model, purpose=purpose, thinking=thinking)
 
 
 def _json_from(raw):
@@ -1592,7 +1595,9 @@ For "true" you must also give "happened": the date (YYYY-MM or YYYY-MM-DD) the p
 
 Return JSON only: {{"results": [{{"id": "3-12", "verdict": "na|true|false|pending|unclear", "happened": "2026-03", "why": "...", "source": "https://..."}}]}}
 
-Predictions (id | date said | observation | quote):
+Each prediction comes with the episode it is from, who said it (if known), and "context": the transcript around it. Use the context only to understand what exactly was predicted — what "it" or "that" refers to, any condition or deadline, whether it was a joke or someone else's view. If a prediction was conditional and the condition never happened, answer "na".
+
+Predictions (id | date said | episode | speaker | observation | quote | context):
 {items}"""
 
 
@@ -1633,6 +1638,16 @@ def _confirm_true(said, happened):
     return 'true' if h > s else 'na'
 
 
+def _around(task_id, sec, before=20, after=40, limit=500):
+    """一张卡前后几十秒的原文（核对时给模型看上下文）。没有转写 / 没有时间点 → ''。"""
+    if not task_id or sec is None:
+        return ''
+    segs = _read_json(os.path.join(config.RESULTS_FOLDER, task_id, 'transcript.json'), []) or []
+    near = [str(s.get('text') or '') for s in segs if isinstance(s, dict)
+            and sec - before <= (timecode.seconds(s.get('timestamp')) or 0) <= sec + after]
+    return re.sub(r'\s+', ' ', ' '.join(near))[:limit]
+
+
 def check_predictions(chain_dir, ids=None, recheck=False, progress=None, batch_size=8):
     """联网核对。默认只核还没核过的 + 上次判 pending 的。"""
     from harness import fanout, agent
@@ -1653,8 +1668,11 @@ def check_predictions(chain_dir, ids=None, recheck=False, progress=None, batch_s
         def run(batch):
             lines = '\n'.join(
                 f"{c['id']} | said {corpus['episodes'][c['ep']]['date'] or 'date unknown'}"
-                f" | {c['obs'][:200]} | \"{c['quote'][:300]}\"" for c in batch)
-            obj = agent(lambda p: _llm(p, model=CHECK_MODEL, purpose='predict', grounded=True),
+                f" | {corpus['episodes'][c['ep']].get('title') or '-'} | {c.get('speaker') or '-'}"
+                f" | {c['obs'][:200]} | \"{c['quote'][:300]}\""
+                f" | {_around(corpus['episodes'][c['ep']].get('task_id'), c.get('sec')) or '-'}" for c in batch)
+            obj = agent(lambda p: _llm(p, model=CHECK_MODEL, purpose='predict', grounded=True,
+                                       thinking=CHECK_THINKING if CHECK_THINKING >= 0 else None),
                         CHECK_PROMPT.format(author=corpus['author'] or 'this creator',
                                             today=today, items=lines,
                                             lang='Chinese (简体中文)' if _content_lang(corpus) == 'Chinese' else 'English'),
