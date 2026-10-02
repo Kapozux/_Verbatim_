@@ -1153,6 +1153,7 @@ def _run_transcription(task_id, filepath, engine, original_filename, q,
         # 只在任务成功后删源音频；失败保留（Continue 补全时直接重转，不用重下载）
         row = taskdb.get(task_id)
         if row and row.get('status') == 'done':
+            _voices_keep(task_id, filepath, offset_sec)      # 删源文件之前：留试听音频、排声纹
             for path in cleanup_paths:
                 try:
                     os.remove(path)
@@ -1184,7 +1185,7 @@ def _static_version():
     文件一变这串数字就变，浏览器才会当成新资源重新拉取。
     """
     try:
-        paths = [os.path.join(app.static_folder, name) for name in ('app.js', 'style.css', 'i18n.js', 'explore.js', 'tools.js', 'projects.js', 'study.js')]
+        paths = [os.path.join(app.static_folder, name) for name in ('app.js', 'style.css', 'i18n.js', 'explore.js', 'tools.js', 'projects.js', 'study.js', 'voices.js')]
         return str(int(max(os.path.getmtime(p) for p in paths if os.path.isfile(p))))
     except (ValueError, OSError):
         return '0'
@@ -4157,6 +4158,154 @@ def _project_on_transcribed(cid, task_id):
         _project_refresh(cid)
 
 
+# ================= 声纹：项目里认说话人（voices.py；本机算，音频不出电脑）=================
+
+_VOICE_TID_RE = re.compile(r'^[0-9a-f-]{32,36}$')
+
+
+def _voices_refresh(cid):
+    """项目的录音（声纹）变了：重新认说话人 → 卡片的「谁说的」跟着更新 → 没名字的问一次有没有被点名。"""
+    import ask
+    import voices
+    cdir = _chain_dir(cid)
+    try:
+        st = voices.identify(cdir)
+        if not st.get('speakers'):
+            return
+        ask.build_speakers(cdir)
+        with usage.scope(ref=f'voices:{cid[:8]}', chain=cid):
+            voices.suggest_names(cdir)
+    except Exception as e:  # noqa: BLE001  认不出说话人不影响项目
+        print(f'[voices {cid[:8]}] {e}')
+
+
+def _voices_projects_of(task_id):
+    """这条录音在哪些项目里（声纹做完后这些项目都要重新认人）。"""
+    out = []
+    for cid in os.listdir(CHAINS_DIR):
+        st = _read_json_safe(os.path.join(CHAINS_DIR, cid, 'chain.json')) if _CHAIN_ID_RE.match(cid) else {}
+        if st.get('kind') == 'project' and any(v.get('task_id') == task_id for v in st.get('videos') or []):
+            out.append(cid)
+    return out
+
+
+def _voices_after(task_id):
+    for cid in _voices_projects_of(task_id):
+        _voices_refresh(cid)
+
+
+def _voices_keep(task_id, path, offset_sec=0):
+    """转写成功、源文件删掉之前：留一份试听音频，声纹排进后台（一次一条，一小时音频约 2–3 分钟 CPU）。
+    VOICES_AUTO=off 可关；没装声纹模型时什么都不做。"""
+    import voices
+    if offset_sec or (os.environ.get('VOICES_AUTO') or 'on').lower() == 'off' or not voices.available():
+        return
+    try:
+        out = voices.keep_audio(task_id, path)
+        if out:
+            voices.queue(task_id, out, then=_voices_after)
+    except Exception as e:  # noqa: BLE001
+        print(f'[voices] keep {task_id[:8]}: {e}')
+
+
+@app.route('/api/chain/<chain_id>/voices', methods=['GET', 'POST'])
+def api_chain_voices(chain_id):
+    """GET：说话人名单。POST {action: rename|role|merge|detach|not_same|accept_hint, speaker, …}：用户的决定。"""
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    import voices
+    cdir = _chain_dir(chain_id)
+    if request.method == 'GET':
+        out = voices.roster(cdir)
+        if out['lessons_with_voices'] and not voices._state(cdir).get('built_at'):   # 声纹是在别处做的、这个项目还没认过
+            voices.identify(cdir)
+            out = voices.roster(cdir)
+        return jsonify(out)
+    body = request.get_json(silent=True) or {}
+    try:
+        out = voices.act(cdir, body.get('action'), speaker=body.get('speaker'), name=body.get('name'),
+                         role=body.get('role'), into=body.get('into'), group=body.get('group'), other=body.get('other'))
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+    def relabel():
+        import ask
+        try:
+            ask.build_speakers(cdir)
+        except Exception as e:  # noqa: BLE001
+            print(f'[voices {chain_id[:8]}] relabel cards: {e}')
+    threading.Thread(target=relabel, daemon=True).start()
+    return jsonify(out)
+
+
+@app.route('/api/chain/<chain_id>/voices/fingerprint', methods=['POST'])
+def api_chain_voices_fingerprint(chain_id):
+    """以前转写、没留音频的录音：按原文件名在本机找原音频（时长对得上才用），找到的排进后台做声纹。"""
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    import voices
+    if not voices.available():
+        return jsonify({'error': 'Voice models are not installed'}), 400
+    want = set((request.get_json(silent=True) or {}).get('task_ids') or [])
+    queued, not_found = [], []
+    for m in voices.roster(_chain_dir(chain_id))['missing']:
+        tid = m['task_id']
+        if (want and tid not in want) or (m.get('job') or {}).get('state') in ('queued', 'running'):
+            continue
+        src = voices.audio_path(tid) if voices.has_audio(tid) else voices.find_original(tid)
+        if src:
+            voices.queue(tid, src, then=lambda t, cid=chain_id: _voices_refresh(cid))
+            queued.append(tid)
+        else:
+            not_found.append({'task_id': tid, 'title': m.get('title'),
+                              'filename': (_read_json_safe(os.path.join(config.RESULTS_FOLDER, tid, 'meta.json'))
+                                           or {}).get('filename', '')})
+    return jsonify({'queued': queued, 'not_found': not_found})
+
+
+@app.route('/api/chain/<chain_id>/voices/<task_id>', methods=['GET'])
+def api_chain_voices_labels(chain_id, task_id):
+    """这条录音每句转写是谁说的（转写阅读器用）。"""
+    if not _chain_ok(chain_id) or not _VOICE_TID_RE.match(task_id):
+        return jsonify({'error': 'Not found'}), 404
+    import voices
+    segs = voices.speaker_segments(_chain_dir(chain_id), task_id)
+    return jsonify({'labels': [{'i': i, 'name': n, 'speaker': sid} for i, (_, n, sid, _) in enumerate(segs)],
+                    'audio': voices.has_audio(task_id)})
+
+
+@app.route('/api/voices/<task_id>/audio')
+def api_voice_audio(task_id):
+    """试听用的那份压缩音频（支持 Range，可以直接跳到某一秒）。"""
+    import voices
+    if not _VOICE_TID_RE.match(task_id) or not voices.has_audio(task_id):
+        return jsonify({'error': 'Not found'}), 404
+    return send_file(voices.audio_path(task_id), mimetype='audio/mp4', conditional=True)
+
+
+@app.route('/api/voices/<task_id>/fingerprint', methods=['POST'])
+def api_voice_fingerprint_upload(task_id):
+    """找不到原音频时，用户自己选文件：时长和转写对得上才收，排进后台做声纹，做完删掉这份上传。"""
+    import voices
+    if not _VOICE_TID_RE.match(task_id) or not os.path.isdir(os.path.join(config.RESULTS_FOLDER, task_id)):
+        return jsonify({'error': 'Not found'}), 404
+    if not voices.available():
+        return jsonify({'error': 'Voice models are not installed'}), 400
+    f = request.files.get('audio')
+    if not f or not f.filename:
+        return jsonify({'error': 'No file'}), 400
+    ext = os.path.splitext(f.filename)[1].lower()[:8] or '.bin'
+    path = os.path.join(config.UPLOAD_FOLDER, f'voice_{task_id}{ext}')
+    f.save(path)
+    want = (_read_json_safe(os.path.join(config.RESULTS_FOLDER, task_id, 'meta.json')) or {}).get('duration_seconds')
+    got = voices._probe_duration(path)
+    if want and not voices._close(got, want):
+        os.remove(path)
+        return jsonify({'error': 'duration_mismatch', 'file_seconds': got, 'transcript_seconds': want}), 400
+    voices.queue(task_id, path, cleanup=True, then=_voices_after)
+    return jsonify({'queued': True})
+
+
 @app.route('/api/chain/<chain_id>/sources/<source_id>', methods=['DELETE'])
 def api_project_remove_source(chain_id, source_id):
     """从项目里拿掉一个来源（文档 doc_id 或录音 task_id）。全局的文档 / 转写不删——别的项目可能还在用。
@@ -4279,6 +4428,7 @@ def _project_refresh(cid, force_build=False):
                         _build_collection(state)           # 已有的卡复用，只抽新的；顺带写综述、打话题
                 with usage.scope(ref=f'index:{cid[:8]}', chain=cid):
                     ask.embed_chain(_chain_dir(cid))
+                _voices_refresh(cid)                       # 录音变了：重新认说话人（没做过声纹的项目什么都不做）
                 with _project_jobs_lock:
                     if _project_jobs.get(cid) == 'dirty':
                         _project_jobs[cid] = 'running'

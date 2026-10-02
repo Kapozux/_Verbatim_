@@ -218,11 +218,11 @@ function cxShowTab(tab, auto) {
         document.getElementById('nbv-acts').innerHTML = '';
         const tile = document.querySelector(`#chain-explore .nb-tile[data-cx="${tab}"] .nb-tl`);
         nbvKind(tab === 'read' ? T(readIsCol() ? 'st.kindReadCol' : 'st.kindRead')
-            : tab === 'episodes' ? T('nb.episodes') : tile ? tile.textContent : '');
+            : tab === 'episodes' ? T('nb.episodes') : tab === 'voices' ? T('vc.title') : tile ? tile.textContent : '');
         // 按人看的：标题写是谁的（项目里不止一个人时）
         nbvTitle(VIEW_TABS.includes(tab) && cxMulti() ? personName(cxPerson()) : '');
         const back = document.querySelector('#nbv-x span');
-        if (back) back.textContent = T(tab === 'episodes' ? 'nb.sources' : 'nb.studio');     // 全部录音是从来源栏打开的
+        if (back) back.textContent = T(['episodes', 'voices'].includes(tab) ? 'nb.sources' : 'nb.studio');   // 全部录音、说话人是从来源栏打开的
         const colKey = 'cx.desc.' + tab + 'Col';
         const isCol = cx.chain && !cx.chain.url;
         document.getElementById('nbv-desc').textContent = !viewer || tab === 'studio' || tab === 'read' ? ''
@@ -237,6 +237,7 @@ function cxShowTab(tab, auto) {
         else if (!auto) nbShowPane('main');
     }
     if (askOn && !cx.loaded.ask && (tab === 'ask' || viewer)) { cx.loaded.ask = true; askLoad(); }
+    if (tab === 'voices' && typeof vcRender === 'function') { vcRender(); vcLoad(); }
     if (!tab || cx.loaded[tab]) return;
     cx.loaded[tab] = true;
     if (tab === 'read') readLoad();

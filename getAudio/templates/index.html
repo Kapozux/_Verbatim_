@@ -445,6 +445,8 @@
                         <div id="cx-ep-bar" class="cx-ep-bar"></div>
                         <div id="chain-detail-grid" class="video-grid"></div>
                     </div>
+                    <!-- 说话人（声纹认人）：从来源栏那一行打开，在工作台栏展开 -->
+                    <div class="cx-panel hidden" id="cx-voices" data-cx-panel="voices"></div>
                 </div>
                 <aside class="nb-pane nb-studio" data-nb-pane="studio">
                     <div class="nb-pane-h"><b data-i18n="nb.studio">Studio</b><button type="button" class="nb-fold" data-fold="studio" data-i18n-aria-label="nb.fold" aria-label="Collapse panel" data-i18n-title="nb.fold" title="Collapse panel"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="3"/><path d="M15 4.5v15"/><path class="fold-in" d="M8.5 9.5L11 12l-2.5 2.5"/><path class="fold-out" d="M11 9.5L8.5 12l2.5 2.5"/></svg></button></div>
@@ -1080,6 +1082,7 @@
     <script src="/static/explore.js?v={{ static_version }}"></script>
     <script src="/static/tools.js?v={{ static_version }}"></script>
     <script src="/static/projects.js?v={{ static_version }}"></script>
+    <script src="/static/voices.js?v={{ static_version }}"></script>
     <script src="/static/study.js?v={{ static_version }}"></script>
 </body>
 </html>

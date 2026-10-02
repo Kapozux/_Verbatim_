@@ -61,6 +61,10 @@ def isolate(prefix, cheap_route=False):
     os.environ['OPENROUTER_API_KEY'] = ''
     os.environ['CHEAP_TEXT_ROUTE'] = 'on' if cheap_route else 'off'
     os.makedirs(os.path.join(tmp, 'results', '_chains'))
+    # 本机开着代理（Clash 之类）时，HTTP 客户端会先连 127.0.0.1 的代理、由代理转发出去——
+    # 下面的「只许连本机」挡不住这一跳，所以代理变量一律清掉
+    for k in ('http_proxy', 'https_proxy', 'all_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY'):
+        os.environ.pop(k, None)
     if SRC not in sys.path:
         sys.path.insert(0, SRC)
     _guard_network()

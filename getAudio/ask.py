@@ -29,6 +29,7 @@ from datetime import datetime
 import citations
 import config
 import timecode
+import voices
 import usage
 
 ASK_MODEL = os.environ.get('ASK_MODEL') or 'gemini-3.5-flash-lite'
@@ -145,6 +146,7 @@ def load(chain_dir, passages=False):
     tags = _read_json(os.path.join(chain_dir, 'tags.json'), {}) or {}
     spk = _read_json(os.path.join(chain_dir, 'speakers.json'), {}) or {}
     spk_cards, spk_roles = spk.get('cards') or {}, spk.get('roles') or {}
+    vnames = None
     taxonomy = tags.get('taxonomy') or []
     tagged = tags.get('cards') or {}
     raw_map = tags.get('raw_map') or {}
@@ -190,8 +192,13 @@ def load(chain_dir, passages=False):
             })
             sp = spk_cards.get(cid)
             if sp and sp[0] == cards[-1]['h'] and sp[1]:
-                cards[-1]['spk'] = sp[1]                                   # 原始标签：说话人2
-                cards[-1]['speaker'] = (spk_roles.get(tid) or {}).get(sp[1]) or sp[1]
+                cards[-1]['spk'] = sp[1]                                   # 原始标签：说话人2 / v:p3（声纹认出的）
+                if sp[1].startswith('v:'):                                 # 存的是说话人 id，名字现查：改名立刻生效
+                    if vnames is None:
+                        vnames = voices.names(chain_dir)
+                    cards[-1]['speaker'] = vnames.get(sp[1][2:], '')
+                else:
+                    cards[-1]['speaker'] = (spk_roles.get(tid) or {}).get(sp[1]) or sp[1]
             n += 1
         if n:
             episodes.append({'key': key, 'title': title, 'task_id': tid,
@@ -478,19 +485,36 @@ def build_speakers(chain_dir, progress=None):
         data = _read_json(path, {}) or {}
         cards_map = data.setdefault('cards', {})
         roles = data.setdefault('roles', {})
+        # 有声纹的录音：先（重新）认一遍说话人——整个项目一套固定叫法；卡片存说话人 id（v:p3），不存名字
+        try:
+            vat = voices.identify(chain_dir).get('built_at')
+        except Exception as e:  # noqa: BLE001  声纹出错就按转写里的标签来
+            print(f'[speakers] voices: {e}')
+            vat = None
+        vsegs = {}
+
+        def voice_segs(tid):
+            if tid not in vsegs:
+                v = voices.speaker_segments(chain_dir, tid) if tid and vat else []
+                vsegs[tid] = [(sec or 0, f'v:{sid}' if sid else '', _NORM_RE.sub('', text.lower()))
+                              for sec, _, sid, text in v] or None
+            return vsegs[tid]
+        relabel = data.get('voices_at') != vat
         corpus = load(chain_dir)
         eps = corpus['episodes']
         labels_by_task = {}
         for c in corpus['cards']:
             old = cards_map.get(c['id'])
-            if old and old[0] == c['h']:
+            tid = eps[c['ep']]['task_id']
+            vs = voice_segs(tid)
+            if old and old[0] == c['h'] and not (relabel and (vs or str(old[1]).startswith('v:'))):
                 lab = old[1]
             else:
-                tid = eps[c['ep']]['task_id']
-                lab = _match_speaker(_segments(tid), c['quote'], c['sec']) if tid else ''
+                lab = _match_speaker(vs or _segments(tid), c['quote'], c['sec']) if tid else ''
                 cards_map[c['id']] = [c['h'], lab]
-            if lab:
-                labels_by_task.setdefault(eps[c['ep']]['task_id'], set()).add(lab)
+            if lab and not lab.startswith('v:'):                       # 声纹认出的不用再让模型猜角色
+                labels_by_task.setdefault(tid, set()).add(lab)
+        data['voices_at'] = vat
         # 只有一个人说话的期不用认角色；多人的每期认一次
         todo = []
         for tid in labels_by_task:

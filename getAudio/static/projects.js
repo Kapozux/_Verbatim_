@@ -118,6 +118,7 @@ async function srcLoad() {
     srcState.data = d;
     srcRender();
     srcSyncCount();
+    if (typeof vcLoad === 'function' && vcState.id !== id) vcLoad();        // 说话人那一行（换了项目才重新拉）
     // 来源数跟档案头对不上（刚加 / 刚删）：刷新档案头——「问」能不能用也是按它算的
     const ch = cx.chain || {};
     const n = srcAllIds(d).length;
@@ -232,10 +233,11 @@ function srcRender() {
         ${d.indexing ? `<p class="src-note cx-thinking">${T('src.indexing')}</p>` : ''}
         ${rows.length ? `<label class="sr-all"><span>${T('src.selectAll')}</span>
             <input type="checkbox" id="sr-all" ${allOn ? 'checked' : ''} ${all.length ? '' : 'disabled'}></label>
-            <div class="sr-list">${rows.join('')}</div>`
+            <div class="sr-list">${rows.join('')}${typeof vcSrcRowHtml === 'function' ? vcSrcRowHtml() : ''}</div>`
             : `<div class="sr-empty"><div class="sr-empty-ic">${srcSvg('doc')}</div><b>${T('nb.srcEmptyT')}</b>
                 <span>${T('nb.srcEmptyD')}</span></div>`}`;
     srcWire(box);
+    if (typeof vcWireSrc === 'function') vcWireSrc(box);
     srcRenderRail(d, ro);
     srcRenderCta();
 }
@@ -295,7 +297,7 @@ function srcSetSel(ids, on) {
 function srcWire(box) {
     const allBox = box.querySelector('#sr-all');
     if (allBox) allBox.addEventListener('change', () => srcSetSel(srcAllIds(srcState.data), allBox.checked));
-    box.querySelectorAll('.sr-row').forEach(row => {
+    box.querySelectorAll('.sr-row:not(.vc-src)').forEach(row => {          // 「说话人」那一行自己接线（voices.js）
         const kind = row.dataset.kind;
         const sid = row.dataset.sid;
         const chk = row.querySelector('.sr-check');
@@ -595,6 +597,7 @@ async function openTranscriptViewer(taskId, sec) {
             <span>${escapeHtml(s.text || '')}</span></div>`).join('');
     body.querySelector('.rd-open').addEventListener('click', e => navigate(e.target.dataset.go));
     readerFocus(body, hit != null ? `.rd-seg[data-si="${hit}"]` : null);
+    if (typeof vcDecorateTranscript === 'function') vcDecorateTranscript(body, taskId, segs);   // 每句是谁说的、▶ 听
 }
 
 function closeSourceReader() {

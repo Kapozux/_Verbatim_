@@ -30,6 +30,12 @@ _Avoid_：创作者、KOL、channel（说人的时候）
 代码里：`people` / `person` / `/api/chain/<id>/people`。
 _Avoid_：persona（只在「用他的口吻回答」时用）、creator（card_view 里的显示字段除外）
 
+**说话人**：
+录音里开口说话的某一个人，按声纹认出来；在整个项目里叫法固定——同一个名字就是同一个人（「祖老师」「学生3」）。
+跟「人」不是一回事：人是能按人看画像的博主，说话人是录音里的声音。说得最多的那位是「主讲」。
+代码里：`voices.py`、项目目录的 `voices.json` 里的 `speakers`、`/api/chain/<id>/voices`；证据卡上的 `speaker`。
+_Avoid_：说话人1 / 说话人2 当成跨录音的身份（那是转写引擎在一份文件里的临时编号）、声音（单说时）
+
 **引用**：
 把一个已有的博主加进另一个项目的方式：只记他的链条 id 和一个固定字母，不拷贝数据。
 代码里：`sources.json` 的 `channels: [{chain_id, tag}]`。
