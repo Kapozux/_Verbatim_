@@ -76,6 +76,11 @@ id 是「文件编号-下标」：`3-12`。
 代码里：card、`cards_NNN.json`。
 _Avoid_：卡片（单说时可以）、quote card
 
+**画面证据卡**：
+从视频画面里抽出来的一条：一张关键帧 + 屏幕上的字（原样抄）+ AI 写的描述和观察 + 显示的时间段 + 那段时间说的话。
+测试版，只在工作台里看，还不进问答的语料。存在期的结果目录里，几个项目共用。
+代码里：`frames.py`、`results/<task_id>/visual/cards.json`、工作台产出 `kind == 'visual'`。
+
 **原文段落**：
 文档或转写原样切出来的一段，不经 AI 挑选；提问时跟证据卡一起检索。id 是 `d<固定号>-<段>` / `t<固定号>-<段>`。
 代码里：passage、`layer == 'source'` 的卡。
@@ -121,8 +126,12 @@ _Avoid_：订阅（界面已改叫同步）
 _Avoid_：复习区
 
 **产出**：
+代码里：`studio/<id>.json`，kind = report | flashcards | quiz | coverage | note | compare | view | visual。
+
+**原声**：
+播客里直接放的本人原话那几秒（从本机留的音频裁，没有就按链接现下），不让主持人转述；取不到时主持人念原话。
+代码里：脚本行 `{"clip": "<卡片 id>"}`、`podcast.fetch_clip`。
 工作台列表里的一条：报告、闪卡、自测题、对照检查、存下的回答、对比，以及「谁的立场 / 预测 / 原话」。
-代码里：`studio/<id>.json`，kind = report | flashcards | quiz | coverage | note | compare | view。
 
 **对比**：
 同一个问题，项目里 2–4 个人各怎么说，并排、各带出处。代码里：compare、`ask.compare`。

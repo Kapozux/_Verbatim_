@@ -117,6 +117,50 @@ def start_compare(cdir, chain_id, people, question, run=None):
     return out
 
 
+def start_visual(cdir, chain_id, results_dir, rows, run=None):
+    """画面证据卡：rows [{'task_id','title','url'}]，一期一期做（frames.py），结果存成一条 kind=visual。
+    做过的期直接用、不再花钱；每做完一期就存一次，列表上能看到进度。"""
+    import frames
+    if not rows:
+        raise ValueError('Pick at least one episode')
+    oid = uuid.uuid4().hex[:12]
+    out = {'id': oid, 'kind': 'visual', 'status': 'running', 'created_at': _now(), 'chain': chain_id,
+           'tasks': [r['task_id'] for r in rows], 'progress': {'done': 0, 'total': len(rows)}}
+    _save(cdir, out)
+    with _lock:
+        _running.add(oid)
+
+    def on_episode(i, rec, status):
+        out['progress'] = {'done': i + (status == 'done'), 'total': len(rows),
+                           'current': rec.get('title') if status == 'start' else ''}
+        _save(cdir, out)
+
+    def job():
+        try:
+            eps = frames.run_batch(results_dir, rows, on_episode=on_episode)
+            result = []
+            for e in eps:
+                d = frames.load(results_dir, e['task_id']) or {}
+                result.append({**e, 'duration': d.get('duration'), 'cards': d.get('cards') or []})
+            n = sum(len(e['cards']) for e in result)
+            out.update(status='done' if n or not all(e.get('error') for e in result) else 'failed',
+                       result={'episodes': result}, n=n, finished_at=_now())
+            if out['status'] == 'failed':
+                out['error'] = result[0].get('error') or 'No cards'
+        except Exception as e:  # noqa: BLE001
+            out.update(status='failed', error=str(e)[:300])
+        finally:
+            fresh = [e['task_id'] for e in (out.get('result') or {}).get('episodes', []) if not e.get('cached')]
+            out['cost_usd'] = round(sum((usage.cost_for(ref='visual:' + t) or {}).get('cost_usd', 0)
+                                        for t in fresh), 6)
+            out.pop('progress', None)
+            _save(cdir, out)
+            with _lock:
+                _running.discard(oid)
+    (run or (lambda f: threading.Thread(target=f, daemon=True).start()))(job)
+    return out
+
+
 def get_output(cdir, oid):
     try:
         return ask._read_json(_path(cdir, oid))

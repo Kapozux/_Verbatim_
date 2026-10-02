@@ -838,8 +838,8 @@ _XHS_IMG_MIME = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg
                  '.webp': 'image/webp', '.heic': 'image/heic'}
 
 
-def _call_gemini_mm(prompt, image_paths, model=None):
-    """多模态 Gemini：文字 + 图片一起送。带模型降级链、重试。返回文本。"""
+def _call_gemini_mm(prompt, image_paths, model=None, purpose='xhs'):
+    """多模态 Gemini：文字 + 图片一起送。带模型降级链、重试。返回文本。purpose 是记账用的用途名。"""
     api_key = config.gemini_key()
     if not api_key:
         raise RuntimeError('GEMINI_API_KEY 未设置')
@@ -863,7 +863,7 @@ def _call_gemini_mm(prompt, image_paths, model=None):
         for attempt in range(1, _MAX_ATTEMPTS + 1):
             try:
                 resp = client.models.generate_content(model=m, contents=parts)
-                usage.record_gemini(resp, m, 'xhs')
+                usage.record_gemini(resp, m, purpose)
                 text = (resp.text or '').strip()
                 if text:
                     return text

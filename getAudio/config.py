@@ -199,6 +199,8 @@ def resolve_analysis(preset):
 # 2.5-flash-lite 对这个 key 已经下线（404「no longer available to new users」），3.5-flash-lite 跟 2.5-flash 同价不省钱。
 GEMINI_SUMMARY_MODEL = os.environ.get('GEMINI_SUMMARY_MODEL') or 'gemini-3.1-flash-lite'
 GEMINI_ENRICH_MODEL = os.environ.get('GEMINI_ENRICH_MODEL') or 'gemini-3.1-flash-lite'
+# 画面证据卡（frames.py）：挑关键帧、抄屏幕上的字，也是照着看的机械活，用最便宜的 flash-lite。
+GEMINI_VISUAL_MODEL = os.environ.get('GEMINI_VISUAL_MODEL') or 'gemini-3.1-flash-lite'
 # 回顾面板的叙事。原来走 OpenRouter 上的 Opus 4.6，一次刷新是 4 个时段 × 中英两份 = 8 个
 # 请求、一美元出头，占了整份账单的九成多，而且每次转写完都会重算。换成 flash-lite 后
 # 同一次刷新几分钱，速度从几十秒降到两三秒；文风由 prompt 管死，输出看不出差别。

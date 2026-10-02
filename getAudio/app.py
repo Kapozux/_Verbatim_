@@ -1192,7 +1192,7 @@ def _static_version():
     文件一变这串数字就变，浏览器才会当成新资源重新拉取。
     """
     try:
-        paths = [os.path.join(app.static_folder, name) for name in ('app.js', 'style.css', 'i18n.js', 'explore.js', 'tools.js', 'projects.js', 'study.js', 'voices.js', 'repos.js')]
+        paths = [os.path.join(app.static_folder, name) for name in ('app.js', 'style.css', 'i18n.js', 'explore.js', 'tools.js', 'projects.js', 'study.js', 'voices.js', 'visual.js', 'repos.js')]
         return str(int(max(os.path.getmtime(p) for p in paths if os.path.isfile(p))))
     except (ValueError, OSError):
         return '0'
@@ -4800,6 +4800,86 @@ def api_studio_compare(chain_id):
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     return jsonify({'ok': True, 'item': study._summary(o)})
+
+
+def _visual_rows(chain_id):
+    """项目里能做画面卡的期：自己的期、引用博主的期、加进来的录音。只有转写好的；没有原链接的标 has_video=False。"""
+    import frames
+    state = _read_chain(chain_id)
+    seen, rows = set(), []
+
+    def add(tid, title, who=''):
+        if not tid or tid in seen or not os.path.isfile(os.path.join(config.RESULTS_FOLDER, tid, 'transcript.json')):
+            return
+        seen.add(tid)
+        try:
+            with open(os.path.join(config.RESULTS_FOLDER, tid, 'meta.json'), encoding='utf-8') as f:
+                meta = json.load(f)
+        except (OSError, ValueError):
+            meta = {}
+        url = str(meta.get('source_url') or '')
+        d = frames.load(config.RESULTS_FOLDER, tid)
+        rows.append({'task_id': tid, 'title': title or meta.get('ai_title') or meta.get('filename') or tid,
+                     'who': who, 'duration': meta.get('duration_seconds') or 0,
+                     'url': url if re.match(r'https?://', url) else '',
+                     'done': bool(d), 'n': len(d['cards']) if d else 0})
+
+    for v in state.get('videos') or []:
+        if v.get('status') == 'done':
+            add(v.get('task_id'), v.get('title'), state.get('author') if state.get('url') else '')
+    for r in _ref_rows(chain_id):
+        for v in r['state'].get('videos') or []:
+            if v.get('status') == 'done':
+                add(v.get('task_id'), v.get('title'), r['state'].get('author') or '')
+    for r in _rec_rows(chain_id):
+        if r['status'] == 'done':
+            add(r['task_id'], r['title'])
+    return rows
+
+
+@app.route('/api/chain/<chain_id>/visual/episodes')
+def api_visual_episodes(chain_id):
+    """画面卡弹框里的清单：每期标题、时长、有没有视频链接、做过没有、估价。"""
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    import frames
+    rows = _visual_rows(chain_id)
+    for r in rows:
+        r['has_video'] = bool(r.pop('url'))
+        r['est_usd'] = 0 if r['done'] else frames.estimate_usd(r['duration'])
+    return Response(json.dumps({'episodes': rows}, ensure_ascii=False), mimetype='application/json')
+
+
+@app.route('/api/chain/<chain_id>/studio/visual', methods=['POST'])
+def api_studio_visual(chain_id):
+    """格子「画面证据卡」做一份：{task_ids: [...]}（项目里的期），后台重下画面、挑关键帧、读图。"""
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    if DEMO_MODE:
+        return jsonify({'error': 'Read-only demo'}), 403
+    import study
+    if not config.gemini_key():
+        return jsonify({'error': 'Add a Gemini API key in Settings first'}), 400
+    want = [t for t in dict.fromkeys((request.get_json(silent=True) or {}).get('task_ids') or []) if isinstance(t, str)]
+    by_id = {r['task_id']: r for r in _visual_rows(chain_id)}
+    rows = [by_id[t] for t in want if t in by_id and (by_id[t]['url'] or by_id[t]['done'])]
+    try:
+        o = study.start_visual(_chain_dir(chain_id), chain_id, config.RESULTS_FOLDER, rows)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    return jsonify({'ok': True, 'item': study._summary(o)})
+
+
+@app.route('/api/visual/<task_id>/<name>')
+def api_visual_image(task_id, name):
+    """画面卡的关键帧图。"""
+    import frames
+    if not re.fullmatch(r'[0-9a-f-]{8,64}', task_id or ''):
+        return jsonify({'error': 'Not found'}), 404
+    p = frames.image_path(config.RESULTS_FOLDER, task_id, name)
+    if not p:
+        return jsonify({'error': 'Not found'}), 404
+    return send_file(p, mimetype='image/jpeg', max_age=86400)
 
 
 @app.route('/api/chain/<chain_id>/studio', methods=['POST'])
