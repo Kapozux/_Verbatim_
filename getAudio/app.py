@@ -3547,12 +3547,23 @@ def _collection_video(task_id, i):
             'creator': meta.get('creator') or ''}
 
 
-def _build_collection(state):
+def _build_collection(state, rewrite_overview=True):
     with usage.scope(ref=state['id'], chain=state['id']):
-        return _build_collection_inner(state)
+        return _build_collection_inner(state, rewrite_overview)
 
 
-def _build_collection_inner(state):
+def _overview_written_this_month(cdir):
+    """项目综述（总分析.md）是这个月写的吗。综述是整个项目的大总结，一次约 $0.1：
+    2026-10-02 用户说「不要每次我传一个就更新，每个月更新一次」。所以加录音时，这个月写过就先不重写，
+    下个月再有新录音时一起并进去；用户自己点「生成证据卡 / 综述」照样马上重写。"""
+    try:
+        t = os.path.getmtime(os.path.join(cdir, '总分析.md'))
+    except OSError:
+        return False
+    return datetime.fromtimestamp(t).strftime('%Y-%m') == datetime.now().strftime('%Y-%m')
+
+
+def _build_collection_inner(state, rewrite_overview=True):
     import ask
     from analyze import analyze_episode, synthesize_collection
     cid = state['id']
@@ -3614,11 +3625,15 @@ def _build_collection_inner(state):
             state['stage'] = 'synthesizing'
             _save_chain(state)
             _annotate_speakers(cdir, episodes)
-            md = synthesize_collection(episodes, state['author'], kind=state.get('collection_kind', 'mixed'),
-                                       preset=state.get('analysis_preset'), lang=state.get('lang', 'auto'))
-            with open(os.path.join(cdir, '总分析.md'), 'w', encoding='utf-8') as f:
-                f.write(md)
-            state['final_doc'] = '总分析.md'
+            if rewrite_overview or not _overview_written_this_month(cdir):
+                md = synthesize_collection(episodes, state['author'], kind=state.get('collection_kind', 'mixed'),
+                                           preset=state.get('analysis_preset'), lang=state.get('lang', 'auto'))
+                with open(os.path.join(cdir, '总分析.md'), 'w', encoding='utf-8') as f:
+                    f.write(md)
+                state['final_doc'] = '总分析.md'
+                state.pop('overview_behind', None)
+            else:
+                state['overview_behind'] = True          # 综述还没并进这个月新加的录音（下个月自动补）
             _auto_tag(cdir)
         state['stage'] = 'done'
     except Exception as e:  # noqa: BLE001
@@ -4300,7 +4315,7 @@ def _project_refresh(cid, force_build=False):
                     have = _cards_file_index(_chain_dir(cid))
                     if build or any(v.get('task_id') and not (v['task_id'] in have and _card_file_done(have[v['task_id']]))
                                     for v in state.get('videos') or []):
-                        _build_collection(state)           # 已有的卡复用，只抽新的；顺带写综述、打话题
+                        _build_collection(state, rewrite_overview=build)   # 已有的卡复用，只抽新的；综述每月最多自动重写一次
                 with usage.scope(ref=f'index:{cid[:8]}', chain=cid):
                     ask.embed_chain(_chain_dir(cid))
                 with _project_jobs_lock:

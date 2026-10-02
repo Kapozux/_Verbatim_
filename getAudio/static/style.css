@@ -802,6 +802,7 @@ body.demo .btn-danger, body.demo #detail-summarize-btn { display: none !importan
   max-width: 860px; padding-bottom: 30px; border-bottom: 1px solid var(--line);
 }
 .reflect-narrative.draft { color: var(--muted); font-style: italic; }
+.reflect-asof { margin: -4px 0 18px; font-size: 13.5px; line-height: 1.5; color: var(--muted); }
 
 .reflect-kpis { display: flex; gap: 44px; padding: 30px 0 28px; flex-wrap: wrap; }
 .reflect-kpi b {
