@@ -76,7 +76,8 @@ function srcAllIds(d) {
     return [...(d.videos || []).filter(v => v.task_id && v.status === 'done').map(v => v.task_id),
             ...(d.channels || []).flatMap(ch => (ch.videos || []).filter(v => v.status === 'done').map(v => v.task_id)),
             ...(d.recordings || []).filter(r => r.status === 'done').map(r => r.task_id),
-            ...(d.docs || []).filter(x => x.status === 'ready').map(x => x.doc_id)];
+            ...(d.docs || []).filter(x => x.status === 'ready').map(x => x.doc_id),
+            ...(d.repos || []).filter(r => r.cards > 0).map(r => r.repo_id)];
 }
 function srcIsOn(sid) { return !srcState.sel || srcState.sel.has(sid); }
 
@@ -126,7 +127,7 @@ async function srcLoad() {
     const running = st => !['done', 'failed', 'cancelled'].includes(st);
     const busy = d.indexing || d.docs.some(x => x.status === 'converting')
         || d.recordings.some(r => r.status !== 'done') || (d.channel && running(d.channel.stage))
-        || (d.channels || []).some(ch => running(ch.stage));
+        || (d.channels || []).some(ch => running(ch.stage)) || (d.repos || []).some(r => r.status === 'reading');
     // 引用的博主跑完了 / 加了新博主：人名条、工作台列表、哪些格子能用都要跟着变
     const sig = (d.channels || []).map(ch => ch.chain_id + ch.stage).join();
     if (srcState.chSig !== undefined && srcState.chSig !== sig && typeof peopleLoad === 'function') peopleLoad();
@@ -228,6 +229,7 @@ function srcRender() {
                 + `<button type="button" data-act="remove">${T('src.remove')}</button>` }));
         if (x.status === 'failed' && x.error) rows.push(`<div class="sr-err">${escapeHtml(x.error.slice(0, 180))}</div>`);
     });
+    if (typeof repoSrcRows === 'function') rows.push(...repoSrcRows(d));          // 代码库（repos.js）
     document.getElementById('nb-src-top').classList.toggle('ro', ro);
     box.innerHTML = `
         ${d.indexing ? `<p class="src-note cx-thinking">${T('src.indexing')}</p>` : ''}
@@ -269,6 +271,7 @@ function srcRenderRail(d, ro) {
             : ['png', 'jpg', 'jpeg', 'webp', 'heic'].includes(x.ext) ? 'image' : x.ext === 'text' ? 'note' : 'doc';
         items.push(it('doc', x.doc_id, srcSvg(k), x.title, x.status === 'ready'));
     });
+    if (typeof repoRailItems === 'function') items.push(...repoRailItems(d, it));
     rail.innerHTML = (ro ? '' : `<button type="button" class="nb-rail-it nb-rail-add" title="${escapeHtml(T('nb.srcRailAdd'))}"
         aria-label="${escapeHtml(T('nb.srcRailAdd'))}"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"
         stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>`)
@@ -280,6 +283,7 @@ function srcRenderRail(d, ro) {
         const { kind, sid } = b.dataset;
         if (kind === 'channel') { srcState.open[sid] = true; srcRender(); return; }
         if (kind === 'doc') { if ((d.docs || []).some(x => x.doc_id === sid && x.status === 'ready')) openSourceReader(sid, null); return; }
+        if (kind === 'repo') { if ((d.repos || []).some(r => r.repo_id === sid && r.cards > 0)) openRepoReader(sid); return; }
         const v = [...(d.videos || []), ...(d.recordings || [])].find(x => x.task_id === sid);
         if (v && v.status === 'done') openTranscriptViewer(sid, null);
     }));
@@ -321,7 +325,8 @@ function srcWire(box) {
         }
         if (chk) chk.addEventListener('change', () => srcSetSel([sid], chk.checked));
         const t = row.querySelector('.sr-title');
-        if (t) t.addEventListener('click', () => (kind === 'doc' ? openSourceReader(sid, null) : openTranscriptViewer(sid, null)));
+        if (t) t.addEventListener('click', () => (kind === 'doc' ? openSourceReader(sid, null)
+            : kind === 'repo' ? openRepoReader(sid) : openTranscriptViewer(sid, null)));
         row.querySelectorAll('[data-act]').forEach(b => b.addEventListener('click', () => srcAction(kind, sid, b.dataset.act)));
     });
 }
@@ -340,7 +345,14 @@ async function srcAction(kind, sid, act) {
     const d = srcState.data || {};
     const title = ((d.docs || []).find(x => x.doc_id === sid) || (d.recordings || []).find(x => x.task_id === sid)
         || (d.videos || []).find(x => x.task_id === sid) || {}).title
-        || ((d.channels || []).find(ch => ch.chain_id === sid) || {}).name || '';
+        || ((d.channels || []).find(ch => ch.chain_id === sid) || {}).name
+        || ((d.repos || []).find(r => r.repo_id === sid) || {}).title || '';
+    if (act === 'read') {                    // 代码库：让 Daemon 读（repos.js 的弹框，估价写在按钮上）
+        const m = document.querySelector(`.sr-row[data-sid="${CSS.escape(sid)}"] .sr-menu`);
+        if (m) m.open = false;
+        repoReadPicker(sid);
+        return;
+    }
     if (act === 'retry') {
         if (await srcPost(`/api/chain/${id}/sources/docs/${sid}/retry`, { method: 'POST' })) srcLoad();
         return;
@@ -395,6 +407,8 @@ function openAddSources() {
     ov.querySelector('#as-link').value = '';
     ov.querySelector('#as-msg').textContent = '';
     ov.querySelector('#as-text').classList.add('hidden');
+    const repoForm = ov.querySelector('#as-repo');
+    if (repoForm) repoForm.classList.add('hidden');
     document.getElementById('nf-wrap').classList.add('hidden');
     ov.classList.remove('hidden');
 }

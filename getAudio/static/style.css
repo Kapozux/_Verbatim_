@@ -2710,3 +2710,36 @@ body.demo .creator-hide { display: none; }
   .vc-clips { grid-column: 2 / -1; grid-row: 2; }
   .vc-note, .vc-groups { margin-left: 0; }
 }
+
+/* ---- 来源：代码库（repos.js）：阅读器里的代码带行号，出处那几行高亮 ---- */
+.sr-svg[data-k="code"] { color: var(--ink-soft); }
+.repo-note { font-size: 13.5px; margin: 6px 0 0; }
+.repo-pick textarea { width: 100%; box-sizing: border-box; font: inherit; font-size: 15px; padding: 10px 12px;
+  border: 1px solid var(--line-2); border-radius: 12px; background: var(--card); color: var(--ink); resize: vertical; }
+#as-repo-path { font-family: var(--mono); font-size: 14px; }
+.repo-file { display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+  font-family: var(--mono); font-size: 14.5px; overflow-wrap: anywhere; }
+.repo-file .cx-link { font-family: inherit; font-size: 13px; flex-shrink: 0; }
+.repo-card { margin: 8px -10px 14px; padding: 8px 10px; border-radius: 12px; cursor: pointer; }
+.repo-card:hover, .repo-card:focus-visible { background: var(--code-bg); outline: none; }
+.repo-loc { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+.repo-layer { padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line-2); }
+.repo-layer[data-l="claim"] { color: var(--coral-deep); border-color: var(--coral-line); }
+.repo-layer[data-l="verified"] { color: var(--ok); }
+.repo-code { margin: 0; padding: 8px 0; background: var(--code-bg); border-radius: 10px; font-family: var(--mono);
+  font-size: 13px; line-height: 1.55; color: var(--ink); overflow-x: auto; white-space: pre; }
+.repo-ln { display: block; padding: 0 12px 0 0; }
+.repo-no { display: inline-block; min-width: 3.2em; padding: 0 10px 0 8px; margin-right: 6px; text-align: right;
+  color: var(--faint); border-right: 1px solid var(--line); user-select: none; font-variant-numeric: tabular-nums; }
+.repo-ln.hl { background: var(--coral-soft); box-shadow: inset 3px 0 0 var(--coral); }
+.repo-src { border-radius: 10px; }
+pre.cc-quote.repo-quote { font-family: var(--mono); font-size: 13px; line-height: 1.5; white-space: pre-wrap;
+  background: var(--code-bg); padding: 8px 10px; border-radius: 10px; display: block; overflow: hidden; }
+.repo-pick .cx-modal-title { display: flex; align-items: center; gap: 8px; }
+.repo-pick .vp-foot { gap: 12px; }
+.repo-pick .rd-pick-go { white-space: nowrap; flex-shrink: 0; }
+@media (max-width: 700px) { .repo-pick .vp-foot { flex-wrap: wrap; } .repo-pick .rd-pick-go { margin-left: auto; } }
+.repo-pick #repo-form { margin: 14px 0 0; padding: 0; background: none; border: 0; box-shadow: none; border-radius: 0; display: grid; gap: 14px; }
+.repo-f { display: grid; gap: 6px; }
+.repo-l { font-size: 13.5px; color: var(--muted); }
+.repo-pick textarea:focus { outline: none; border-color: var(--coral); }

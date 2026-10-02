@@ -290,7 +290,7 @@ function cxFillHead(chain) {
         cx.chain = chain;
         const person = !!chain.url;
         // 能检索的原文：文档、项目里额外加的录音，或者开了「转写全文入索引」的录音
-        const src = (chain.docs || []).length > 0 || (chain.recordings || []).length > 0
+        const src = (chain.docs || []).length > 0 || (chain.recordings || []).length > 0 || chain.n_repos > 0
             || (!!chain.index_transcripts && (chain.videos || []).some(v => v.status === 'done'));
         if (cx.avail.src !== src) cxSetAvail({ src });
         const rd = document.querySelector('#chain-explore .nb-tile[data-cx=read] .nb-tl');
@@ -619,6 +619,9 @@ async function readGenerate(lens, force) {
 function citeLabel(c) {
     const who = c.creator ? escapeHtml(String(c.creator).slice(0, 14)) + ' · ' : '';
     const lab = escapeHtml(c.label || 'EP' + c.ep_no);
+    if (c.kind === 'repo') {            // 代码库：文件名 + 行号（路径太长，只留文件名）
+        return `${escapeHtml(String(c.path || '').split('/').pop())}:${c.line}`;
+    }
     if (c.kind === 'doc') {             // 文档：短标题 + 第几页（DOC1 这种编号用户认不出是哪份）
         const t = String(c.episode || c.label || '');
         // 没页码的（粘贴的文字、Markdown、网页）带上小标题，不然同一份文档的几个出处长得一模一样；
@@ -665,6 +668,16 @@ function citedOrder(md, citations) {
 
 function sourceItemHtml(cid, c, n) {
     const num = n ? `<span class="cx-src-num">${n}</span>` : '';     // 跟正文里的数字圆点对得上
+    if (c.kind === 'repo') {            // 代码库卡：原样代码 + Daemon 的观察；按钮是「在代码里打开」
+        return `<div class="cx-src" data-cid="${escapeHtml(cid)}" data-st="none">${num}
+            <pre class="cc-quote repo-quote">${escapeHtml(c.quote)}</pre>
+            ${c.obs ? `<div class="cc-obs"><span class="cx-ai-tag">${T('cx.aiNote')}</span> ${escapeHtml(c.obs)}</div>` : ''}
+            <div class="cx-src-foot"><span>${escapeHtml(c.label || '')} · ${escapeHtml(c.episode || '')}</span>
+                <span>${escapeHtml(c.heading || '')}</span></div>
+            <div class="cx-src-actions"><button type="button" class="cx-link" data-repo="${escapeHtml(c.repo_id)}"
+                data-path="${escapeHtml(c.path)}" data-line="${c.line}" data-end="${typeof repoCiteEnd === 'function' ? repoCiteEnd(c) : c.line}">${T('repo.openCode')}</button></div>
+        </div>`;
+    }
     if (c.kind === 'doc') {             // 文档段落：没有「AI 转述」，原文就是全部；按钮是「在文档里打开」
         const where = [c.page ? T('reader.page', { n: c.page }) : '', c.heading || ''].filter(Boolean).join(' · ');
         return `<div class="cx-src" data-cid="${escapeHtml(cid)}" data-st="none">${num}
@@ -707,7 +720,9 @@ function wireCitations(root, citations) {
     root.querySelectorAll('.cx-cite').forEach(b => b.addEventListener('click', () => {
         const c = (citations && citations[b.dataset.cid]) || cxCiteCache[b.dataset.cid];
         // 出处点开在左栏看原文（跟 Gemini 一样）：文档跳到那一段，录音跳到那一秒
-        if (c && c.kind === 'doc' && typeof openSourceReader === 'function') {
+        if (c && c.kind === 'repo' && typeof openRepoFile === 'function') {
+            openRepoFile(c.repo_id, c.path, c.line, repoCiteEnd(c));
+        } else if (c && c.kind === 'doc' && typeof openSourceReader === 'function') {
             openSourceReader(c.doc_id, passageIndexOf(b.dataset.cid));
         } else if (c && c.task_id && typeof openTranscriptViewer === 'function') {
             openTranscriptViewer(c.task_id, c.sec);
@@ -726,6 +741,9 @@ function wireCitations(root, citations) {
     root.querySelectorAll('[data-go]').forEach(b => b.addEventListener('click', () => navigate(b.dataset.go)));
     root.querySelectorAll('[data-doc]').forEach(b => b.addEventListener('click', () => {
         if (typeof openSourceReader === 'function') openSourceReader(b.dataset.doc, b.dataset.pi === 'null' ? null : +b.dataset.pi);
+    }));
+    root.querySelectorAll('[data-repo]').forEach(b => b.addEventListener('click', () => {
+        if (typeof openRepoFile === 'function') openRepoFile(b.dataset.repo, b.dataset.path, +b.dataset.line, +b.dataset.end);
     }));
     root.querySelectorAll('[data-share]').forEach(b => b.addEventListener('click', () => {
         const c = (citations && citations[b.dataset.share]) || cxCiteCache[b.dataset.share];

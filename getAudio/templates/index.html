@@ -717,7 +717,14 @@
             <div class="as-more">
                 <button type="button" class="btn-secondary as-btn" id="as-text-btn" data-i18n="src.addText">Paste text</button>
                 <button type="button" class="btn-secondary as-btn" id="as-lib-btn" data-i18n="src.fromLib">From library</button>
+                <button type="button" class="btn-secondary as-btn" id="as-repo-btn" data-i18n="repo.addBtn">Code repository</button>
             </div>
+            <form id="as-repo" class="src-text hidden">
+                <input class="search-input" id="as-repo-path" maxlength="500" autocomplete="off" spellcheck="false"
+                    data-i18n-placeholder="repo.pathPh" placeholder="Folder of a git repository on this computer">
+                <p class="cx-muted repo-note" data-i18n="repo.pathHint">Only committed files are read.</p>
+                <div class="src-text-foot"><button type="submit" class="btn-primary cx-send" data-i18n="repo.add">Add</button></div>
+            </form>
             <form id="as-text" class="src-text hidden">
                 <input class="search-input" id="as-text-title" maxlength="120" data-i18n-placeholder="src.textTitlePh" placeholder="Title (optional)">
                 <textarea class="search-input" id="as-text-body" rows="7" data-i18n-placeholder="src.textPh" placeholder="Paste notes, an outline, an article…"></textarea>
@@ -1084,5 +1091,6 @@
     <script src="/static/projects.js?v={{ static_version }}"></script>
     <script src="/static/voices.js?v={{ static_version }}"></script>
     <script src="/static/study.js?v={{ static_version }}"></script>
+    <script src="/static/repos.js?v={{ static_version }}"></script>
 </body>
 </html>
