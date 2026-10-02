@@ -172,3 +172,6 @@ function repoCiteEnd(c) {
     const m = String(c.heading || '').match(/:(\d+)-(\d+)$/);
     return m ? +m[2] : c.line;
 }
+
+// 直接打开项目页时，左栏可能在本文件加载之前就画过了（那时还没有 repoSrcRows）：数据已经到了就补画一次
+if (typeof srcState !== 'undefined' && srcState.data) srcRender();

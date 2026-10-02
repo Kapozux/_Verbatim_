@@ -376,3 +376,11 @@ def list_repos(ids):
 def reading(repo_id):
     with _lock:
         return repo_id in _running
+
+
+def current(meta):
+    """给界面看的状态。meta 写着 reading、这个进程里却没在读 = 读到一半服务重启了（开发时改代码会自动重载）：
+    算失败，让人再读一次，不然左栏一直转圈。"""
+    if meta and meta.get('status') == 'reading' and not reading(meta.get('id')):
+        return dict(meta, status='failed', error=meta.get('error') or 'Interrupted: Verbatim restarted while reading. Read again.')
+    return meta

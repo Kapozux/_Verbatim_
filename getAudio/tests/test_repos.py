@@ -201,6 +201,15 @@ rec_ep = next((e for e in corpus2['episodes'] if e.get('task_id') == tid), None)
 t.check('代码库不占 EP 编号', rec_ep and rec_ep['label'] == 'EP1', [e['label'] for e in corpus2['episodes']])
 t.check('提示词的期列表标出代码库', '(code repository)' in ask._episode_lines(corpus2))
 
+# 读到一半服务重启：meta 停在 reading，这个进程里没在读 → 界面上算失败、能再读
+stuck = R.repo_meta(rid)
+stuck['status'] = 'reading'
+R._save_meta(stuck)
+row2 = c.get(f'/api/chain/{P}/sources').get_json()['repos'][0]
+t.check('读到一半服务重启：显示为中断、不一直转圈', row2['status'] == 'failed' and 'Interrupted' in row2['error'], row2)
+stuck['status'] = 'ready'
+R._save_meta(stuck)
+
 # 5 看文件：只读快照，出不去
 ok_file = c.get(f'/api/repos/{rid}/file?path=pkg/cache.py').get_json()
 t.check('出处点开能看快照里的文件', ok_file.get('text', '').startswith('import time'))

@@ -4400,7 +4400,7 @@ def _repo_rows(cid):
     import repos
     out = []
     for ref in _reg(cid)['repos']:
-        m = repos.repo_meta(ref.get('repo_id')) or {}
+        m = repos.current(repos.repo_meta(ref.get('repo_id'))) or {}
         last = (m.get('runs') or [{}])[-1]
         out.append({'repo_id': ref.get('repo_id'), 'added_at': ref.get('added_at'),
                     'title': m.get('title') or '(missing)', 'path': m.get('path') or '',
@@ -4455,7 +4455,7 @@ def api_project_read_repo(chain_id, repo_id):
 def api_repo_get(repo_id):
     """一个代码库来源：meta、每次读的记录、全部卡片（阅读器 / 出处跳转用）。"""
     import repos
-    meta = repos.repo_meta(repo_id)
+    meta = repos.current(repos.repo_meta(repo_id))
     if not meta:
         return jsonify({'error': 'Not found'}), 404
     return jsonify(dict(meta, reading=repos.reading(repo_id), cards=repos.repo_cards(repo_id),
