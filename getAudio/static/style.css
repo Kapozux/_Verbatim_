@@ -2632,3 +2632,17 @@ body.demo .creator-hide { display: none; }
   .cx-chat-h .cx-hd-pop { left: 0; right: 0; width: auto; }
   .cx-chat-h #cx-more .cx-hd-pop { left: auto; }
 }
+
+/* ===== 项目页顶栏的状态药丸（2026-10-02）：原来是一整条进度条 + 三段橙色数字，太占地方也太吵 =====
+   跑着：小转圈 + 「分析中 6/11」，点开 ⋯ 看完整进度；没跑完：琥珀色「没跑完 · 继续」，报错全文在 ⋯ 里 */
+.cp-status { display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 12px; font: inherit; font-size: 14px;
+  color: var(--ink-soft); background: var(--code-bg); border: none; border-radius: 999px; white-space: nowrap; cursor: pointer; }
+.cp-status:hover { color: var(--ink); }
+.cp-spin { width: 12px; height: 12px; border-radius: 50%; border: 2px solid color-mix(in srgb, var(--coral) 30%, transparent);
+  border-top-color: var(--coral); animation: cp-spin .9s linear infinite; flex: none; }
+@keyframes cp-spin { to { transform: rotate(360deg); } }
+.cp-status.warn { color: var(--run); background: var(--run-bg); cursor: default; }
+.cp-status.warn button { font: inherit; font-weight: 600; color: var(--coral-deep); background: none; border: none; padding: 0 0 0 4px;
+  cursor: pointer; }
+.cp-status.warn button::before { content: '· '; color: var(--run); font-weight: 400; }
+@media (max-width: 700px) { .cp-status { height: 28px; padding: 0 10px; font-size: 13px; } }

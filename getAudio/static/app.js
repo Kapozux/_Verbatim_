@@ -1763,6 +1763,18 @@ function normalizeChainUrl(raw) {
 }
 
 // 进行中卡片的细进度条：按 下载/转写/分析 三步的完成数粗估百分比（纯展示）
+// 顶栏小药丸上的一句：只说现在在哪一步、这一步到哪了（「分析中 6/11」）
+function chainStepText(c) {
+    const vids = c.videos || [];
+    const submitted = vids.filter(v => v.status !== 'download_failed').length;
+    const counts = {
+        downloading: c.download_total ? `${c.download_done || 0}/${c.download_total}` : '',
+        transcribing: submitted ? `${vids.filter(v => v.status === 'done').length}/${submitted}` : '',
+        analyzing: submitted && c.analyzed_done != null ? `${c.analyzed_done}/${submitted}` : '',
+    };
+    return [stageLabel(c.stage), counts[c.stage] || ''].filter(Boolean).join(' ');
+}
+
 function chainPercent(c) {
     const vids = c.videos || [];
     const total = c.download_total || vids.length;
@@ -2244,15 +2256,14 @@ async function refreshChainDetail() {
     const tail = [];
     if (c.analyze !== false) tail.push(stat(escapeHtml(brainLabel(c.analysis_preset)), T('chainDetail.analysisModel')));
     if (c.cost && c.cost.cost_usd > 0) tail.push(stat(fmtUsd(c.cost.cost_usd), T('chainDetail.cost')));
+    // 状态只占名字旁边一颗小药丸（默认状态不占地方，见 docs/UI_DESIGN.md）：跑着时只说当前这一步，
+    // 三个阶段的完整进度放悬停提示和 ⋯ 里；没跑完给一个「继续」，报错全文在 ⋯ 里
     const running = !chainTerminal
-        ? `<div class="cp-run"><div class="creator-progressbar"><i style="width:${chainPercent(c)}%"></i></div>
-             <span>${escapeHtml(chainProgressText(c) || stageLabel(c.stage))}</span></div>` : '';
-    // 失败了但手里有内容（卡片 / 画像）：一行提示就够，别把整个档案头染红；什么都没有才用大红框
-    const hasContent = !!(c.final_doc || c.analyzed_ok);
+        ? `<button type="button" class="cp-status" title="${escapeHtml(chainProgressText(c) || stageLabel(c.stage))}"
+             onclick="document.querySelector('#chain-detail-info .cp-ops').open = true"><i class="cp-spin" aria-hidden="true"></i>${escapeHtml(chainStepText(c))}</button>` : '';
     const failed = !(failedNow && c.error) ? ''
-        : hasContent ? `<div class="cp-fail cp-fail-soft">⚠ ${T('creators.lastRunFailed')}：${escapeHtml(shortChainError(c.error))} ·
-              <a href="#" onclick="continueChain('${c.id}');return false;">${T('creators.continue')}</a></div>`
-        : `<div class="cp-fail">${err}</div>`;
+        : `<span class="cp-status warn" title="${escapeHtml(shortChainError(c.error))}">${T('cp.stalled')}
+             <button type="button" onclick="continueChain('${c.id}')">${T('creators.continue')}</button></span>`;
     const host = (() => { try { return new URL(c.url).hostname.replace(/^www\./, ''); } catch { return ''; } })();
     const about = `<div class="cp-about">
                 <div class="cd-eyebrow">${c.kind === 'project'
@@ -2271,11 +2282,10 @@ async function refreshChainDetail() {
             ${avatarHtml}
             <div class="cp-id">
                 <h1 class="cp-name">${escapeHtml(String(author).slice(0, 60))}</h1>
-                ${running}
+                ${running}${failed}
             </div>
             <div class="cp-actions"><div id="cp-sub"></div>${opsFor(about)}</div>
-        </div>
-        ${failed}`;
+        </div>`;
     lastChainDetail = c;
     if (typeof cxFillHead === 'function') cxFillHead(c);   // 修辞指标 + 订阅按钮（explore.js 缓存着，轮询重绘后补回去）
 

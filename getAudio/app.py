@@ -3571,7 +3571,7 @@ def _build_collection_inner(state):
         def one(v):
             try:
                 tid = v['task_id']
-                if tid in have:
+                if tid in have and _card_file_done(have[tid]):
                     with open(have[tid], 'r', encoding='utf-8') as f:
                         return json.load(f)
                 src = elsewhere.get(tid)
@@ -3962,7 +3962,8 @@ def api_project_sources(chain_id):
     if state.get('url'):
         channel = {'url': state['url'], 'name': state.get('author') or '', 'avatar': state.get('avatar') or '',
                    'followers': state.get('followers') or 0, 'stage': state.get('stage')}
-    missing = [v for v in vids if v.get('task_id') and v.get('status') == 'done' and v['task_id'] not in have_cards]
+    missing = [v for v in vids if v.get('task_id') and v.get('status') == 'done'
+               and not (v['task_id'] in have_cards and _card_file_done(have_cards[v['task_id']]))]
     # 引用的博主：每个一组，期列在下面（勾选 = 提问范围，跟自己的期一样）
     channels = []
     for r in _ref_rows(chain_id):
@@ -4297,8 +4298,8 @@ def _project_refresh(cid, force_build=False):
                 state = _read_chain(cid)
                 if state.get('analyze') and not state.get('url'):
                     have = _cards_file_index(_chain_dir(cid))
-                    if build or any(v.get('task_id') and v['task_id'] not in have
-                                          for v in state.get('videos') or []):
+                    if build or any(v.get('task_id') and not (v['task_id'] in have and _card_file_done(have[v['task_id']]))
+                                    for v in state.get('videos') or []):
                         _build_collection(state)           # 已有的卡复用，只抽新的；顺带写综述、打话题
                 with usage.scope(ref=f'index:{cid[:8]}', chain=cid):
                     ask.embed_chain(_chain_dir(cid))
@@ -4996,6 +4997,18 @@ def _annotate_speakers(chain_dir, episodes):
                     c['speaker'] = sp
     except Exception as e:  # noqa: BLE001  认不出来就按没有说话人处理
         print(f'[speakers] {chain_dir}: {e}')
+
+
+def _card_file_done(path):
+    """这期的卡算不算抽完了：有卡，或者转写被判「不可用」（重抽也没用、白花钱）。
+    抽卡时网络断了 / 模型报错留下的空文件（extract_failed、没有 unusable）不算——下次「继续」要重抽。
+    博主那条路径一直是这么认的（只缓存有卡的）；合集 / 项目这条以前把空文件也当抽完了，断一次网就永远补不上。"""
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            d = json.load(f) or {}
+    except Exception:  # noqa: BLE001  坏文件当没抽
+        return False
+    return bool(d.get('cards')) or bool(d.get('unusable'))
 
 
 def _cards_file_index(chain_dir):
