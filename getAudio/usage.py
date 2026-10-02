@@ -48,6 +48,10 @@ PRICES = {
     # 阿里云百炼 DeepSeek V4 Flash：上线时公布输入 1 元、输出 2 元 / 百万 token（按 7.1 折美元）。
     # 百炼控制台的实价变了就在 prices.json 里覆盖。
     'deepseek-v4-flash':     {'input': 0.14, 'audio_in': 0.14, 'output': 0.28, 'cached': 0.03},
+    # 阿里云百炼 DeepSeek V4 Pro（读码 agent daemon/ 用）：免费额度后输入 12 元、输出 24 元 / 百万 token
+    # （阿里云开发者社区 2026-07-30 的文章，官方模型页没列价；DeepSeek 官网另有分时价：高峰 9 / 27 元，空闲减半）。
+    # 缓存命中价没查到，按原价算——agent 每轮重发整段对话，实际可能更便宜。控制台实价不同就在 prices.json 里覆盖。
+    'deepseek-v4-pro':       {'input': 1.69, 'output': 3.38},
     # 按音频时长计价的 ASR：美元 / 小时。默认不填（阿里云按 CNY 计、Gemini 3.5 Transcribe 预览期价格未定），
     # 需要时在 prices.json 里加 {"qwen-audio-3.0-asr-flash-filetrans": {"per_audio_hour": 0.xx}}。
 }

@@ -583,6 +583,7 @@ const STRINGS = {
         'costs.purpose.xhs': 'Xiaohongshu',
         'costs.purpose.reflect': 'Reflect',
         'costs.purpose.analysis': 'Analysis',
+        'costs.purpose.repo_read': 'Code reading (Daemon)',
         'detail.costTitle': 'Model cost for this transcript ({n} calls)',
         'chainDetail.cost': 'model cost',
         'settings.geminiDesc': 'Powers cloud transcription, summaries, and the pipeline analysis. '
@@ -1927,6 +1928,7 @@ const STRINGS = {
         'costs.purpose.xhs': '小红书',
         'costs.purpose.reflect': '回顾面板',
         'costs.purpose.analysis': '分析',
+        'costs.purpose.repo_read': '读代码（Daemon）',
         'detail.costTitle': '这条转写的模型费用（{n} 次调用）',
         'chainDetail.cost': '模型费用',
         'settings.geminiDesc': '驱动云端转写、摘要和链条分析。除了调用 Google 的这部分，其余全部留在这台机器上。',
