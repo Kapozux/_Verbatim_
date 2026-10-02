@@ -3713,6 +3713,38 @@ def api_collection_create():
         return jsonify({'error': 'Pick at least one transcript'}), 400
     if len(tids) > _MAX_COLLECTION_ITEMS:
         return jsonify({'error': f'At most {_MAX_COLLECTION_ITEMS} items per collection'}), 400
+    # 重发安全：十分钟内同名、同一批转写的再来一次，当成同一个请求，交回原来那个合集。
+    # 服务卡住时请求超时、客户端（MCP / 脚本）重发，以前会建出两个一样的合集、各抽一遍卡（2026-10-02 外联会话）。
+    # 查和建在一把锁里：两个请求同时到，也只有一个真的建
+    with _collection_create_lock:
+        same = _recent_same_collection(name, tids)
+        if same:
+            return jsonify({'ok': True, 'id': same['id'], 'items': len(same.get('videos') or []), 'existing': True})
+        return _create_collection(name, kind, tids, body)
+
+
+_collection_create_lock = threading.Lock()
+_COLLECTION_DEDUPE_S = 600
+
+
+def _recent_same_collection(name, tids):
+    """十分钟内建的、同名、成员一模一样（不看顺序）的旧式合集项目；没有返回 None。"""
+    want = set(tids)
+    now = datetime.now()
+    for d in os.listdir(CHAINS_DIR):
+        st = _read_json_safe(os.path.join(CHAINS_DIR, d, 'chain.json')) if _CHAIN_ID_RE.match(d) else None
+        if not st or st.get('kind') != 'collection' or st.get('author') != name:
+            continue
+        try:
+            age = (now - datetime.strptime(st.get('created_at') or '', '%Y-%m-%d %H:%M:%S')).total_seconds()
+        except ValueError:
+            continue
+        if 0 <= age <= _COLLECTION_DEDUPE_S and {v.get('task_id') for v in st.get('videos') or []} == want:
+            return st
+    return None
+
+
+def _create_collection(name, kind, tids, body):
     cid = uuid.uuid4().hex
     os.makedirs(_chain_dir(cid), exist_ok=True)
     state = {'id': cid, 'kind': 'collection', 'collection_kind': kind, 'url': '', 'author': name,
