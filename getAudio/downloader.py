@@ -826,7 +826,10 @@ def fetch_subtitle(target, dest_dir, lang='auto'):
         return None, None, None
 
     meta = {'title': info.get('title'), 'video_id': info.get('id') or target.get('video_id', ''),
-            'duration': info.get('duration')}       # 秒；给字幕覆盖率门槛用
+            'duration': info.get('duration'),       # 秒；给字幕覆盖率门槛用
+            # 上架日期、频道名也在这一次元数据里：直接贴链接转写时没有别的地方能拿到（建合集、预测按说话那天核对要用）
+            'upload_date': str(info.get('upload_date') or ''),
+            'uploader': info.get('uploader') or info.get('channel') or ''}
     manual = info.get('subtitles') or {}
     autos = info.get('automatic_captions') or {}
 

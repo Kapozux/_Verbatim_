@@ -1503,7 +1503,9 @@ def _download_then_transcribe(task_id, url, engine, q, section=None, offset_sec=
                     sub_segs = None
             if sub_segs:
                 target = {'video_url': url, 'title': (sub_meta or {}).get('title') or url,
-                         'video_id': (sub_meta or {}).get('video_id', '')}
+                         'video_id': (sub_meta or {}).get('video_id', ''),
+                         'upload_date': (sub_meta or {}).get('upload_date', ''),
+                         'uploader': (sub_meta or {}).get('uploader', '')}
                 sub_lang = (sub_meta or {}).get('sub_lang')
                 q.put(json.dumps({'type': 'progress', 'percent': 90,
                                   'message': f'Found existing {sub_kind} subtitles ({sub_lang}) — skipping download & transcription'}))
@@ -1555,6 +1557,7 @@ def _download_then_transcribe(task_id, url, engine, q, section=None, offset_sec=
                           extra_meta={'source_url': url,
                                       'video_id': item.get('video_id') or _video_id_from_url(url),
                                       'creator': item.get('uploader'),
+                                      'upload_date': item.get('upload_date') or '',   # 建合集、预测核对按它定年份
                                       **({'project_id': project_id} if project_id else {})},
                           timing=timing)
     except Exception as e:  # noqa: BLE001
@@ -2497,6 +2500,10 @@ def _save_subtitle_task_inner(task_id, target, segments, source, lang, timing, s
         meta['source_url'] = target['video_url']
     if target.get('video_id'):
         meta['video_id'] = target['video_id']
+    if target.get('upload_date'):
+        meta['upload_date'] = target['upload_date']
+    if target.get('uploader') and not meta.get('creator'):
+        meta['creator'] = target['uploader']
     with open(os.path.join(task_dir, 'meta.json'), 'w', encoding='utf-8') as f:
         json.dump(meta, f, ensure_ascii=False, indent=2)
     with open(os.path.join(task_dir, 'transcript.json'), 'w', encoding='utf-8') as f:
@@ -3567,6 +3574,30 @@ def _overview_written_this_month(cdir):
     return datetime.fromtimestamp(t).strftime('%Y-%m') == datetime.now().strftime('%Y-%m')
 
 
+def _fill_missing_dates(state, limit=30):
+    """合集 / 项目里缺上架日期、但有视频链接的录音：抽卡之前问一次 yt-dlp（不下载）补上，同时写回那条转写的 meta。
+    预测按说话那天核对，没日期就按错的年份判（2026-10-02 All-In 对账：单个链接转写再建合集，日期是空的）。
+    问不到的（私密 / 删了）记 date_checked，不再问——项目每次刷新都重问会把建卡卡住（yt-dlp 一次最多一分钟）。
+    一次最多问 30 条，每条之间停 1.5 秒，跟 _backfill_dates 一个节奏。"""
+    from downloader import fetch_upload_date
+    todo = [v for v in state.get('videos') or []
+            if v.get('task_id') and v.get('video_url') and not v.get('upload_date') and not v.get('date_checked')][:limit]
+    for i, v in enumerate(todo):
+        if i:
+            time.sleep(1.5)
+        try:
+            d = fetch_upload_date(v['video_url'])
+        except Exception:  # noqa: BLE001  补日期是顺手的，失败不挡抽卡
+            d = ''
+        if not d:
+            v['date_checked'] = True
+            continue
+        v['upload_date'] = d
+        mp = os.path.join(config.RESULTS_FOLDER, v['task_id'], 'meta.json')
+        if os.path.isfile(mp):
+            _update_meta(mp, {'upload_date': d})
+
+
 def _build_collection_inner(state, rewrite_overview=True):
     import ask
     from analyze import analyze_episode, synthesize_collection
@@ -3574,6 +3605,7 @@ def _build_collection_inner(state, rewrite_overview=True):
     cdir = _chain_dir(cid)
     lock = threading.Lock()
     try:
+        _fill_missing_dates(state)
         state['stage'] = 'analyzing'
         state['analyzed_done'] = 0
         state.pop('error', None)
