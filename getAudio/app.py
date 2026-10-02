@@ -200,6 +200,13 @@ def submit_transcription(engine, fn, *args, **kwargs):
     return pool.submit(fn, *args, **kwargs)
 
 
+# 贴链接时先查有没有现成字幕的快速通道。原来整条「查字幕 → 下载 → 转写」都占着引擎池的线程，
+# 2026-10-02 批量贴了 20 期节目：大半有 YouTube 字幕、几秒就能完成，却排在要下载+转写的
+# 视频后面等了半小时（Whisper 池只有 4 个线程）。现在查字幕在这里做，命中就地落盘；
+# 没字幕才把「下载 + 转写」交给该引擎自己的池子（见 _download_then_transcribe 的 stage）。
+_subtitle_probe_executor = ThreadPoolExecutor(max_workers=6, thread_name_prefix='tx-subprobe')
+
+
 # 信号量保留：跨池的路径仍要它兜底（如云引擎失败后落 Whisper，
 # 那条任务占着云引擎的线程，却要排 Whisper 的额度）。
 _engine_semaphores = {
@@ -1458,8 +1465,11 @@ def _clean_sub_mode(raw):
 
 
 def _download_then_transcribe(task_id, url, engine, q, section=None, offset_sec=0,
-                              sub_mode='auto', project_id=None):
+                              sub_mode='auto', project_id=None, stage='all', timing=None):
     """单个视频链接：先下音频，再走正常转写任务（进 Library，和上传的稿一样）。
+
+    stage：'probe' = 只在快速通道里查字幕，命中就落盘，没有就交给引擎池跑 'download'；
+    'download' = 跳过查字幕、直接下载 + 转写；'all' = 一口气全做（服务重启恢复任务时走这个）。
 
     section/offset_sec：只转某时间段（如 10:00–25:00）时，section 传给 yt-dlp
     只切那一段，offset_sec 把字幕时间戳还原成原视频真实位置。
@@ -1471,11 +1481,12 @@ def _download_then_transcribe(task_id, url, engine, q, section=None, offset_sec=
     """
     from downloader import download_one, fetch_subtitle, parse_srt
     dl_dir = os.path.join(config.UPLOAD_FOLDER, f'url_{task_id}')
-    timing = {}                       # 下载/字幕探测阶段的耗时，交给 run_transcription 一起落 meta
+    timing = dict(timing or {})       # 下载/字幕探测阶段的耗时，交给 run_transcription 一起落 meta
+    handed_off = False                # 查完没字幕、已交给引擎池：dl_dir 和任务表都归那边管
     try:
         # sub_mode：'auto' = 只用视频原语言的字幕；'off' = 从不用字幕、一律转写；
         # 'zh'/'en'/… = 只用这种语言的字幕。找不到想要的语言就转写，绝不换一种语言凑合。
-        if not section and (sub_mode or 'auto') != 'off':
+        if stage != 'download' and not section and (sub_mode or 'auto') != 'off':
             q.put(json.dumps({'type': 'progress', 'percent': 1, 'message': 'Checking for existing subtitles…'}))
             t0 = time.monotonic()
             sub_path, sub_kind, sub_meta = fetch_subtitle({'video_url': url, 'video_id': ''}, dl_dir,
@@ -1510,6 +1521,15 @@ def _download_then_transcribe(task_id, url, engine, q, section=None, offset_sec=
                     q.put(json.dumps({'type': 'progress', 'percent': 1,
                                       'message': f'Could not save subtitles ({str(e)[:60]}) — transcribing the audio instead'}))
 
+        if stage == 'probe':
+            # 快速通道到此为止：没有能用的字幕，「下载 + 转写」去该引擎自己的池子排队
+            q.put(json.dumps({'type': 'queued', 'message': 'No usable subtitles — queued for transcription'}))
+            submit_transcription(engine, _download_then_transcribe, task_id, url, engine, q,
+                                 section, offset_sec, sub_mode, project_id,
+                                 stage='download', timing=timing)
+            handed_off = True
+            return
+
         msg = 'Downloading clip…' if section else 'Downloading audio…'
         q.put(json.dumps({'type': 'progress', 'percent': 1, 'message': msg}))
         t0 = time.monotonic()
@@ -1541,6 +1561,8 @@ def _download_then_transcribe(task_id, url, engine, q, section=None, offset_sec=
         taskdb.set_status(task_id, 'failed', error=str(e)[:300])
         q.put(json.dumps({'type': 'error', 'message': str(e)[:200]}))
     finally:
+        if handed_off:
+            return       # 引擎池里的那一段会接着用 dl_dir、q，收尾也由它做
         shutil.rmtree(dl_dir, ignore_errors=True)
         status = (taskdb.get(task_id) or {}).get('status')
         if status in ('pending', 'running'):
@@ -1641,8 +1663,13 @@ def api_transcribe_urls():
         taskdb.create(task_id, title or url, engine, None, '')
         q = queue.Queue()
         tasks[task_id] = q
-        submit_transcription(engine, _download_then_transcribe, task_id, url, engine, q,
-                        section, offset_sec, sub_mode, project_id)
+        if not section and sub_mode != 'off':
+            # 先进快速通道查字幕：有字幕的几秒就完，不用排在引擎池（尤其本地 Whisper）后面
+            _subtitle_probe_executor.submit(_download_then_transcribe, task_id, url, engine, q,
+                                            section, offset_sec, sub_mode, project_id, stage='probe')
+        else:
+            submit_transcription(engine, _download_then_transcribe, task_id, url, engine, q,
+                                 section, offset_sec, sub_mode, project_id, stage='download')
         out.append({'url': url, 'title': title, 'task_id': task_id})
     return jsonify({'tasks': out, 'errors': errors})
 
