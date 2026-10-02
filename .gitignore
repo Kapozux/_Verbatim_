@@ -1,4 +1,6 @@
 .env
+getAudio/.env.bak*
+getAudio/.lo_profile/
 venv/
 uploads/
 results/
