@@ -478,15 +478,26 @@ async function readOpen(name) {
         const lensName = /^镜头_/.test(name);
         nbvKind(T(lensName ? 'st.kindLens' : readIsCol() ? 'st.kindReadCol' : 'st.kindRead'));
         nbvTitle(readLabel(name));
+        // 项目综述每月最多自动重写一次（app.py _overview_written_this_month）：这个月新加的录音还没并进去时说一声，能手动更新
+        const behind = !lensName && id === cx.id && !!(cx.chain || {}).overview_behind && !window.VERBATIM_DEMO;
         const desc = document.getElementById('nbv-desc');
-        if (desc) desc.textContent = readMeta(name);
+        if (desc) desc.textContent = [readMeta(name), behind ? T('rd.behind') : ''].filter(Boolean).join(' · ');
         const acts = document.getElementById('nbv-acts');
         if (acts) {
             const lens = (name.match(/^镜头_(\w+)\.md$/) || [])[1];
             acts.innerHTML = `${lens && !window.VERBATIM_DEMO ? `<button type="button" class="nbv-act" id="rd-regen">${T('rd.regen')}</button>` : ''}
+                ${behind ? `<button type="button" class="nbv-act" id="rd-catchup">${T('rd.catchUp')}</button>` : ''}
                 <button type="button" class="nbv-act" id="rd-full">${T('rd.openFull')}</button>`;
             const regen = acts.querySelector('#rd-regen');
             if (regen) regen.onclick = () => { if (confirm(T('rd.regenConfirm', { name: readLabel(name) }))) readGenerate(lens, true); };
+            const catchUp = acts.querySelector('#rd-catchup');
+            if (catchUp) catchUp.onclick = async () => {
+                catchUp.disabled = true;
+                try {
+                    const r = await (await fetch(`/api/chain/${id}/cards/build`, { method: 'POST' })).json();
+                    showToast(r.error || T('rd.catchUpStarted'));
+                } catch (e) { showToast(String(e)); }
+            };
             acts.querySelector('#rd-full').onclick = () => navigate(`chain/${id}/doc/${encodeURIComponent(name)}`);
         }
     }

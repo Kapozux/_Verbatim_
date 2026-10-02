@@ -447,16 +447,27 @@ def is_regenerating(range_key):
         return range_key in _INFLIGHT
 
 
+def _this_month(at):
+    """缓存的叙事是不是这个月写的。
+
+    2026-10-02 用户：「月度、总数这种大的，不要每次我传一个就更新，每个月更新一次」。四个时段的叙事都是
+    「这段时间在听什么」的大总结，多一两条转写改不了结论，却每次要重写 4 个时段 × 中英 2 份。
+    所以叙事每月自动更新一次（上面的数字、图表照样实时算）；想现在就更新，面板上点「重新生成叙事」。"""
+    return bool(at) and str(at)[:7] == datetime.now().strftime('%Y-%m')
+
+
 def refresh_stale(results_dir):
-    """四个时段里缓存过期（条目变了）或缺失的，排进后台重算。"""
+    """四个时段里缺失、或者是上个月以前写的并且条目变了的，排进后台重算。这个月写过的不动。"""
     cache = _read_cache(results_dir)
     for rk in RANGES:
         data = compute(results_dir, rk)
         if not data['_items']:
             continue
+        hits = [cache.get('%s:%s' % (rk, l)) or {} for l in ('zh', 'en')]
+        if all(_this_month(h.get('at')) for h in hits):
+            continue
         fp = _fingerprint(data['_items'])
-        fresh = all((cache.get('%s:%s' % (rk, l)) or {}).get('fp') == fp for l in ('zh', 'en'))
-        if not fresh:
+        if not all(h.get('fp') == fp for h in hits):
             schedule_regenerate(results_dir, rk)
 
 
@@ -509,7 +520,8 @@ def build(results_dir, range_key='1m', lang='zh', refresh=False, generate=True):
     key = '%s:%s' % (range_key, lang)
 
     hit = _read_cache(results_dir).get(key)
-    fresh = bool(hit) and hit.get('fp') == fp
+    same = bool(hit) and hit.get('fp') == fp
+    fresh = same or (bool(hit) and _this_month(hit.get('at')))     # 这个月写过就先用着，见 _this_month
     stale = False
     if refresh:
         results = regenerate(results_dir, range_key, data)
@@ -536,6 +548,8 @@ def build(results_dir, range_key='1m', lang='zh', refresh=False, generate=True):
     data['narrative'] = text['narrative']
     data['generated'] = bool(text.get('generated'))
     data['stale'] = stale
+    # 叙事比数字旧（这个月写过、之后又有新转写）：告诉前端写于哪天
+    data['as_of'] = str(hit.get('at') or '')[:10] if fresh and not same and not refresh else ''
     data['regenerating'] = is_regenerating(range_key)
     data['lang'] = lang
     del data['_items']

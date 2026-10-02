@@ -194,8 +194,11 @@ def resolve_analysis(preset):
                 os.environ.get('GEMINI_EXTRACT_MODEL') or p[1],
                 os.environ.get('GEMINI_ANALYSIS_MODEL') or p[2])
     return p
-# 卡片元数据（标题/标签）生成用 Flash：快、便宜，质量足够
-GEMINI_ENRICH_MODEL = 'gemini-2.5-flash'
+# 每条转写的摘要、卡片元数据（标题/标签）：照着原文归纳的机械活，用最便宜的 flash-lite。
+# 2026-10-02 从 2.5-flash 换成 3.1-flash-lite（$0.25/$1.50 vs $0.30/$2.50 每百万 token，实测摘要便宜四成、质量相当）；
+# 2.5-flash-lite 对这个 key 已经下线（404「no longer available to new users」），3.5-flash-lite 跟 2.5-flash 同价不省钱。
+GEMINI_SUMMARY_MODEL = os.environ.get('GEMINI_SUMMARY_MODEL') or 'gemini-3.1-flash-lite'
+GEMINI_ENRICH_MODEL = os.environ.get('GEMINI_ENRICH_MODEL') or 'gemini-3.1-flash-lite'
 # 回顾面板的叙事。原来走 OpenRouter 上的 Opus 4.6，一次刷新是 4 个时段 × 中英两份 = 8 个
 # 请求、一美元出头，占了整份账单的九成多，而且每次转写完都会重算。换成 flash-lite 后
 # 同一次刷新几分钱，速度从几十秒降到两三秒；文风由 prompt 管死，输出看不出差别。

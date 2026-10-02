@@ -9,7 +9,7 @@ import re
 
 import usage
 from config import (
-    GEMINI_MODEL,
+    GEMINI_SUMMARY_MODEL,
     DASHSCOPE_LLM_MODEL,
     make_gemini_client,
 )
@@ -73,7 +73,7 @@ def summarize_transcript(full_text, use_qwen=False):
 
 
 def _call_gemini(prompt):
-    """摘要：内容跟中国议题无关走 DeepSeek（llmroute，便宜得多），否则 Gemini flash。
+    """摘要：内容跟中国议题无关走 DeepSeek（llmroute，便宜得多），否则 Gemini flash-lite（config.GEMINI_SUMMARY_MODEL）。
     摘要是照着原文归纳，不需要思考——关掉思考，思考 token 原来占了摘要费用的一大半。"""
     import llmroute
     out = llmroute.text(prompt, 'summary')
@@ -87,11 +87,11 @@ def _call_gemini(prompt):
         from google.genai import types
         client = make_gemini_client(api_key)
         response = client.models.generate_content(
-            model=GEMINI_MODEL,
+            model=GEMINI_SUMMARY_MODEL,
             contents=prompt,
             config=types.GenerateContentConfig(thinking_config=types.ThinkingConfig(thinking_budget=0)),
         )
-        usage.record_gemini(response, GEMINI_MODEL, 'summary')
+        usage.record_gemini(response, GEMINI_SUMMARY_MODEL, 'summary')
         return response.text.strip()
     except Exception:
         return None

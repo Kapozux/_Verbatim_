@@ -3170,6 +3170,7 @@ function renderReflect() {
         ${updating}
         <div class="reflect-headline">${escapeHtml(headline)}</div>
         <p class="reflect-narrative${d.generated ? '' : ' draft'}">${escapeHtml(narrative)}</p>
+        ${d.as_of ? `<p class="reflect-asof">${T('reflect.asOf', { date: d.as_of })}</p>` : ''}
         <div class="reflect-kpis">
             <div class="reflect-kpi"><b class="text">${escapeHtml(d.most_active_weekday_label || '—')}</b><span>${T('reflect.mostActiveDay')}</span></div>
             <div class="reflect-kpi"><b>${reflectHour(d.peak_hour)}</b><span>${T('reflect.peakHour')}</span></div>
