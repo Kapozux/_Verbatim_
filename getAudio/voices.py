@@ -19,6 +19,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import threading
 import time
 from collections import Counter, defaultdict
@@ -249,7 +250,8 @@ def fingerprint_samples(tid, samples, offset=0.0):
     arr = np.array(rows, dtype=np.float64).reshape(-1, 3)
     tmp = os.path.join(d, REC_FILE + '.part.npz')
     np.savez(tmp, start=arr[:, 0], end=arr[:, 1], local=arr[:, 2].astype(np.int64),
-             emb=np.array(embs, dtype=np.float16).reshape(len(embs), -1))
+             # 一句话都没切出来（静音 / 噪声 / 纯音乐）：存一个空表，别在 reshape 上崩
+             emb=np.array(embs, dtype=np.float16).reshape(len(embs), -1) if embs else np.zeros((0, 0), np.float16))
     os.replace(tmp, os.path.join(d, REC_FILE))
     meta = {'model': eng.model_id, 'turns': len(rows), 'offset': offset,
             'duration': round(len(samples) / sr, 1), 'created_at': time.strftime('%Y-%m-%d %H:%M:%S')}
@@ -282,7 +284,7 @@ def queue(tid, src, offset=0.0, cleanup=False, then=None):
     def run():
         _jobs[tid] = {'state': 'running'}
         try:
-            fingerprint(tid, src, offset)
+            (_fingerprint_isolated if _isolated() else fingerprint)(tid, src, offset)
             _jobs[tid] = {'state': 'done'}
             if then:
                 then(tid)
@@ -300,6 +302,31 @@ def queue(tid, src, offset=0.0, cleanup=False, then=None):
 
 def job(tid):
     return _jobs.get(tid)
+
+
+def _isolated():
+    """真声纹引擎放到子进程里跑。sherpa-onnx 的切段整段攥着 GIL：实测 4 分钟音频把主线程卡住 7.2 秒，
+    一小时的课约 2 分钟、两小时的节目约 4 分钟——在服务进程里跑，网页和所有接口一起没反应（2026-10-02 外联会话报的
+    「服务卡死好几分钟」就是转完长节目紧接着做声纹）。打包版（frozen）没有能 -c 起的 python，也不带声纹模型，照旧本进程；
+    测试用的假引擎也在本进程跑。"""
+    return isinstance(engine(), SherpaEngine) and not getattr(sys, 'frozen', False)
+
+
+def _child(tid, src, offset):
+    """子进程入口：降一点优先级（别跟正在跑的转写抢 CPU），然后照常做声纹。"""
+    try:
+        os.nice(10)
+    except (OSError, AttributeError):
+        pass
+    fingerprint(tid, src, offset)
+
+
+def _fingerprint_isolated(tid, src, offset=0.0):
+    code = 'import sys, voices; voices._child(sys.argv[1], sys.argv[2], float(sys.argv[3]))'
+    r = subprocess.run([sys.executable, '-c', code, tid, src, str(offset)],
+                       cwd=os.path.dirname(os.path.abspath(__file__)), capture_output=True, text=True)
+    if r.returncode != 0:
+        raise RuntimeError(((r.stderr or '').strip().splitlines() or [f'exit {r.returncode}'])[-1][:300])
 
 
 SEARCH_DIRS = ('~/Desktop', '~/Downloads', '~/Music', '~/Movies', '~/Documents')
