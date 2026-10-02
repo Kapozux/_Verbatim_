@@ -20,3 +20,4 @@ torch>=2.0
 pystray>=0.19
 pillow>=10.0
 bilibili-api-python>=17.0  # B站 space 列表被 412 风控封锁时的 probe() fallback
+python-pptx>=1.0

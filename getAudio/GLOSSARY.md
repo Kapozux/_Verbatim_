@@ -126,12 +126,12 @@ _Avoid_：订阅（界面已改叫同步）
 _Avoid_：复习区
 
 **产出**：
-代码里：`studio/<id>.json`，kind = report | flashcards | quiz | coverage | note | compare | view | visual。
+工作台列表里的一条：报告、闪卡、自测题、对照检查、存下的回答、对比、音频播客、幻灯片，以及「谁的立场 / 预测 / 原话」。
+代码里：`studio/<id>.json`，kind = report | flashcards | quiz | coverage | note | compare | view | visual | podcast | slides（播客的音频是同目录的 `<id>.mp3`，幻灯片的文件是 `<id>.pptx`）。
 
 **原声**：
 播客里直接放的本人原话那几秒（从本机留的音频裁，没有就按链接现下），不让主持人转述；取不到时主持人念原话。
 代码里：脚本行 `{"clip": "<卡片 id>"}`、`podcast.fetch_clip`。
-工作台列表里的一条：报告、闪卡、自测题、对照检查、存下的回答、对比，以及「谁的立场 / 预测 / 原话」。
 
 **对比**：
 同一个问题，项目里 2–4 个人各怎么说，并排、各带出处。代码里：compare、`ask.compare`。

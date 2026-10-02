@@ -11,3 +11,4 @@ bilibili-api-python>=17.0  # B站 space 列表被 412 风控封锁时的 probe()
 mlx-whisper; sys_platform == "darwin" and platform_machine == "arm64"  # Apple Silicon GPU 后端（Metal），其它平台跳过
 numpy>=1.24
 sherpa-onnx>=1.13.8  # 可选：说话人声纹（voices.py）。模型另放 models/voices/（不进仓库，见 docs/adr/0004）
+python-pptx>=1.0  # 工作台「幻灯片」导出 .pptx（slides.py）

@@ -16,6 +16,8 @@ const ST_PATHS = {
     predictions: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r=".8"/>',
     cards: '<path d="M5 6h14a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-8l-4 3v-3H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1z"/><path d="M9 10.5h.01M12 10.5h.01M15 10.5h.01"/>',
     visual: '<rect x="3" y="4.5" width="18" height="15" rx="2"/><circle cx="8.5" cy="9.5" r="1.6"/><path d="M21 16l-5-5-8.5 8.5"/>',
+    podcast: '<path d="M4 15v-3a8 8 0 0 1 16 0v3"/><rect x="3" y="14" width="4.5" height="6.5" rx="1.6"/><rect x="16.5" y="14" width="4.5" height="6.5" rx="1.6"/>',
+    slides: '<rect x="3" y="4" width="18" height="12" rx="1.5"/><path d="M12 16v4M8 20h8"/><path d="M7.5 8.5h6M7.5 11.5h9"/>',
     compare: '<circle cx="8" cy="8" r="3.2"/><circle cx="16" cy="8" r="3.2"/><path d="M2.5 19.5c.6-3 2.8-5 5.5-5s4.9 2 5.5 5"/><path d="M13.6 15.2c.7-.5 1.5-.7 2.4-.7 2.7 0 4.9 2 5.5 5"/>',
 };
 function stIcon(kind, size = 18) {
@@ -40,6 +42,8 @@ function stTitle(o) {
     }
     if (o.kind === 'compare') return T('st.k.compare') + ' · ' + String(o.question || '').slice(0, 40);
     if (o.kind === 'visual') return T('st.k.visual') + ' · ' + T('vs.nEps', { n: (o.tasks || []).length });
+    if (o.kind === 'podcast') return podcastTitle(o);
+    if (o.kind === 'slides') return slidesTitle(o);
     if (o.kind === 'report') {
         const name = o.format === 'custom' ? String(o.prompt || T('st.f.custom')).slice(0, 40) : T('st.f.' + (o.format || 'briefing'));
         return name + (o.focus ? ' · ' + o.focus : '');
@@ -99,6 +103,7 @@ function stMeta(o) {
         const again = stState.docs.some(d => d.lens === o.lens && d.chain === o.chain);   // 已有一版 = 重新生成；没有 = 第一次生成
         return `<span class="st-spin" aria-hidden="true"></span>${T(again ? 'rd.regenerating' : 'rd.generating')}`;
     }
+    if (o.status === 'running' && o.kind === 'podcast') return `<span class="st-spin" aria-hidden="true"></span>${escapeHtml(podcastMeta(o))}`;
     if (o.status === 'running' && o.progress && o.progress.total > 1) {     // 画面卡一期一期做：写做到第几期
         return `<span class="st-spin" aria-hidden="true"></span>${escapeHtml(T('vs.progress', { i: Math.min(o.progress.done + 1, o.progress.total), n: o.progress.total }))}`;
     }
@@ -107,6 +112,8 @@ function stMeta(o) {
     const parts = [when];
     if (o.kind === 'flashcards' || o.kind === 'quiz') parts.push(T('st.nItems.' + o.kind, { n: o.n || '' }));
     if (o.kind === 'visual') parts.push(T('vs.nCards', { n: o.n || 0 }));
+    if (o.kind === 'podcast' && o.duration) parts.push(podClock(o.duration));
+    if (o.kind === 'slides' && o.n_slides) parts.push(T('sl.nPages', { n: o.n_slides }));
     if (o.cost_usd) parts.push(fmtUsd(o.cost_usd));
     return escapeHtml(parts.join(' · '));
 }
@@ -160,6 +167,8 @@ function stRenderList() {
         const retry = el.querySelector('.st-retry');
         if (retry && o.kind === 'compare') retry.addEventListener('click', () => comparePicker());
         else if (retry && o.kind === 'visual') retry.addEventListener('click', () => visualPicker());
+        else if (retry && o.kind === 'podcast') retry.addEventListener('click', () => podcastPicker());
+        else if (retry && o.kind === 'slides') retry.addEventListener('click', () => slidesPicker());
         else if (retry) retry.addEventListener('click', () => stGenerate({ kind: o.kind, focus: o.focus, n: o.n,
             scope: o.scope, outline: o.outline_src, format: o.format, prompt: o.prompt }, true));
         const del = el.querySelector('.st-del');
@@ -256,7 +265,7 @@ async function stGenerate(body, quiet) {
 
 function stWire() {
     document.querySelectorAll('#chain-explore .st-tool').forEach(b =>
-        b.addEventListener('click', () => b.dataset.st === 'visual' ? visualPicker() : stOpenDialog(b.dataset.st)));
+        b.addEventListener('click', () => b.dataset.st === 'visual' ? visualPicker() : b.dataset.st === 'podcast' ? podcastPicker() : b.dataset.st === 'slides' ? slidesPicker() : stOpenDialog(b.dataset.st)));
     document.getElementById('st-form').addEventListener('submit', async e => {
         e.preventDefault();
         const ov = document.getElementById('st-overlay');
@@ -322,6 +331,8 @@ function stExportDoc(o) {
     const title = stTitle(o);
     if (o.kind === 'report' || o.kind === 'note') return { title, blocks: [{ md: r.md, citations: cites }] };
     if (o.kind === 'visual') return visualExportDoc(o, title);
+    if (o.kind === 'podcast') return podcastExportDoc(o, title);
+    if (o.kind === 'slides') return slidesExportDoc(o, title);
     if (o.kind === 'compare') return { title: `${T('st.k.compare')}：${o.question || ''}`.slice(0, 80), blocks: [{ md: r.answer, citations: cites }] };
     if (o.kind === 'flashcards') {
         return { title, blocks: (r.cards || []).map((c, i) => ({ heading: `${i + 1}. ${c.front}`, md: c.back, citations: cites })) };
@@ -362,6 +373,10 @@ function stRender() {
         body = `<h3 class="pc-q">${escapeHtml(o.question || '')}</h3>` + cmpResultHtml({ answer: r.answer, citations: cites, creators: r.creators }, o.question || '');
     } else if (o.kind === 'visual') {
         body = visualHtml(o);
+    } else if (o.kind === 'podcast') {
+        body = podcastHtml(o);
+    } else if (o.kind === 'slides') {
+        body = slidesHtml(o);
     }
     box.innerHTML = head + body;
     wireCitations(box, cites);
@@ -369,6 +384,8 @@ function stRender() {
     if (o.kind === 'quiz') stQuizWire(box);
     if (o.kind === 'coverage') stOutlineWire(box);
     if (o.kind === 'visual') visualWire(box);
+    if (o.kind === 'podcast') podcastWire(box);
+    if (o.kind === 'slides') slidesWire(box);
 }
 
 // ----- 闪卡：一张一张翻；下面还能展开看全部 -----

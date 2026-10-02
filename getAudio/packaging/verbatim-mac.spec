@@ -38,6 +38,7 @@ COLLECT_ALL_PACKAGES = [
     'dashscope',
     'av',             # faster-whisper 解码用
     'bilibili_api',   # B站 space 列表被风控时的 fallback
+    'pptx',           # 幻灯片导出：包里带默认模板 default.pptx，必须连数据一起收
 ]
 
 for package in COLLECT_ALL_PACKAGES:
@@ -68,6 +69,11 @@ hiddenimports += [
     'reflect',
     'backup',
     'exporter',
+    'study',
+    'citations',
+    'podcast',
+    'slides',
+    'frames',
 ]
 
 a = Analysis(

@@ -1192,7 +1192,7 @@ def _static_version():
     文件一变这串数字就变，浏览器才会当成新资源重新拉取。
     """
     try:
-        paths = [os.path.join(app.static_folder, name) for name in ('app.js', 'style.css', 'i18n.js', 'explore.js', 'tools.js', 'projects.js', 'study.js', 'voices.js', 'visual.js', 'repos.js')]
+        paths = [os.path.join(app.static_folder, name) for name in ('app.js', 'style.css', 'i18n.js', 'explore.js', 'tools.js', 'projects.js', 'study.js', 'voices.js', 'visual.js', 'podcast.js', 'repos.js', 'slides.js')]
         return str(int(max(os.path.getmtime(p) for p in paths if os.path.isfile(p))))
     except (ValueError, OSError):
         return '0'
@@ -4870,6 +4870,128 @@ def api_studio_visual(chain_id):
     return jsonify({'ok': True, 'item': study._summary(o)})
 
 
+@app.route('/api/chain/<chain_id>/studio/podcast', methods=['POST'])
+def api_studio_podcast(chain_id):
+    """格子「音频播客」做一份：{format: deep_dive|brief|debate, length: short|default|long, focus?, scope?, sides?}"""
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    if DEMO_MODE:
+        return jsonify({'error': 'Read-only demo'}), 403
+    import podcast
+    import study
+    if not config.gemini_key():
+        return jsonify({'error': 'Add a Gemini API key in Settings first'}), 400
+    body = request.get_json(silent=True) or {}
+    try:
+        o = podcast.start(_chain_dir(chain_id), chain_id, fmt=body.get('format'), length=body.get('length'),
+                          focus=body.get('focus'), scope=body.get('scope') if isinstance(body.get('scope'), dict) else None,
+                          lang=body.get('lang'), sides=body.get('sides') if isinstance(body.get('sides'), list) else None)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    return jsonify({'ok': True, 'item': study._summary(o)})
+
+
+@app.route('/api/chain/<chain_id>/studio/podcast/estimate')
+def api_studio_podcast_estimate(chain_id):
+    """弹框按钮上的估价：每种长度大约多少美元。"""
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    import podcast
+    return jsonify({k: podcast.estimate(m) for k, m in podcast.LENGTHS.items()})
+
+
+@app.route('/api/chain/<chain_id>/studio/slides', methods=['POST'])
+def api_studio_slides(chain_id):
+    """格子「幻灯片」做一份：{style: detailed|presenter, n: 内容页数, focus?, scope?}"""
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    if DEMO_MODE:
+        return jsonify({'error': 'Read-only demo'}), 403
+    import slides
+    import study
+    if not config.gemini_key():
+        return jsonify({'error': 'Add a Gemini API key in Settings first'}), 400
+    body = request.get_json(silent=True) or {}
+    o = slides.start(_chain_dir(chain_id), chain_id, style=body.get('style'), n=body.get('n'), focus=body.get('focus'),
+                     scope=body.get('scope') if isinstance(body.get('scope'), dict) else None, lang=body.get('lang'))
+    return jsonify({'ok': True, 'item': study._summary(o)})
+
+
+@app.route('/api/chain/<chain_id>/studio/slides/estimate')
+def api_studio_slides_estimate(chain_id):
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    import slides
+    return jsonify({'usd': slides.estimate()})
+
+
+@app.route('/api/chain/<chain_id>/studio/<oid>/pptx')
+def api_studio_pptx(chain_id, oid):
+    """下载幻灯片（文件名用标题）。"""
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    import slides
+    import study
+    try:
+        p = slides.file_path(_chain_dir(chain_id), oid)
+    except ValueError:
+        return jsonify({'error': 'Not found'}), 404
+    if not os.path.isfile(p):
+        return jsonify({'error': 'Not found'}), 404
+    o = study.get_output(_chain_dir(chain_id), oid) or {}
+    name = re.sub(r'[\\/:*?"<>|\n\r]+', ' ', o.get('title') or 'slides').strip()[:80] or 'slides'
+    return send_file(p, as_attachment=True, download_name=name + '.pptx',
+                     mimetype='application/vnd.openxmlformats-officedocument.presentationml.presentation')
+
+
+@app.route('/api/chain/<chain_id>/studio/<oid>/slide/<int:n>')
+def api_studio_slide_png(chain_id, oid, n):
+    """幻灯片第 n 页的预览图（真 .pptx 渲染出来的，本机有 LibreOffice 时才有）。"""
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    import slides
+    try:
+        p = os.path.join(slides.preview_dir(_chain_dir(chain_id), oid), f'{n}.png')
+    except ValueError:
+        return jsonify({'error': 'Not found'}), 404
+    if not os.path.isfile(p):
+        return jsonify({'error': 'Not found'}), 404
+    return send_file(p, mimetype='image/png', max_age=0)
+
+
+@app.route('/api/chain/<chain_id>/studio/<oid>/revise', methods=['POST'])
+def api_studio_slide_revise(chain_id, oid):
+    """改幻灯片的一页：{i: 第几页（0 起）, instruction: 怎么改}。同步，几秒钟，返回整份更新后的产出。"""
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    if DEMO_MODE:
+        return jsonify({'error': 'Read-only demo'}), 403
+    import slides
+    body = request.get_json(silent=True) or {}
+    try:
+        o = slides.revise(_chain_dir(chain_id), chain_id, oid, body.get('i', -1), body.get('instruction'))
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except RuntimeError as e:
+        return jsonify({'error': str(e)}), 502
+    return Response(json.dumps(o, ensure_ascii=False), mimetype='application/json')
+
+
+@app.route('/api/chain/<chain_id>/studio/<oid>/audio')
+def api_studio_audio(chain_id, oid):
+    """播客的 mp3（支持拖动进度条：send_file 自带 Range）。"""
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    import podcast
+    try:
+        p = podcast.audio_path(_chain_dir(chain_id), oid)
+    except ValueError:
+        return jsonify({'error': 'Not found'}), 404
+    if not os.path.isfile(p):
+        return jsonify({'error': 'Not found'}), 404
+    return send_file(p, mimetype='audio/mpeg', conditional=True)
+
+
 @app.route('/api/visual/<task_id>/<name>')
 def api_visual_image(task_id, name):
     """画面卡的关键帧图。"""
@@ -4945,7 +5067,11 @@ def api_studio_get(chain_id, oid):
 def api_studio_delete(chain_id, oid):
     if not _chain_ok(chain_id):
         return jsonify({'error': 'Not found'}), 404
+    import podcast
     import study
+    import slides
+    podcast.remove_audio(_chain_dir(chain_id), oid)          # 播客那条还有个 mp3
+    slides.remove_file(_chain_dir(chain_id), oid)            # 幻灯片那条还有个 pptx
     return jsonify({'ok': study.delete_output(_chain_dir(chain_id), oid)})
 
 

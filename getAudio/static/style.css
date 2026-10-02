@@ -20,6 +20,9 @@
   --tint-blue: #3F6587; --tint-blue-bg: #E8EFF6;
   --tint-plum: #7B4F86; --tint-plum-bg: #F2EAF4;
   --pane-line: var(--line); --tile-bg: color-mix(in srgb, var(--ink) 4%, var(--card));
+  /* 幻灯片预览用的颜色：跟导出的 .pptx 一模一样，所以不随暗色模式变（暗色两处故意不覆盖） */
+  --deck-paper:#FAF9F5; --deck-dark:#1F1E1D; --deck-ink:#1F1E1D; --deck-on-dark:#F5F3EE; --deck-muted:#75736C;
+  --deck-dark-muted:#A8A59C; --deck-line:#E3DFD5; --deck-card:#F1EEE6; --deck-coral-soft:#F6E5DC;
   color-scheme: light;
 
   --r-xs:6px; --r-sm:8px; --r-md:9px; --r-lg:12px; --r-xl:14px;
@@ -2742,6 +2745,42 @@ body.demo .creator-hide { display: none; }
 .vs-said summary { cursor: pointer; font-size: 13px; color: var(--muted); }
 .vs-said p { margin: 6px 0 0; font-size: 14px; line-height: 1.5; color: var(--ink-soft); }
 
+/* ===== 音频播客（podcast.js）：设置弹框 + 工作台栏里的播放器和逐句文字稿 ===== */
+.pod-pick #pod-form { margin: 14px 0 0; padding: 0; background: none; border: 0; box-shadow: none; border-radius: 0; display: grid; gap: 14px; }
+.pod-pick .cx-modal-title { display: flex; align-items: center; gap: 8px; }
+.pod-f { display: grid; gap: 6px; }
+.pod-l { font-size: 13.5px; color: var(--muted); }
+.pod-f input[type=text] { font: inherit; font-size: 15px; color: var(--ink); background: var(--card); border: 1px solid var(--line-2);
+  border-radius: 12px; padding: 8px 12px; min-width: 0; }
+.pod-f input[type=text]:focus { outline: none; border-color: var(--coral); }
+.pod-sides { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 8px; align-items: center; }
+.pod-lens { display: flex; flex-wrap: wrap; gap: 6px; }
+.pod-len { font: inherit; font-size: 14px; color: var(--ink); background: none; border: 1px solid var(--line-2); border-radius: 999px;
+  padding: 6px 14px; cursor: pointer; }
+.pod-len:hover { border-color: var(--coral-line); }
+.pod-len.on { border-color: var(--coral); background: var(--coral-soft); }
+.pod-player { position: sticky; top: 0; z-index: 2; background: var(--card); padding: 6px 0 8px; }
+.pod-player audio { width: 100%; display: block; }
+.pod-hint { margin: 2px 0 12px; font-size: 13px; }
+.pod-lines { display: grid; gap: 2px; }
+.pod-line { display: grid; grid-template-columns: 4.2em minmax(0, 1fr); gap: 10px; padding: 8px 10px; border-radius: 12px; cursor: pointer;
+  transition: background-color .15s; }
+.pod-line:hover { background: var(--code-bg); }
+.pod-line.on { background: var(--coral-soft); }
+.pod-who { font-size: 13.5px; color: var(--muted); padding-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pod-say { font-size: 15.5px; line-height: 1.6; color: var(--ink); overflow-wrap: anywhere; }
+.pod-say p { margin: 0; }
+.pod-clip .pod-who { color: var(--coral-deep); font-weight: 500; }
+.pod-clip .cc-quote { margin: 0; }
+.pod-src { margin-top: 4px; font-size: 13px; color: var(--muted); }
+@media (max-width: 700px) {
+  .pod-pick .vp-foot { flex-wrap: wrap; }
+  .pod-pick .rd-pick-go { white-space: nowrap; margin-left: auto; }
+  .pod-line { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  .pod-sides { grid-template-columns: minmax(0, 1fr); }
+  .pod-sides > .cx-muted { display: none; }
+}
+
 /* ---- 来源：代码库（repos.js）：阅读器里的代码带行号，出处那几行高亮 ---- */
 .sr-svg[data-k="code"] { color: var(--ink-soft); }
 .repo-note { font-size: 13.5px; margin: 6px 0 0; }
@@ -2774,3 +2813,60 @@ pre.cc-quote.repo-quote { font-family: var(--mono); font-size: 13px; line-height
 .repo-f { display: grid; gap: 6px; }
 .repo-l { font-size: 13.5px; color: var(--muted); }
 .repo-pick textarea:focus { outline: none; border-color: var(--coral); }
+
+/* ===== 幻灯片（slides.js）：工作台栏里一页页 16:9 预览，版式跟导出的 .pptx 一样（字号用容器宽度的百分比） ===== */
+.sl-pick #sl-form { margin: 14px 0 0; padding: 0; background: none; border: 0; box-shadow: none; border-radius: 0; display: grid; gap: 14px; }
+.sl-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; margin-bottom: 16px; }
+.sl-dl { display: inline-flex; align-items: center; height: 38px; padding: 0 18px; border-radius: 999px; font-size: 14.5px;
+  background: var(--coral-strong); color: var(--on-ink); text-decoration: none; }
+.sl-dl:hover { filter: brightness(1.05); }
+.sl-bar .cx-muted { font-size: 13px; }
+.sl-wrap { margin: 0 0 22px; }
+.sl-img { border-radius: 12px; overflow: hidden; border: 1px solid var(--line); aspect-ratio: 16 / 9; background: var(--deck-paper); }
+.sl-img img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.sl-slide { container-type: inline-size; position: relative; aspect-ratio: 16 / 9; overflow: hidden; border-radius: 12px;
+  background: var(--deck-paper); color: var(--deck-ink); border: 1px solid var(--deck-line); padding: 4.2cqw 5.6cqw 6cqw;
+  display: flex; flex-direction: column; font-family: Arial, "PingFang SC", var(--sans); }
+.sl-slide.dark { background: var(--deck-dark); color: var(--deck-on-dark); border-color: var(--deck-dark); }
+.sl-t { font-size: 3.4cqw; font-weight: 700; line-height: 1.25; min-height: 8.6cqw; display: flex; align-items: flex-end; }
+.sl-body { flex: 1; min-height: 0; padding-top: 3cqw; }
+.sl-ul { margin: 0; padding-left: 2.4cqw; display: grid; gap: 1.4cqw; font-size: 2.2cqw; line-height: 1.35; }
+.sl-ul li::marker { color: var(--coral); }
+.sl-detail { display: block; font-size: .72em; color: var(--deck-muted); margin-top: .3em; }
+.sl-eyebrow { color: var(--coral); font-weight: 700; font-size: 1.5cqw; margin-top: 4cqw; }
+.sl-cover-t { font-size: 4.6cqw; font-weight: 700; line-height: 1.2; margin-top: auto; max-width: 85%; }
+.sl-sec-t { font-size: 3.8cqw; }
+.sl-sub { font-size: 2cqw; color: var(--deck-dark-muted); margin: 2cqw 0 auto; max-width: 80%; }
+.sl-quote { display: grid; grid-template-columns: 6.5cqw minmax(0, 1fr); }
+.sl-qm { color: var(--coral); font-size: 9cqw; line-height: .9; font-weight: 700; }
+.sl-q { font-size: 2.7cqw; line-height: 1.4; }
+.sl-who { margin-top: 2.4cqw; font-size: 1.6cqw; color: var(--deck-muted); }
+.sl-val { color: var(--coral); font-size: 10cqw; font-weight: 700; line-height: 1; }
+.sl-lab { margin-top: 2cqw; font-size: 2.3cqw; max-width: 75%; }
+.sl-cmp { display: grid; grid-template-columns: 1fr 1fr; gap: 3cqw; height: 100%; }
+.sl-col { background: var(--deck-card); border-radius: 1.6cqw; padding: 2.4cqw 2.6cqw; }
+.sl-col.alt { background: var(--deck-coral-soft); }
+.sl-col-t { font-size: 2cqw; font-weight: 700; margin-bottom: 1.6cqw; }
+.sl-col.alt .sl-col-t { color: var(--coral); }
+.sl-col .sl-ul { font-size: 1.7cqw; }
+.sl-tl { display: grid; grid-template-columns: repeat(var(--n), minmax(0, 1fr)); gap: 0 2.4cqw; position: relative; padding-top: 1cqw; }
+.sl-tl::before { content: ""; position: absolute; left: 0; right: 0; top: 6.9cqw; height: .25cqw; background: var(--deck-line); }
+.sl-when { color: var(--coral); font-weight: 700; font-size: 1.7cqw; min-height: 4.6cqw; display: flex; align-items: flex-end; }
+.sl-dot { display: block; width: 1.9cqw; height: 1.9cqw; border-radius: 50%; background: var(--coral); margin: 1cqw 0 2cqw; position: relative; }
+.sl-what { font-size: 1.6cqw; line-height: 1.4; }
+.sl-no { position: absolute; right: 5.6cqw; bottom: 2.4cqw; font-size: max(10px, 1cqw); color: var(--deck-muted); }
+.sl-slide.dark .sl-no { color: var(--deck-dark-muted); }
+.sl-rev { white-space: nowrap; }
+.sl-srcs { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 2px 4px; }
+.sl-cap { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 6px; font-size: 13px; }
+.sl-rev-f { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 6px 0 0; padding: 0; background: none; border: 0; box-shadow: none; }
+.sl-rev-f input { flex: 1; min-width: 180px; font: inherit; font-size: 14.5px; color: var(--ink); background: var(--card);
+  border: 1px solid var(--line-2); border-radius: 999px; padding: 7px 14px; }
+.sl-rev-f input:focus { outline: none; border-color: var(--coral); }
+.sl-rev-f button { height: 36px; padding: 0 16px; border-radius: 999px; border: 0; background: var(--coral-strong); color: var(--on-ink);
+  font: inherit; font-size: 14px; cursor: pointer; }
+.sl-rev-f button:disabled { opacity: .6; cursor: default; }
+.sl-rev-msg { font-size: 13px; width: 100%; }
+.sl-notes { margin-top: 6px; font-size: 14px; }
+.sl-notes summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+.sl-notes .md-body { margin-top: 6px; color: var(--ink-soft); }
