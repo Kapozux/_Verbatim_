@@ -45,6 +45,11 @@ PRICES = {
     'gemini-3.5-flash-lite': {'input': 0.30, 'audio_in': 0.30, 'output': 2.50, 'cached': 0.03},
     'gemini-3.1-flash-lite': {'input': 0.25, 'output': 1.50},       # 2026-10-02 官网价（音频 / 缓存价没查，摘要和标签用不到）
     'gemini-3.5-flash':      {'input': 1.50, 'audio_in': 1.50, 'output': 9.00, 'cached': 0.15},
+    'gemini-3.8-flash':      {'input': 0.75, 'output': 3.75, 'cached': 0.075},   # 2026 年底前的优惠价；2027-01-01 起 1.50 / 7.50
+    # 语音合成（播客）：输出是音频 token，25 个 / 秒。官网写 2026 年底前标准档免费，这里记的是之后的价，
+    # 免费期内费用页会多算（10 分钟约 $0.27）
+    'gemini-3.8-flash-tts':      {'input': 1.00, 'output': 18.0},
+    'gemini-3.8-flash-lite-tts': {'input': 1.00, 'output': 12.0},
     # 阿里云百炼 DeepSeek V4 Flash：上线时公布输入 1 元、输出 2 元 / 百万 token（按 7.1 折美元）。
     # 百炼控制台的实价变了就在 prices.json 里覆盖。
     'deepseek-v4-flash':     {'input': 0.14, 'audio_in': 0.14, 'output': 0.28, 'cached': 0.03},
