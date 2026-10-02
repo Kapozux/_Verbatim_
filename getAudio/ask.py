@@ -228,7 +228,7 @@ def _add_people(corpus, state):
     people = []
     if state.get('url'):                      # 项目自己的频道也是一个人：期上记名字，跟别人分得开
         for e in corpus['episodes']:
-            if e.get('kind') != 'doc' and not e.get('person'):
+            if e.get('kind') not in ('doc', 'repo') and not e.get('person'):
                 e['person'] = corpus['author']
         people.append({'tag': '', 'name': corpus['author'], 'chain_id': os.path.basename(corpus['dir'])})
     for r in refs:
@@ -283,6 +283,8 @@ def _add_passages(corpus, state, docs=True, extra=True):
         no = _stable_no(meta['id'])
         for p in ps:
             cards.append(_passage_card(f"d{no}-{p['i']}", idx, p['text'], p.get('page'), p.get('heading')))
+    if docs:
+        _add_repo_cards(corpus, reg)
     # 原文段落入索引的录音：登记表里额外加的（总是）+ 项目自己的录音（开了 index_transcripts 时）
     vids = list(state.get('videos') or []) if state.get('index_transcripts') else []
     base = len(state.get('videos') or [])
@@ -305,7 +307,7 @@ def _add_passages(corpus, state, docs=True, extra=True):
             if not title or re.fullmatch(r'[A-Za-z0-9_-]{8,20}', title):
                 meta = _read_json(os.path.join(config.RESULTS_FOLDER, tid, 'meta.json'), {}) or {}
                 title = meta.get('ai_title') or meta.get('filename') or title
-            n_rec = sum(1 for e in eps if e.get('kind') != 'doc') + 1     # 录音单独编号，文档不占 EP 号
+            n_rec = sum(1 for e in eps if e.get('kind') not in ('doc', 'repo')) + 1   # 录音单独编号，文档 / 代码库不占 EP 号
             eps.append({'key': f't{v.get("index", idx)}', 'title': title, 'task_id': tid,
                         'video_url': v.get('video_url') or '', 'date': _fmt_date(v.get('upload_date')),
                         'order': v.get('index') if v.get('index') is not None else 10 ** 6,
@@ -316,6 +318,29 @@ def _add_passages(corpus, state, docs=True, extra=True):
             c = _passage_card(f"t{no}-{p['i']}", idx, p['text'])
             c['ts'], c['sec'] = timecode.display(p.get('ts')), timecode.seconds(p.get('ts'))
             cards.append(c)
+
+
+def _add_repo_cards(corpus, reg):
+    """代码库来源（sources.json 的 repos）：Daemon 读出来、逐字核对过的卡。id = r<固定编号>-<下标>，
+    期的标签是 REPO1、REPO2；位置写成「文件:起-止」放在 heading 里，层级照卡片自己的（主张 / 自证 / 核实）。"""
+    import repos
+    eps, cards = corpus['episodes'], corpus['cards']
+    for n, ref in enumerate(reg.get('repos') or [], 1):
+        meta = repos.repo_meta(ref.get('repo_id'))
+        rc = repos.repo_cards(meta['id']) if meta else []
+        if not rc:
+            continue
+        idx = len(eps)
+        eps.append({'key': f'r{n}', 'title': f"{meta.get('title') or 'Repository'} @{(meta.get('commit') or '')[:7]}",
+                    'task_id': '', 'repo_id': meta['id'], 'video_url': '', 'date': (ref.get('added_at') or '')[:10],
+                    'order': 2 * 10 ** 6 + n, 'metrics': {}, 'label': f'REPO{n}', 'kind': 'repo'})
+        no = _stable_no(meta['id'])
+        for c in rc:
+            cards.append({'id': f"r{no}-{c['i']}", 'ep': idx, 'obs': c.get('obs') or '', 'quote': c['quote'],
+                          'ts': '', 'sec': None, 'layer': _layer(c.get('layer')), 'topic': c.get('topic') or '',
+                          'stance': '', 'pred': False, 'h': card_hash({'quote': c['quote'], 'obs': c.get('obs') or ''}),
+                          'page': None, 'heading': f"{c['path']}:{c['start']}-{c['end']}",
+                          'path': c['path'], 'line': c['start']})
 
 
 def _passage_card(cid, ep, text, page=None, heading=None):
@@ -357,8 +382,9 @@ def card_view(card, corpus, prefix=''):
             # 显示用：EP3 / DOC1；kind 区分「抽出来的卡」和「原文段落」（文档 / 转写）
             'label': ep.get('ui_label') or ep.get('label') or f"EP{card['ep'] + 1}",
             'creator': ep.get('person') or '', 'person_chain': ep.get('chain_id') or '',
-            'kind': 'doc' if ep.get('kind') == 'doc' else ('passage' if card['layer'] == 'source' else 'card'),
-            'doc_id': ep.get('doc_id') or '', 'page': card.get('page'), 'heading': card.get('heading') or ''}
+            'kind': ep.get('kind') if ep.get('kind') in ('doc', 'repo') else ('passage' if card['layer'] == 'source' else 'card'),
+            'doc_id': ep.get('doc_id') or '', 'page': card.get('page'), 'heading': card.get('heading') or '',
+            'repo_id': ep.get('repo_id') or '', 'path': card.get('path') or '', 'line': card.get('line')}
 
 
 # ================= 检索（上万张卡时用）=================
@@ -828,6 +854,7 @@ def _expand(question, history, corpus):
 
 ANSWER_PROMPT = """Answer in {lang}. You answer questions about {subject} using ONLY the evidence cards below. Each card is something extracted from one of their videos: an observation (written by an AI) plus the verbatim quote it rests on.
 Some items have type "source": those are raw passages copied word for word from a document (DOCn; the location is a page and/or section heading) or from a recording's transcript (EPn; the location is a time). They have no observation — the quote IS the original text. Cite them exactly like cards. A document is not necessarily written or spoken by {author}: attribute what it says to the document itself (e.g. "the exam outline lists…").
+Items labelled REPOn come from a code repository that a code-reading agent went through: the quote is exact source code (the location is file:lines) and the observation is that agent's reading of it. Attribute them to the code or repository ("the repository's ask.py…"), never to {author}.
 
 {mode_rules}
 
@@ -898,6 +925,9 @@ def _card_line(c, corpus, alias=False):
     if c['layer'] == 'source' and ep.get('kind') == 'doc':     # 文档段落：位置写页码 / 小标题
         where = ' · '.join(x for x in (f"p.{c['page']}" if c.get('page') else '', c.get('heading') or '') if x)
         return f"[#{cid}] | {ep['label']} | {where or '-'} | source | - | - | \"{quote}\""
+    if ep.get('kind') == 'repo':                                 # 代码库卡：位置是「文件:行」，原话是代码
+        return (f"[#{cid}] | {ep['label']} | {c['heading']} | code {c['layer']} | {c.get('topic') or '-'}"
+                f" | {obs} | \"{quote}\"")
     return (f"[#{cid}] | {ep.get('label') or 'EP' + str(c['ep'] + 1)} | {c['ts'] or '-'} | {c['layer']}"
             f" | {c.get('topic') or '-'} | {obs} | \"{quote}\"{who}")
 
@@ -919,7 +949,7 @@ def _episode_lines(corpus, used_eps=None):
         if used_eps is not None and i not in used_eps:
             continue
         ep = corpus['episodes'][i]
-        kind = ' (document)' if ep.get('kind') == 'doc' else ''
+        kind = {'doc': ' (document)', 'repo': ' (code repository)'}.get(ep.get('kind'), '')
         who = f"[{ep['person']}] " if ep.get('person') else ''
         out.append(f"{ep.get('label') or 'EP' + str(i + 1)} = {who}{ep['title']}{kind}"
                    + (f" ({ep['date']})" if ep['date'] and not kind else ''))
@@ -1017,7 +1047,7 @@ def _subject(corpus):
 
 
 def scope_pool(corpus, scope):
-    """提问范围 → 卡片子集（None = 不限）。scope: {type: all|media|docs, sources: [task_id / doc_id, …]}
+    """提问范围 → 卡片子集（None = 不限）。scope: {type: all|media|docs, sources: [task_id / doc_id / repo_id, …]}
     media = 录音 / 视频那边（抽出来的卡 + 转写原文段落）；docs = 文档段落。sources 给了就只要这几个来源。"""
     if not scope:
         return None
@@ -1028,10 +1058,10 @@ def scope_pool(corpus, scope):
     out = []
     for c in corpus['cards']:
         ep = corpus['episodes'][c['ep']]
-        is_doc = ep.get('kind') == 'doc'
+        is_doc = ep.get('kind') in ('doc', 'repo')          # 代码库归文档那边（不是录音）
         if (typ == 'media' and is_doc) or (typ == 'docs' and not is_doc):
             continue
-        if pick and (ep.get('doc_id') or ep.get('task_id')) not in pick:
+        if pick and (ep.get('doc_id') or ep.get('repo_id') or ep.get('task_id')) not in pick:
             continue
         out.append(c)
     return out
@@ -1045,7 +1075,7 @@ def _persona_view(corpus, persona):
         return None, None
     tag = me.get('tag') or ''
     keep = {i for i, e in enumerate(corpus['episodes'])
-            if (e.get('person_tag') == tag if tag else (not e.get('person_tag') and e.get('kind') != 'doc'))}
+            if (e.get('person_tag') == tag if tag else (not e.get('person_tag') and e.get('kind') not in ('doc', 'repo')))}
     d = os.path.join(os.path.dirname(corpus['dir']), me['chain_id']) if tag else corpus['dir']
     return keep, dict(corpus, author=me['name'], people=[], dir=d, kind='creator', template='creator')
 

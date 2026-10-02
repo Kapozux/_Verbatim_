@@ -15,16 +15,16 @@ id 的写法只在这里定义一份（ID）；前端从页面模板拿同一份
 """
 import re
 
-# 卡片 3-12（文件编号-下标；老文件带 _哈希）、段落 t302223-16 / d77-2、引用博主的 B:3-12（见 ADR-0001）
-ID = r'(?:[A-Z]:)?[dt]?\d+(?:_[0-9a-f]{8})?-\d+'
+# 卡片 3-12（文件编号-下标；老文件带 _哈希）、段落 t302223-16 / d77-2、代码库卡 r4660-3、引用博主的 B:3-12（见 ADR-0001）
+ID = r'(?:[A-Z]:)?[dtr]?\d+(?:_[0-9a-f]{8})?-\d+'
 MARK = re.compile(r'\[#(' + ID + r')\]')
 
 _BAD = re.compile(r'\[#[^\]\n]{0,80}\]')                       # 走样到认不出的「出处」
 _GROUP = re.compile(r'\[\s*((?:[_\\]*[#@]?\s*' + ID + r'\s*[,，;、]?\s*)+)\]')
 _ONE = re.compile(ID)
 _DANGLING = re.compile(r'\[#(' + ID + r')\s*[,，;、]\s*(?=\[)')
-_ALIAS_TOKEN = re.compile(r'(?<![\w:-])((?:[A-Z]:)?[dt]?\d+-\d+)(?![\w-])')
-_TAGGED = re.compile(r'\[#([A-Z]):([dt]?\d+(?:_[0-9a-f]{8})?-\d+)\]')
+_ALIAS_TOKEN = re.compile(r'(?<![\w:-])((?:[A-Z]:)?[dtr]?\d+-\d+)(?![\w-])')
+_TAGGED = re.compile(r'\[#([A-Z]):([dtr]?\d+(?:_[0-9a-f]{8})?-\d+)\]')
 _LEAD = re.compile(r'(?:引文|出处|来源|参考|引用|Sources?|Citations?|References?)\s*[:：]\s*(?=\[#)', re.I)
 _SPACE_BEFORE_PUNCT = re.compile(r'[ \t]+([.,;:!?。，；：！？)])')
 
@@ -33,12 +33,13 @@ def prompt_id(card, corpus):
     """提示词里这张卡写成什么 id。卡片就用真 id；原文段落用跟它的标签对得上的短别名（t4-16 = EP4 第 16 段，
     d2-3 = DOC2 第 3 段）——真 id（t302223-16）又长又看不出规律，模型会自作主张缩短，被当成编造的删掉。
     引用博主的段落再带上他的字母：B:t4-16。"""
-    if card.get('layer') != 'source':
-        return card['id']
     ep = corpus['episodes'][card['ep']]
+    if card.get('layer') != 'source' and ep.get('kind') != 'repo':
+        return card['id']
     no = re.sub(r'\D', '', ep.get('ui_label') or ep.get('label') or '') or str(card['ep'] + 1)
     tag = f"{ep['person_tag']}:" if ep.get('person_tag') else ''
-    return f"{tag}{'d' if ep.get('kind') == 'doc' else 't'}{no}-{card['id'].rsplit('-', 1)[1]}"
+    kind = {'doc': 'd', 'repo': 'r'}.get(ep.get('kind'), 't')
+    return f"{tag}{kind}{no}-{card['id'].rsplit('-', 1)[1]}"
 
 
 def strip(text):
@@ -73,8 +74,9 @@ class Citations:
         for c in cards:
             real = prefix + c['id']
             self._cards[real] = (c, corpus, prefix, creator)
-            if c.get('layer') == 'source':
-                self._aliases[prefix + prompt_id(c, corpus)] = real
+            alias = prompt_id(c, corpus)
+            if alias != c['id']:                       # 原文段落、代码库卡给模型看的是短别名
+                self._aliases[prefix + alias] = real
         return self
 
     def __contains__(self, cid):

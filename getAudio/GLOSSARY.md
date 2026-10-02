@@ -62,6 +62,12 @@ _Avoid_：字幕（只指平台自带的字幕轨）
 **文档**：
 用户加的 PDF / Word / 网页 / 粘贴的文字，转成 Markdown 后切段。全局存在 `results/_docs/<doc_id>/`，项目只登记 id。
 
+**代码库**：
+本机的一个 git 仓库，按某个 commit 做成快照，由用户自己的读码 agent（Daemon）读出证据卡；给人看的编号是 REPO1。
+卡片的出处是「文件:起-止 @commit」，原话是一字不改的代码，每张都对快照逐字核对过。见 ADR-0005。
+代码里：repo、`repos.py`、`results/_repos/<repo_id>/`、`sources.json` 的 `repos`、卡片 id `r<固定号>-<下标>`。
+_Avoid_：仓库（单说时容易跟 git 远端混）、项目（那是 Verbatim 的项目）
+
 ## 证据
 
 **证据卡**：

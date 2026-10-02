@@ -3751,6 +3751,7 @@ def _reg(cid):
     reg.setdefault('docs', [])
     reg.setdefault('recordings', [])
     reg.setdefault('channels', [])
+    reg.setdefault('repos', [])
     return reg
 
 
@@ -3969,7 +3970,7 @@ def api_project_sources(chain_id):
     return Response(json.dumps({
         'kind': state.get('kind') or 'creator', 'channel': channel, 'channels': channels,
         'index_transcripts': bool(state.get('index_transcripts')), 'analyze': bool(state.get('analyze')),
-        'videos': vids, 'recordings': _rec_rows(chain_id), 'docs': _doc_rows(chain_id),
+        'videos': vids, 'recordings': _rec_rows(chain_id), 'docs': _doc_rows(chain_id), 'repos': _repo_rows(chain_id),
         'indexing': chain_id in _project_jobs, 'moye': sources.moye_alive(timeout=1),
         'has_cards': bool(have_cards), 'cards_missing': len(missing) if not state.get('url') else 0,
     }, ensure_ascii=False), mimetype='application/json')
@@ -4329,15 +4330,16 @@ def api_project_remove_source(chain_id, source_id):
         return jsonify({'error': 'Not found'}), 404
     with _chain_write_lock:
         reg = _reg(chain_id)
-        n0 = len(reg['docs']) + len(reg['recordings']) + len(reg['channels'])
+        n0 = len(reg['docs']) + len(reg['recordings']) + len(reg['channels']) + len(reg['repos'])
         reg['docs'] = [d for d in reg['docs'] if d.get('doc_id') != source_id]
+        reg['repos'] = [r for r in reg['repos'] if r.get('repo_id') != source_id]
         reg['recordings'] = [r for r in reg['recordings'] if r.get('task_id') != source_id]
         # 引用的博主：只是从这个项目拿掉，他自己的链条（别的项目可能在用）不动；字母作废不再发
         gone = [r for r in reg['channels'] if r.get('chain_id') == source_id]
         if gone:
             reg['retired_tags'] = sorted(set(reg.get('retired_tags') or []) | {r.get('tag') for r in gone if r.get('tag')})
         reg['channels'] = [r for r in reg['channels'] if r.get('chain_id') != source_id]
-        removed = len(reg['docs']) + len(reg['recordings']) + len(reg['channels']) != n0
+        removed = len(reg['docs']) + len(reg['recordings']) + len(reg['channels']) + len(reg['repos']) != n0
         if removed:
             _reg_save(chain_id, reg)
         state = _read_chain(chain_id)
@@ -4362,6 +4364,89 @@ def api_project_remove_source(chain_id, source_id):
     if not removed:
         return jsonify({'error': 'Not in this project'}), 404
     return jsonify({'ok': True})
+
+
+# ---- 代码库来源（repos.py）：本机 git 仓库的快照，由用户自己的读码 agent（Daemon）读出证据卡 ----
+# Daemon 会在快照里执行 shell 命令、花 DeepSeek 的钱：只在用户点「读」时跑，演示模式本来就拦掉了所有写接口。
+
+def _repo_rows(cid):
+    import repos
+    out = []
+    for ref in _reg(cid)['repos']:
+        m = repos.repo_meta(ref.get('repo_id')) or {}
+        last = (m.get('runs') or [{}])[-1]
+        out.append({'repo_id': ref.get('repo_id'), 'added_at': ref.get('added_at'),
+                    'title': m.get('title') or '(missing)', 'path': m.get('path') or '',
+                    'commit': (m.get('commit') or '')[:7], 'dirty': bool(m.get('dirty')),
+                    'status': 'reading' if repos.reading(ref.get('repo_id')) else (m.get('status') or 'missing'),
+                    'error': m.get('error') or '', 'cards': len(repos.repo_cards(ref.get('repo_id'))),
+                    'skipped': m.get('skipped') or [], 'last_run': last or None, 'estimate': repos.estimate(m)})
+    return out
+
+
+@app.route('/api/chain/<chain_id>/sources/repo', methods=['POST'])
+def api_project_add_repo(chain_id):
+    """{path, read?: bool, question?}：快照本机仓库、登记进项目；read=true 顺手开读（导览或带着问题）。"""
+    if not _project_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    import repos
+    body = request.get_json(silent=True) or {}
+    try:
+        meta = repos.create_repo(body.get('path'))
+    except (ValueError, OSError, subprocess.SubprocessError) as e:
+        return jsonify({'error': str(e)}), 400
+    with _chain_write_lock:
+        reg = _reg(chain_id)
+        if meta['id'] not in {r.get('repo_id') for r in reg['repos']}:
+            reg['repos'].append({'repo_id': meta['id'], 'added_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')})
+            _reg_save(chain_id, reg)
+    if body.get('read'):
+        try:
+            repos.start_read(meta['id'], str(body.get('question') or ''),
+                             on_done=lambda: _project_refresh(chain_id))
+        except ValueError as e:
+            return jsonify({'ok': True, 'repo': _repo_rows(chain_id)[-1], 'error': str(e)})
+    return jsonify({'ok': True, 'repo_id': meta['id'],
+                    'repo': next(r for r in _repo_rows(chain_id) if r['repo_id'] == meta['id'])})
+
+
+@app.route('/api/chain/<chain_id>/sources/repo/<repo_id>/read', methods=['POST'])
+def api_project_read_repo(chain_id, repo_id):
+    """{question?}：让 Daemon 再读一次（空 = 导览），新卡追加。读完给这个项目补向量。"""
+    if not _project_ok(chain_id) or repo_id not in {r.get('repo_id') for r in _reg(chain_id)['repos']}:
+        return jsonify({'error': 'Not found'}), 404
+    import repos
+    try:
+        repos.start_read(repo_id, str((request.get_json(silent=True) or {}).get('question') or ''),
+                         on_done=lambda: _project_refresh(chain_id))
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    return jsonify({'ok': True})
+
+
+@app.route('/api/repos/<repo_id>')
+def api_repo_get(repo_id):
+    """一个代码库来源：meta、每次读的记录、全部卡片（阅读器 / 出处跳转用）。"""
+    import repos
+    meta = repos.repo_meta(repo_id)
+    if not meta:
+        return jsonify({'error': 'Not found'}), 404
+    return jsonify(dict(meta, reading=repos.reading(repo_id), cards=repos.repo_cards(repo_id),
+                        estimate=repos.estimate(meta)))
+
+
+@app.route('/api/repos/<repo_id>/file')
+def api_repo_file(repo_id):
+    """?path=…：快照里的一个文件（出处点开看上下文）。只读快照，碰不到原仓库。"""
+    import repos
+    if not repos.repo_meta(repo_id):
+        return jsonify({'error': 'Not found'}), 404
+    snap = os.path.realpath(repos.snapshot_dir(repo_id))
+    full = os.path.realpath(os.path.join(snap, request.args.get('path') or ''))
+    if not full.startswith(snap + os.sep) or not os.path.isfile(full) or '/.git/' in full:
+        return jsonify({'error': 'Not found'}), 404
+    with open(full, encoding='utf-8', errors='replace') as f:
+        return jsonify({'path': os.path.relpath(full, snap), 'text': f.read(2_000_000)})
 
 
 @app.route('/api/chain/<chain_id>/sources/docs/<doc_id>/retry', methods=['POST'])
@@ -5058,11 +5143,16 @@ def api_chain_detail(chain_id):
 
 def _attach_sources(state, cid, names=None):
     """列表 / 详情里带上：文档、额外录音、来源总数（频道的每期 + 录音 + 文档）、最近动过的时间。"""
-    reg = _reg(cid) if names is None or 'sources.json' in names else {'docs': [], 'recordings': []}
+    reg = _reg(cid) if names is None or 'sources.json' in names else {'docs': [], 'recordings': [], 'repos': []}
     state['docs'] = reg['docs']
     state['recordings'] = reg['recordings']
     n_vid = sum(1 for v in state.get('videos') or [] if v.get('task_id') and v.get('status') == 'done')
-    state['n_sources'] = n_vid + len(reg['recordings']) + len(reg['docs'])
+    n_repo = 0
+    if reg.get('repos'):                     # 代码库读出卡了才算来源（跟左栏能勾选的口径一样）
+        import repos
+        n_repo = sum(1 for r in reg['repos'] if repos.repo_cards(r.get('repo_id')))
+    state['n_sources'] = n_vid + len(reg['recordings']) + len(reg['docs']) + n_repo
+    state['n_repos'] = n_repo
     try:
         mt = max(os.path.getmtime(os.path.join(_chain_dir(cid), f)) for f in ('chain.json', 'sources.json')
                  if os.path.isfile(os.path.join(_chain_dir(cid), f)))
