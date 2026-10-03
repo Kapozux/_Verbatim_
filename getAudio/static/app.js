@@ -950,7 +950,7 @@ async function renderRecent() {
     const box = document.getElementById('recent-list');
     if (!box) return;
     try {
-        const entries = await (await fetch('/api/history')).json();
+        const entries = await (await fetch(`/api/history?limit=${RECENT_N}`)).json();
         const top = (Array.isArray(entries) ? entries : []).slice(0, RECENT_N);
         box.innerHTML = '';
         if (!top.length) { box.innerHTML = `<p class="history-empty">${T('library.noTranscripts')}</p>`; return; }
@@ -967,6 +967,9 @@ async function renderRecent() {
 }
 
 async function renderHistory() {
+    // 资料库没打开就不拉：全表 3000 多条、3 MB，转写页上转完一条也会调到这里；切到资料库时 switchTab 会再画
+    const lib = document.getElementById('tab-library');
+    if (lib && !lib.classList.contains('active')) return;
     const query = (searchInput.value || '').trim();
     try {
         const url = query
@@ -1327,7 +1330,8 @@ function showToast(message) {
 }
 
 // ========== Init ==========
-renderHistory();
+// 资料库列表不在这里拉：applyRoute → switchTab('library') 打开资料库时才画（以前这里先拉一次全表，
+// 转写页上跟「最近转写」抢服务器，最近转写要等 2 秒多）
 renderIntake();   // 初始化提交按钮状态（0 条 → 禁用）
 
 // ========== 链条：URL → 下载 → 转写 → 分析 → 总合成 ==========

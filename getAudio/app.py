@@ -1801,10 +1801,12 @@ def _chain_task_map():
     return m
 
 
-def _chain_author_for(task_id, filename):
+def _chain_author_for(task_id, filename, cm=None):
     """给一条 results/ 记录判定来源：先按 task_id 精确匹配，
-    再从文件名里的 [video_id] 兜底匹配（救回重转后留下的孤儿结果）。"""
-    cm = _chain_task_map()
+    再从文件名里的 [video_id] 兜底匹配（救回重转后留下的孤儿结果）。
+    一次判很多条时把 _chain_task_map() 取一次传进来：它每次都要看一遍所有 chain.json 有没有改过，
+    逐条现取的话 3410 条 × 70 个笔记本，列一次转写要 0.9 秒。"""
+    cm = cm or _chain_task_map()
     author = cm['by_task'].get(task_id)
     if author:
         return author
@@ -1842,13 +1844,16 @@ def api_task_status(task_id):
 
 @app.route('/api/history')
 def api_history():
-    """List all saved transcription sessions（附带 source：pipeline / mine）。"""
+    """List all saved transcription sessions（附带 source：pipeline / mine）。
+    ?limit=N 只要最新的 N 条（转写页「最近转写」只用 12 条，不必传 3 MB 的全表）。"""
     results_dir = config.RESULTS_FOLDER
     entries = []
+    limit = request.args.get('limit', type=int)
 
     if not os.path.isdir(results_dir):
         return jsonify(entries)
 
+    cm = _chain_task_map()
     for name in os.listdir(results_dir):
         meta_path = os.path.join(results_dir, name, 'meta.json')
         if os.path.isfile(meta_path):
@@ -1857,14 +1862,14 @@ def api_history():
                     e = json.load(f)
             except Exception:
                 continue
-            author = _chain_author_for(e.get('id') or name, e.get('filename'))
+            author = _chain_author_for(e.get('id') or name, e.get('filename'), cm)
             e['source'] = 'pipeline' if author else 'mine'
             if author:
                 e['creator'] = author
             entries.append(e)
 
     entries.sort(key=lambda e: e.get('date', ''), reverse=True)
-    return jsonify(entries)
+    return jsonify(entries[:limit] if limit and limit > 0 else entries)
 
 
 @app.route('/api/history/<task_id>')
@@ -2088,6 +2093,7 @@ def api_search():
     if link_mode and not link_vid:
         link_plain = re.sub(r'^https?://(www\.)?', '', query).rstrip('/')
 
+    cm = _chain_task_map()
     for name in os.listdir(results_dir):
         task_dir = os.path.join(results_dir, name)
         meta_path = os.path.join(task_dir, 'meta.json')
@@ -2108,7 +2114,7 @@ def api_search():
             )
             if matched:
                 snippet = '🔗 ' + (src or meta.get('video_id') or raw_query)
-                author = _chain_author_for(meta.get('id') or name, meta.get('filename'))
+                author = _chain_author_for(meta.get('id') or name, meta.get('filename'), cm)
                 hits.append({**meta, 'snippet': snippet,
                              'source': 'pipeline' if author else 'mine',
                              **({'creator': author} if author else {})})
@@ -2145,7 +2151,7 @@ def api_search():
                     pass
 
         if matched:
-            author = _chain_author_for(meta.get('id') or name, meta.get('filename'))
+            author = _chain_author_for(meta.get('id') or name, meta.get('filename'), cm)
             hits.append({**meta, 'snippet': snippet,
                          'source': 'pipeline' if author else 'mine',
                          **({'creator': author} if author else {})})
