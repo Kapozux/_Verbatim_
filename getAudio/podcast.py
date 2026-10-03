@@ -361,6 +361,7 @@ def _bili_audio_url(url):
 
 
 PAD_BEFORE, PAD_AFTER = 1.5, 2.5     # 转写时间点只到秒、常常早一点：先多裁一截，再在停顿处下刀
+WIDER_PADS = ((4.0, 4.0), (30.0, 30.0))   # 核对时对不上，依次放宽再找（语文课实测：40 个候选里 9 → 22 个对上）
 
 
 def snap_to_pauses(path, want_start, want_end):
@@ -471,29 +472,49 @@ def fetch_clip(card, ep, dst, strict=False, info=None):
     最后降噪、统一响度、头尾淡入淡出（课堂录音底噪大，硬切会有咔哒声）。
     info（dict）：对上了就写进 info['heard']——这一段实际听到的字（比转写准，转写可能是旧引擎的乱码）。"""
     s0, e0 = clip_window(card, ep)
-    s, e = max(0.0, s0 - PAD_BEFORE), e0 + PAD_AFTER
-    got = _fetch_range(ep, dst, s, e)
-    if not got:
+    zh = bool(re.search(r'[\u4e00-\u9fff]', card.get('quote') or ''))
+    # strict：先按估的位置找，听不出再放宽到前后 4 秒、30 秒——转写时间点漂几秒到几十秒很常见（Gemini 长段落），
+    # 几个窗口能对上的不全一样（窗口长了 Whisper 也会听岔），所以一个个试、用第一个对上的
+    for pb, pa in (((PAD_BEFORE, PAD_AFTER),) + WIDER_PADS) if strict else ((PAD_BEFORE, PAD_AFTER),):
+        s, e = max(0.0, s0 - pb), e0 + pa
+        got = _fetch_range(ep, dst, s, e)
+        if not got:
+            return None
+        try:
+            words = _words(got, zh)
+            if words is None:                   # 本机没有 Whisper：没法核对，按停顿下刀
+                snap_to_pauses(got, s0 - s, e0 - s)
+                break
+            span = align_quote(words, card.get('quote'), VERIFY_MIN if strict else 0.5)
+            if span:
+                if info is not None:
+                    info['heard'] = ''.join(w for w, a, b in words if a >= span[0] - 0.05 and b <= span[1] + 0.05).strip()
+                _cut(got, max(0.0, span[0] - 0.15), min(_wav_seconds(got), span[1] + 0.3))
+                break
+            if not strict:
+                snap_to_pauses(got, s0 - s, e0 - s)
+                break
+        except Exception as ex:  # noqa: BLE001
+            print(f'[podcast] trim {card.get("id")}: {ex}')
+            break
+    else:                                       # 几个窗口都对不上原话：不放
+        if os.path.exists(dst):
+            os.remove(dst)
         return None
     try:
-        words = _words(got, bool(re.search(r'[\u4e00-\u9fff]', card.get('quote') or '')))
-        span = align_quote(words, card.get('quote'), VERIFY_MIN if strict else 0.5) if words else None
-        if strict and words is not None and not span:
-            os.remove(got)
-            return None
-        if span and info is not None:
-            info['heard'] = ''.join(w for w, a, b in words if a >= span[0] - 0.05 and b <= span[1] + 0.05).strip()
-        if span:
-            dur = _wav_seconds(got)
-            _cut(got, max(0.0, span[0] - 0.15), min(dur, span[1] + 0.3))
-        else:
-            snap_to_pauses(got, s0 - s, e0 - s)
         if _wav_seconds(got) > CLIP_MAX_SEC:
             _cut(got, 0, CLIP_MAX_SEC)
     except Exception as ex:  # noqa: BLE001
         print(f'[podcast] trim {card.get("id")}: {ex}')
     _polish(got)
     return got
+
+
+def _old_whisper(ep):
+    """这期是旧的本机 Whisper 引擎转的（常是乱码、繁体）：原声下面写这次听到的字。别的引擎转得比这次
+    重听准（课堂录音噪音大，重听会把「鲁迅」听成「乳汁」），照用转写里的原话。"""
+    meta = ask._read_json(os.path.join(config.RESULTS_FOLDER, ep.get('task_id') or '_', 'meta.json'), {}) or {}
+    return meta.get('engine') == 'whisper'
 
 
 def _polish(path):
@@ -721,7 +742,8 @@ def start(cdir, chain_id, fmt='deep_dive', length='default', focus='', scope=Non
             if 'clip' in ln:
                 c = by_id[ln['clip']]
                 cites.resolve(c['id'])
-                ln.update(quote=heard.get(c['id']) or c['quote'], who=_who(c, corpus))
+                shown = heard.get(c['id']) if _old_whisper(corpus['episodes'][c['ep']]) else None
+                ln.update(quote=shown or c['quote'], who=_who(c, corpus))
         out.update(status='done', finished_at=study._now(), duration=duration, title=str(script.get('title') or '')[:80],
                    lang='zh' if lng.startswith('Chinese') else 'en',
                    result={'title': str(script.get('title') or '')[:80], 'plan': script.get('plan') or [],

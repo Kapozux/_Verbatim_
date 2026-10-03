@@ -165,7 +165,26 @@ podcast._words = lambda path, zh: [('Small', 0.5, 0.8), ('teams', 0.8, 1.1), ('s
     [('Talk', 0.2, 0.5), ('about', 0.5, 0.7), ('weather', 0.8, 1.3)]
 vc, vp = podcast.verify_clips(corpus, podcast.clip_candidates(corpus, corpus['cards']), TMP, 3)
 ok['verify_candidates'] = [c['id'] for c in vc] == [card0['id']] and os.path.isfile(vp[card0['id']])
+tries = []
+
+
+def far_words(path, zh):                # 只有放宽到前后 30 秒的那次窗口里才听得到原话（时间点漂了）
+    tries.append(round(podcast._wav_seconds(path)))
+    return [('Small', 30.5, 30.8), ('teams', 30.8, 31.1), ('ship', 31.1, 31.3), ('faster', 31.3, 31.7),
+            ('than', 31.7, 31.9), ('big', 31.9, 32.1), ('ones', 32.1, 32.5)] if podcast._wav_seconds(path) > 30 else \
+        [('Talk', 0.2, 0.5), ('about', 0.5, 0.7), ('weather', 0.8, 1.3)]
+
+
+podcast._words = far_words
+far = podcast.fetch_clip(card0, corpus['episodes'][0], os.path.join(TMP, 'clip_far.wav'), strict=True)
+ok['widen'] = far is not None and len(tries) == 3 and tries[0] < tries[1] < tries[2] and podcast._wav_seconds(far) < 5
 podcast._words = real_words
+meta_p = os.path.join(A.config.RESULTS_FOLDER, TID0, 'meta.json')
+m = json.load(open(meta_p))
+was = podcast._old_whisper(corpus['episodes'][0])
+json.dump(dict(m, engine='whisper'), open(meta_p, 'w'))
+ok['heard_only_old_whisper'] = not was and podcast._old_whisper(corpus['episodes'][0])
+json.dump(m, open(meta_p, 'w'))
 
 # 6 接口：估价、做一份（后台）、列表、取音频、删掉连 mp3 一起删、辩论没填双方 400
 c = A.app.test_client()
