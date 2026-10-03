@@ -731,7 +731,7 @@ def _setup(cdir, scope, focus, lang):
     pool = corpus['cards'] if pool is None else pool
     if not pool:
         raise RuntimeError('Nothing to work from in the selected sources')
-    lng = study._lang(corpus, lang)
+    lng = study._lang(corpus, lang, focus)
     cards, thinned = study._pick(corpus, pool, focus)
     return corpus, pool, cards, thinned, lng
 

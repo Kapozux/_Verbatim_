@@ -51,7 +51,7 @@ Format: {format}.
 
 First write the plan, then the lines.
 title: a short episode title (at most 20 Chinese characters or 10 English words) that makes a specific point.
-plan: what the listener should come away with, and the 3–5 segments that get them there, in order, each one sentence. Start with a hook (a surprising fact, a quote, a question), not with "welcome to the show". End with the one or two things worth remembering.
+plan: what the listener should come away with, and the 3–5 segments that get them there, in order, each one sentence. Start with a hook (a surprising fact, a quote, a question), not with "welcome to the show". Right after the hook, a host says in one or two sentences what material they went through for this episode, the way a person would: what kind of thing it is and what it covers ("今天我们读的是一本 IB 计算机科学的教材，外加两份复习笔记" / "for this one we went through an IB Computer Science textbook and two sets of revision notes"). Use the source list above, but say the titles naturally: no file names, underscores, dates or "(1)". End with the one or two things worth remembering.
 
 Lines:
 - Each line is one turn: {{"speaker": "...", "text": "...", "style": "...", "cite": ["4-12"]}}.
@@ -81,7 +81,7 @@ Draft:
    - About every other turn starts with a natural reaction or filler in the script's language ("嗯", "对", "哎", "等一下", "说实话", "我跟你说"; "hmm", "right", "wait", "honestly", "see").
    - At least three times, a host cuts in: the turn starts by finishing or interrupting the other's thought, and the previous turn may end mid-sentence with "——".
    - Use the vocal tags <laugh>, <short pause> or <sigh> inside text 2–4 times in total, where they fit. No other tags.
-4. Don't shorten it: the result has at least as many turns and words as the draft. Keep every {{"clip": ...}} line where it is, with the line before setting it up and the line after reacting to it. Keep the title, the same speakers, JSON shape and fields.
+4. Don't shorten it: the result has at least as many turns and words as the draft. Keep the early line that says what material the hosts went through (add one right after the hook if the draft has none). Keep every {{"clip": ...}} line where it is, with the line before setting it up and the line after reacting to it. Keep the title, the same speakers, JSON shape and fields.
 Return JSON only: {{"title": "...", "lines": [...]}}"""
 
 
@@ -618,7 +618,7 @@ def start(cdir, chain_id, fmt='deep_dive', length='default', focus='', scope=Non
         pool = corpus['cards'] if pool is None else pool
         if not pool:
             raise RuntimeError('Nothing to work from in the selected sources')
-        lng = study._lang(corpus, lang)
+        lng = study._lang(corpus, lang, focus)
         hosts = HOSTS['zh' if lng.startswith('Chinese') else 'en']
         cards, thinned = study._pick(corpus, pool, focus)
         cites = citations.Citations().add(corpus, cards)

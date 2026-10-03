@@ -218,10 +218,22 @@ def _pick(corpus, pool, focus, budget=None):
     return _thin(corpus, pool, budget)
 
 
-def _lang(corpus, want=None):
+def _lang(corpus, want=None, focus=''):
+    """产出用什么语言：界面明确选了就照办；「重点」里说了（「我要中文的」「in English」）或者「重点」
+    是用哪种语言写的，就用哪种；都没有才跟来源的语言。"""
     if want == 'zh':
         return 'Chinese (简体中文)'
     if want == 'en':
+        return 'English'
+    said = ask.asked_lang(focus)
+    if said:
+        return said
+    # 「重点」本身的语言：要有几句话才算（「Unit A」「React hooks」这种词组只是术语，不代表要英文）
+    cjk = len(ask._CJK.findall(focus or ''))
+    words = len(re.findall(r'[A-Za-z]{2,}', focus or ''))
+    if cjk >= 4 and cjk >= words * 1.5:
+        return 'Chinese (简体中文)'
+    if words >= 4 and not cjk:
         return 'English'
     return 'Chinese (简体中文)' if ask._content_lang(corpus) == 'Chinese' else 'English'
 
@@ -479,7 +491,7 @@ def start(cdir, chain_id, kind, focus='', n=None, scope=None, outline=None, lang
                                (corpus['episodes'][c['ep']].get('doc_id'), corpus['episodes'][c['ep']].get('task_id'))]
             if not pool:
                 raise RuntimeError('Nothing to work from in the selected sources')
-            lng = _lang(corpus, lang)
+            lng = _lang(corpus, lang, focus)
             if kind == 'coverage':
                 result, cites, used, thinned = _outline(corpus, pool, lng, focus, outline)
             else:

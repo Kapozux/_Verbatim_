@@ -588,3 +588,68 @@ def transcript_passages(task_id):
 
 def list_docs(ids):
     return [m for m in (doc_meta(i) for i in ids) if m]
+
+
+# ================= 来源概述（阅读器顶上那块：这份文档讲什么、有哪些主题）=================
+
+GUIDE_PROMPT = """Below is a document (or, for a long one, its table of contents plus excerpts from across it). Write a short guide to it for someone deciding what to read.
+Write everything in {lang}, even if the document is in another language. Keep names and technical terms as they are when there is no common translation.
+Return JSON only: {{"summary": "3-5 plain sentences: what this document is, what it covers, and what it is useful for", "topics": ["5-8 key topics it covers, each 2-6 words"]}}
+
+Title: {title}
+
+{text}"""
+
+GUIDE_SAMPLE_CHARS = 60000
+_guide_lock = threading.Lock()
+
+
+def _guide_sample(md, limit=GUIDE_SAMPLE_CHARS):
+    """长文档不整本送：目录（# 标题行）+ 开头 + 均匀抽几段。整本教材（130 万字）也只送约 6 万字。"""
+    if len(md) <= limit:
+        return md
+    heads = '\n'.join(ln for ln in md.splitlines() if re.match(r'#{1,3}\s', ln))[:limit // 5]
+    start = md[:limit // 4]
+    rest = limit - len(heads) - len(start)
+    n, size = 8, max(500, rest // 8)
+    step = (len(md) - len(start)) // n
+    picks = [md[len(start) + i * step: len(start) + i * step + size] for i in range(n)]
+    return ('Table of contents:\n' + heads + '\n\nBeginning:\n' + start + '\n\nExcerpts:\n'
+            + '\n[…]\n'.join(picks))
+
+
+def doc_guide(doc_id, lang):
+    """写过的概述 {summary, topics}；没写过 → None。按语言分开存（界面换语言不用重写另一种）。"""
+    g = _read_json(os.path.join(doc_dir(doc_id), 'guide.json'), {}) or {}
+    return g.get(lang)
+
+
+def write_doc_guide(doc_id, lang):
+    """便宜模型写一份概述，存进 guide.json；同一份文档同一种语言只写一次。"""
+    with _guide_lock:
+        have = doc_guide(doc_id, lang)
+        if have:
+            return have
+        meta = doc_meta(doc_id) or {}
+        md = doc_markdown(doc_id).strip()
+        if not md:
+            raise RuntimeError('The document has no text')
+        import summarize
+        raw = summarize._call_gemini(GUIDE_PROMPT.format(
+            lang='Chinese (简体中文)' if lang == 'zh' else 'English', title=meta.get('title') or '',
+            text=_guide_sample(md)))
+        m = re.search(r'\{.*\}', raw or '', re.S)
+        try:
+            obj = json.loads(m.group(0)) if m else {}
+        except ValueError:
+            obj = {}
+        summary = str(obj.get('summary') or '').strip()
+        if not summary:
+            raise RuntimeError('The model returned nothing usable')
+        g = {'summary': summary[:1500],
+             'topics': [str(t).strip()[:60] for t in obj.get('topics') or [] if str(t).strip()][:8]}
+        path = os.path.join(doc_dir(doc_id), 'guide.json')
+        all_g = _read_json(path, {}) or {}
+        all_g[lang] = g
+        _write_json(path, all_g)
+        return g

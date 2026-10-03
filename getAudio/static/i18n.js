@@ -142,6 +142,16 @@ const STRINGS = {
         "src.open": "Open",
 
         "src.removeConfirm": "Remove \"{t}\" from this notebook? The file itself is kept.",
+        "src.guide": "Source guide",
+        "src.guideWriting": "Writing a short guide to this source…",
+        "src.moveToFolder": "Move to folder",
+        "src.folderOut": "Take out of folder",
+        "src.folderNew": "New folder",
+        "src.folderNewPh": "New folder name",
+        "src.folderRename": "Rename folder",
+        "src.folderSave": "Save",
+        "src.folderDelete": "Delete folder",
+        "src.folderDeleteConfirm": "Delete the folder \"{t}\"? The sources in it stay in this notebook.",
 
         "src.indexing": "Indexing new sources so you can ask them…",
 
@@ -1595,6 +1605,16 @@ const STRINGS = {
         "src.open": "打开",
 
         "src.removeConfirm": "从这个笔记本里移除「{t}」？文件本身不会删。",
+        "src.guide": "来源概述",
+        "src.guideWriting": "正在写这份来源的概述……",
+        "src.moveToFolder": "移到文件夹",
+        "src.folderOut": "移出文件夹",
+        "src.folderNew": "新建",
+        "src.folderNewPh": "新文件夹名字",
+        "src.folderRename": "重命名文件夹",
+        "src.folderSave": "保存",
+        "src.folderDelete": "删除文件夹",
+        "src.folderDeleteConfirm": "删除文件夹「{t}」？里面的来源还留在笔记本里。",
 
         "src.indexing": "正在给新来源建索引，建好就能提问……",
 

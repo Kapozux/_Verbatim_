@@ -69,6 +69,16 @@ _Avoid_：字幕（只指平台自带的字幕轨）
 代码里：repo、`repos.py`、`results/_repos/<repo_id>/`、`sources.json` 的 `repos`、卡片 id `r<固定号>-<下标>`。
 _Avoid_：仓库（单说时容易跟 git 远端混）、笔记本（那是 Verbatim 的笔记本）
 
+**来源文件夹**：
+左栏里把几个来源收在一起的文件夹，只为理整齐；提问范围仍按勾选算，勾文件夹 = 勾里面全部。一个来源只在一个文件夹里。
+代码里：`sources.json` 的 `folders`（`[{id, name, items: [来源 id]}]`），`PUT /api/chain/<id>/sources/folders`。
+_Avoid_：分组（那是首页上笔记本的合集）、合集
+
+**来源概述**：
+阅读器顶上「这份讲什么 + 几个主题」那块（照 NotebookLM 的 Source guide）。转写用转写完就有的摘要；文档第一次打开时写一份，按界面语言存。
+代码里：guide、`sources.write_doc_guide`、`results/_docs/<doc_id>/guide.json`、`/api/sources/guide`。
+_Avoid_：摘要（单说指转写页那份带分段的 summary）
+
 ## 证据
 
 **证据卡**：

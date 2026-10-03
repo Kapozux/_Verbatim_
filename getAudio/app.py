@@ -4013,7 +4013,40 @@ def api_project_sources(chain_id):
         'videos': vids, 'recordings': _rec_rows(chain_id), 'docs': _doc_rows(chain_id), 'repos': _repo_rows(chain_id),
         'indexing': chain_id in _project_jobs, 'moye': sources.moye_alive(timeout=1),
         'has_cards': bool(have_cards), 'cards_missing': len(missing) if not state.get('url') else 0,
+        'folders': _reg(chain_id).get('folders') or [],
     }, ensure_ascii=False), mimetype='application/json')
+
+
+_FOLDER_ID = re.compile(r'[a-z0-9]{1,16}')
+
+
+@app.route('/api/chain/<chain_id>/sources/folders', methods=['PUT'])
+def api_project_folders(chain_id):
+    """左栏的来源文件夹，整份替换：{folders: [{id, name, items: [来源 id]}]}。只是整理左栏，
+    不影响提问范围、不动来源本身；一个来源只在一个文件夹里（后出现的那份不算）。"""
+    if not _project_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    raw = (request.get_json(silent=True) or {}).get('folders')
+    if not isinstance(raw, list) or len(raw) > 50:
+        return jsonify({'error': 'Bad folders'}), 400
+    seen, out = set(), []
+    for f in raw:
+        if not isinstance(f, dict):
+            continue
+        fid = str(f.get('id') or '')
+        if not _FOLDER_ID.fullmatch(fid) or fid in {x['id'] for x in out}:
+            fid = uuid.uuid4().hex[:8]
+        items = []
+        for sid in f.get('items') or []:
+            if isinstance(sid, str) and 0 < len(sid) <= 64 and sid not in seen:
+                seen.add(sid)
+                items.append(sid)
+        out.append({'id': fid, 'name': str(f.get('name') or '').strip()[:40] or 'Folder', 'items': items})
+    with _chain_write_lock:
+        reg = _reg(chain_id)
+        reg['folders'] = out
+        _reg_save(chain_id, reg)
+    return jsonify({'ok': True, 'folders': out})
 
 
 def _project_add_docs(cid, doc_ids):
@@ -4401,6 +4434,12 @@ def api_project_remove_source(chain_id, source_id):
                                 os.remove(f)
                     except Exception:  # noqa: BLE001
                         pass
+        if removed:                     # 文件夹里也拿掉（文件夹本身留着）
+            reg = _reg(chain_id)
+            if any(source_id in (f.get('items') or []) for f in reg.get('folders') or []):
+                for f in reg['folders']:
+                    f['items'] = [x for x in f.get('items') or [] if x != source_id]
+                _reg_save(chain_id, reg)
     if not removed:
         return jsonify({'error': 'Not in this notebook'}), 404
     return jsonify({'ok': True})
@@ -4538,6 +4577,51 @@ def api_doc_original(doc_id):
     if not os.path.isfile(path):
         return jsonify({'error': 'Not found'}), 404
     return send_file(path, download_name=meta['filename'], as_attachment=False)
+
+
+@app.route('/api/sources/guide')
+def api_source_guide():
+    """来源概述（来源栏阅读器顶上那块）：?doc=<id> | ?task=<id>，&lang=zh|en。只读现成的，不花钱：
+    转写用转写完就写好的摘要（summary.json），文档用写过的概述（没有就 guide: null，前端再 POST 去写）。"""
+    import sources
+    lang = 'zh' if request.args.get('lang') == 'zh' else 'en'
+    tid = request.args.get('task') or ''
+    if tid:
+        if not re.fullmatch(r'[0-9a-f]{32}', tid):
+            return jsonify({'error': 'Not found'}), 404
+        try:
+            with open(os.path.join(config.RESULTS_FOLDER, tid, 'summary.json'), 'r', encoding='utf-8') as f:
+                sm = json.load(f) or {}
+        except (OSError, ValueError):
+            sm = {}
+        if not sm.get('overview'):
+            return jsonify({'guide': None})
+        return jsonify({'guide': {'summary': sm['overview'],
+                                  'topics': [x.get('title') for x in sm.get('sections') or [] if x.get('title')][:8]}})
+    did = request.args.get('doc') or ''
+    if not sources.valid_doc_id(did) or not sources.doc_meta(did):
+        return jsonify({'error': 'Not found'}), 404
+    return jsonify({'guide': sources.doc_guide(did, lang)})
+
+
+@app.route('/api/sources/guide', methods=['POST'])
+def api_source_guide_write():
+    """{doc, lang}：给文档写概述（便宜模型，约 $0.001–0.005 一份；大文档只读目录和抽样段落），写过的直接返回。"""
+    import sources
+    body = request.get_json(silent=True) or {}
+    did = str(body.get('doc') or '')
+    lang = 'zh' if body.get('lang') == 'zh' else 'en'
+    meta = sources.doc_meta(did) if sources.valid_doc_id(did) else None
+    if not meta:
+        return jsonify({'error': 'Not found'}), 404
+    if meta.get('status') != 'ready':
+        return jsonify({'error': 'The document is not ready yet'}), 409
+    try:
+        with usage.scope(ref='guide:' + did):
+            g = sources.write_doc_guide(did, lang)
+    except Exception as e:  # noqa: BLE001
+        return jsonify({'error': str(e)[:200]}), 502
+    return jsonify({'guide': g})
 
 
 def _project_refresh(cid, force_build=False):

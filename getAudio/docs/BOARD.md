@@ -9,7 +9,7 @@
 
 | 事 | 谁 | 在哪 | 状态 |
 |---|---|---|---|
-| （空） | | | |
+| 笔记本 8 个问题（对话称呼「user」、滚动条、中文回英文、Quiz 第 10 题、来源阅读器返回、来源概述、播客开场、来源文件夹） | getaudio-fa | 分支 `feature/notebook-fixes`（worktree `notebook-fixes`） | 已本地提交，测试全过；等合进 main、重启 5001 |
 
 ## 等用户拍板
 
@@ -35,6 +35,8 @@
 | P2 | 打包版（DMG / EXE）：声纹模型下载（37 MB）、跑不了自带 Daemon（`sys.executable` 不是 Python） | 打包 | `docs/handoff/voices.md`、`code-repo-source.md` |
 | P3 | 播客改单句；幻灯片 Windows 字体验证；AI 配图 / 导出 Google Slides | 播客 / 幻灯片 | `docs/handoff/podcast-slides.md` |
 | P3 | 费用页：TTS 免费期（2026 年底前）记 $0 | 费用 | — |
+| P2 | 只转写没分析的博主（`analyze: False`、没开 `index_transcripts`）放进笔记本后，对话 / 工作台点了只报「Nothing to work from」：应该先说清楚，并给一个「把原文加进检索（约 $X）」的按钮。马督工 10-03 已手动补上（17,859 段向量，$1.0） | 笔记本 | `docs/handoff/notebook-fixes.md` |
+| P3 | 追问「你确定吗」有时接到更早的那张闪卡上（聊天记录里贴过好几张时） | 问答 | `docs/handoff/notebook-fixes.md` |
 | P3 | 镜头输出偶尔是繁体中文 | 分析 | 10-01 记的 |
 | P3 | 414 条转写时间戳中途乱跳 | 转写 | 10-01 开过单独任务，状态待查 |
 | P3 | 演示实例 5002 一直崩（launchd 读不了 `~/Documents`） | 演示 | 用户说先把 5001 稳定了再管 |
