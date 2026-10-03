@@ -3367,7 +3367,7 @@ def api_chain_create():
         hs = _read_chain(host)
         existing = _find_chain_by_url(url, skip=host)
         if hs.get('url') and _norm_chain_url(hs['url']) == _norm_chain_url(url):
-            return jsonify({'error': 'This channel is already in this project'}), 400
+            return jsonify({'error': 'This channel is already in this notebook'}), 400
         if existing:
             try:
                 _project_add_channels(host, [existing])
@@ -4453,7 +4453,7 @@ def api_project_remove_source(chain_id, source_id):
                     except Exception:  # noqa: BLE001
                         pass
     if not removed:
-        return jsonify({'error': 'Not in this project'}), 404
+        return jsonify({'error': 'Not in this notebook'}), 404
     return jsonify({'ok': True})
 
 
@@ -4558,7 +4558,7 @@ def api_project_build_cards(chain_id):
     with _chain_write_lock:
         state = _read_chain(chain_id)
         if state.get('url'):
-            return jsonify({'error': 'Channel projects extract cards as part of the channel run'}), 400
+            return jsonify({'error': 'Notebooks with a channel extract cards as part of the channel run'}), 400
         if not any(v.get('task_id') for v in state.get('videos') or []):
             return jsonify({'error': 'Add some recordings first'}), 400
         state['analyze'] = True
@@ -4834,7 +4834,7 @@ def api_studio_view(chain_id):
     who = str(body.get('chain') or chain_id)
     people = _project_person_ids(chain_id)
     if who not in people:
-        return jsonify({'error': 'Not in this project'}), 400
+        return jsonify({'error': 'Not in this notebook'}), 400
     p = people[who]
     try:
         item, new = study.add_view(_chain_dir(chain_id), body.get('view'), who,

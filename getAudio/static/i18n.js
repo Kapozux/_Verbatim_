@@ -11,7 +11,7 @@ const STRINGS = {
         'nav.tagline': 'Audio → transcript → insight · local',
         'nav.transcribe': 'Transcribe',
         'nav.xhs': 'Xiaohongshu',
-        'nav.creators': 'Projects',
+        'nav.creators': 'Notebooks',
         'nav.library': 'Library',
 
         'transcribe.title': 'Transcribe',
@@ -67,7 +67,7 @@ const STRINGS = {
 
         "common.cancel": "Cancel",
 
-        "pj.new": "New project",
+        "pj.new": "New notebook",
 
         "pj.newTitle": "What are you working on?",
 
@@ -83,8 +83,8 @@ const STRINGS = {
 
         "pj.t.topicD": "Several creators plus articles on one subject. Compare who says what.",
 
-        "pj.t.blank": "Blank project",
-        "pj.eyebrow": "Project",
+        "pj.t.blank": "Blank notebook",
+        "pj.eyebrow": "Notebook",
         "pj.updated": "Updated {d}",
 
         "pj.t.blankD": "Start empty and add whatever you like.",
@@ -93,7 +93,7 @@ const STRINGS = {
 
         "pj.create": "Create and add sources",
 
-        "pj.nameIt": "Give the project a name",
+        "pj.nameIt": "Give the notebook a name",
 
         "pj.creatorTitle": "Research a creator",
 
@@ -141,7 +141,7 @@ const STRINGS = {
 
         "src.open": "Open",
 
-        "src.removeConfirm": "Remove \"{t}\" from this project? The file itself is kept.",
+        "src.removeConfirm": "Remove \"{t}\" from this notebook? The file itself is kept.",
 
         "src.indexing": "Indexing new sources so you can ask them…",
 
@@ -169,8 +169,8 @@ const STRINGS = {
 
         "cx.scopePicked": "{n} picked",
 
-        "cx.introProject": "Answers come only from this project's {n} sources, and every sentence links back to where it came from.",
-        "cx.introProjectOne": "Answers come only from this project's one source, and every sentence links back to where it came from.",
+        "cx.introProject": "Answers come only from this notebook's {n} sources, and every sentence links back to where it came from.",
+        "cx.introProjectOne": "Answers come only from this notebook's one source, and every sentence links back to where it came from.",
         "cx.intro2P": "Click a citation to open the passage it came from: the page of a document, or the second in a recording.",
         "cx.intro3P": "If your sources don't cover something, you'll be told so instead of getting a guess.",
         "cx.placeholderP": "Ask anything about these sources…",
@@ -179,7 +179,7 @@ const STRINGS = {
 
         "reader.page": "Page {n}",
 
-        "pj.untitled": "Untitled project",
+        "pj.untitled": "Untitled notebook",
 
         "nb.sources": "Sources",
 
@@ -197,7 +197,7 @@ const STRINGS = {
         "vc.srcSub": "{main} and {n} more",
         "vc.srcNone": "Not identified yet",
         "vc.srcRun": "Working on voices…",
-        "cx.desc.voices": "Recognised by voice: across this project, the same name means the same person. Press play to listen, and fix anything that is wrong. This runs on this computer and no audio is uploaded.",
+        "cx.desc.voices": "Recognised by voice: across this notebook, the same name means the same person. Press play to listen, and fix anything that is wrong. This runs on this computer and no audio is uploaded.",
         "vc.coverage": "{done} of {total} recordings have voiceprints",
         "vc.find": "Find the original audio on this computer",
         "vc.findHint": "Older transcripts kept no audio. This looks for each original file by name in Desktop, Downloads, Music, Movies and Documents, and only uses it if the length matches. About 3 minutes per hour of audio.",
@@ -246,7 +246,7 @@ const STRINGS = {
 
         "nb.srcEmptyD": "Add files, links or text, then ask questions about them.",
 
-        "nb.emptyT": "Let's start your project",
+        "nb.emptyT": "Create your first notebook",
 
         "nb.emptyD": "Add the material you're working with: recordings, a channel, documents or notes. Then ask anything, and every answer links back to where it came from.",
 
@@ -276,14 +276,14 @@ const STRINGS = {
         "rd.catchUp": "Update now (about $0.1)",
         "rd.catchUpStarted": "Updating the overview in the background. It takes a minute or two; reopen it to see the new one.",
         "rd.regenConfirm": "Regenerate “{name}”? The current version is kept in history.",
-        "pj.home": "All projects",
+        "pj.home": "All notebooks",
         "st.emptyT": "What you make here is saved here.",
         "st.emptyD": "Pick a tile above to turn your sources into a report, flashcards, a quiz and more. Answers you save from the chat land here too.",
         "cx.copy": "Copy",
         "cx.copied": "Copied.",
         "cx.copyFailed": "Couldn't copy.",
         "cx.disclaimer": "Answers come only from what they said in these episodes. Click a number to hear the original.",
-        "cx.disclaimerP": "Answers come only from this project's sources. Click a number to check the original.",
+        "cx.disclaimerP": "Answers come only from this notebook's sources. Click a number to check the original.",
         "pjm.more": "More",
         "pjm.rename": "Edit title",
         "pjm.emoji": "Change emoji",
@@ -303,7 +303,7 @@ const STRINGS = {
         "pjm.colAdded": "Added to “{name}”.",
         "pjm.all": "All",
         "pjm.colDelete": "Delete this collection",
-        "pjm.colDeleteConfirm": "Delete the collection “{name}”? The projects in it stay.",
+        "pjm.colDeleteConfirm": "Delete the collection “{name}”? The notebooks in it stay.",
         "nb.fold": "Collapse panel",
         "nb.unfold": "Expand panel",
         "nav.collapse": "Collapse sidebar",
@@ -427,9 +427,9 @@ const STRINGS = {
 
         "as.queued": "{n} video(s) sent for transcription; they'll appear in Sources when done.",
 
-        "as.channelHas": "This project already has a channel. Start a new project for another one.",
+        "as.channelHas": "This notebook already has a channel. Start a new notebook for another one.",
 
-        "as.channelElsewhere": "This channel is already in another project. Opening it.",
+        "as.channelElsewhere": "This channel is already in another notebook. Opening it.",
 
         "as.skipped": "{n} file(s) skipped (unsupported type)",
 
@@ -447,7 +447,7 @@ const STRINGS = {
 
         "cards.building": "Extracting…",
 
-        'creators.title': 'Projects',
+        'creators.title': 'Notebooks',
         'creators.subtitle': 'Put recordings, channels and documents together, then ask them anything. Every answer links back to where it came from: the exact second in a recording, or the page in a document.',
         'creators.urlPlaceholder': 'https://www.youtube.com/@creator  ·  a channel / homepage (for one video, use Transcribe)',
         'creators.authorPlaceholder': 'Author (optional)',
@@ -500,7 +500,7 @@ const STRINGS = {
         'creators.hint': 'YouTube tip: use <code>channel/videos</code>. Bilibili &amp; other '
             + 'yt-dlp sites work too. <b>Prefer subtitles</b> skips download + transcription when a '
             + 'video already has captions.',
-        'creators.empty': 'No projects yet. Click "New project" to start one.',
+        'creators.empty': 'No notebooks yet. Click "New notebook" to start one.',
         'creators.bangumiHidden': '{n} anime/show transcripts are not listed here, since a series has no creator behind it. Find them in the Library.',
 
         'library.title': 'Library',
@@ -1009,8 +1009,8 @@ const STRINGS = {
         "clip.loading": "Cutting this part from the original video (about 10 seconds the first time)…",
         "clip.download": "Download clip",
         "clip.failed": "Couldn’t get the audio.",
-        "col.open": "New project",
-        "col.newTitle": "New project",
+        "col.open": "New notebook",
+        "col.newTitle": "New notebook",
         "col.addTitle": "Add recordings from your library",
         "col.sub": "Put any recordings together (interviews, lectures, meetings, several creators) and ask, compare stances and export them as one.",
         "col.namePh": "Name, e.g. User interviews · September",
@@ -1023,18 +1023,18 @@ const STRINGS = {
         "col.tabCreators": "Whole creators",
         "col.searchPh": "Search titles…",
         "col.cost": "Anything already analysed is reused for free; new recordings cost about 5¢ each.",
-        "col.create": "Build project",
+        "col.create": "Create notebook",
         "col.none": "Nothing matches.",
         "col.picked": "{n} transcripts · {m} creators picked",
         "col.pickSome": "Pick at least one transcript or creator.",
         "col.nameIt": "Give it a name.",
         "col.creating": "Starting…",
         "col.started": "Building. Reused material is instant, new recordings take a minute or two each.",
-        'col.section': 'Projects',
+        'col.section': 'Notebooks',
         'col.creatorsSection': 'Creators',
         "col.cardMeta": "{kind} · {n} items",
-        "col.fromCart": "Make a project",
-        "col.eyebrow": "PROJECT · {kind} · {n} ITEMS",
+        "col.fromCart": "Make a notebook",
+        "col.eyebrow": "NOTEBOOK · {kind} · {n} ITEMS",
         "col.add": "Add recordings",
         "col.rebuild": "Rebuild",
         "col.actionsHint": "Add recordings = pick more transcripts; only the new ones are analysed. Rebuild = redo the overview and tags.",
@@ -1046,7 +1046,7 @@ const STRINGS = {
         "cx.desc.readCol": "What these recordings cover, where speakers agree and disagree, and the same material from other angles.",
         "cx.desc.askCol": "Ask across all of them; answers say who said what, in which recording, with the quote.",
         "cx.desc.topicsCol": "For each topic: who is for or against it, across the recordings.",
-        "cx.desc.episodesCol": "Every recording in this project.",
+        "cx.desc.episodesCol": "Every recording in this notebook.",
         "cards.speaker": "Speaker",
         "cards.allSpeakers": "All speakers",
         "radar.open": "Topic radar",
@@ -1103,8 +1103,8 @@ const STRINGS = {
         "cx.intro2": "Every sentence links to the verbatim quote; click it to jump to that second in the transcript or the video.",
         "cx.intro3": "If they never talked about it, you’ll be told so. That’s an answer too.",
         "cx.tab.read": "Portrait",
-        "nb.tile.compare": "How the creators in this project answer the same question",
-        "nb.tile.compareCol": "How the creators in this project answer the same question",
+        "nb.tile.compare": "How the creators in this notebook answer the same question",
+        "nb.tile.compareCol": "How the creators in this notebook answer the same question",
         "cx.desc.compare": "Ask one question and see how each creator answers it, side by side, with their own words.",
         "cx.tab.compare": "Compare",
         "vp.needTag": "First its {n} evidence cards need topic tags (about {cost}). When that's done it appears in the list below.",
@@ -1126,7 +1126,7 @@ const STRINGS = {
         "vs.goCost": "Generate (about {cost})",
         "vs.doneN": "done, {n} cards",
         "vs.noLink": "no video link",
-        "vs.none": "No transcribed episodes in this project yet.",
+        "vs.none": "No transcribed episodes in this notebook yet.",
         "vs.noVideo": "None of these recordings has a video link. Visual cards need a YouTube or Bilibili link for now.",
         "vs.started": "Reading the frames. It shows up under Saved when it's ready.",
         "vs.nEps": "{n} episodes",
@@ -1199,14 +1199,14 @@ const STRINGS = {
         "src.openCreator": "Open their own page",
         "pc.ph": "One question for all of them…",
         "pc.hint": "Pick 2 to 4 people.",
-        "pp.loose": "Recordings in this project",
+        "pp.loose": "Recordings in this notebook",
         "pp.unnamed": "Unnamed",
         "pp.wait": "processing",
         "pp.notYet": "Still being transcribed and analysed",
-        "src.removeCreator": "Remove from project",
-        "src.removeCreatorConfirm": "Remove {t} from this project? Their transcripts and analysis stay in your library (other projects may use them).",
-        "src.sharedHint": "This creator's transcripts and analysis are shared with other projects",
-        "as.channelShared": "This channel is already in your library, so the project reuses it (no re-transcribing).",
+        "src.removeCreator": "Remove from notebook",
+        "src.removeCreatorConfirm": "Remove {t} from this notebook? Their transcripts and analysis stay in your library (other notebooks may use them).",
+        "src.sharedHint": "This creator's transcripts and analysis are shared with other notebooks",
+        "as.channelShared": "This channel is already in your library, so the notebook reuses it (no re-transcribing).",
         "rd.docs": "Pick one to read",
         "rd.portrait": "Full portrait",
         "rd.portraitDesc": "Worldview, ways of thinking, rhetoric, blind spots",
@@ -1222,8 +1222,8 @@ const STRINGS = {
         "lens.quotes.desc": "His most representative lines",
         "lens.worldview.desc": "Where he stands on everything, in one table",
         "sub.unfollow": "Turn off auto-sync",
-        'creators.yours': 'Your projects',
-        'creators.search': 'Find a project…',
+        'creators.yours': 'Your notebooks',
+        'creators.search': 'Find a notebook…',
         "creators.noMatch": "No creator matches.",
         "creators.nEpisodes": "{n} episodes",
         "creators.chipPortrait": "Portrait",
@@ -1276,7 +1276,7 @@ const STRINGS = {
         "cx.covSearchP": "Searched {n} passages from {m} sources: {h} matched, read the {k} most relevant",
         "cx.covSpreadP": "{n} passages from {m} sources: read {k}, spread evenly",
         "cx.desc.askProj": "Ask your sources. Every sentence links back to the page or the second it came from.",
-        "cx.desc.episodesProj": "Everything in this project: documents, notes, recordings and videos.",
+        "cx.desc.episodesProj": "Everything in this notebook: documents, notes, recordings and videos.",
         "cx.desc.readProj": "An overview written from the sources, and the same material read from other angles.",
         "cx.covAll": "Searched all {n} cards from {m} episodes",
         "cx.covSearch": "Searched {n} cards from {m} episodes: {h} matched, read the {k} most relevant",
@@ -1466,7 +1466,7 @@ const STRINGS = {
         'nav.tagline': '音频 → 转写 → 洞察 · 本地部署',
         'nav.transcribe': '转写',
         'nav.xhs': '小红书',
-        'nav.creators': '项目',
+        'nav.creators': '笔记本',
         'nav.library': '资料库',
 
         'transcribe.title': '转写',
@@ -1520,7 +1520,7 @@ const STRINGS = {
 
         "common.cancel": "取消",
 
-        "pj.new": "新建项目",
+        "pj.new": "新建笔记本",
 
         "pj.newTitle": "你要做什么？",
 
@@ -1536,8 +1536,8 @@ const STRINGS = {
 
         "pj.t.topicD": "几个博主加几篇文章，围绕一个话题，对比各方怎么说。",
 
-        "pj.t.blank": "空白项目",
-        "pj.eyebrow": "项目",
+        "pj.t.blank": "空白笔记本",
+        "pj.eyebrow": "笔记本",
         "pj.updated": "更新于 {d}",
 
         "pj.t.blankD": "从空的开始，想放什么放什么。",
@@ -1546,7 +1546,7 @@ const STRINGS = {
 
         "pj.create": "创建，开始加来源",
 
-        "pj.nameIt": "给项目起个名字",
+        "pj.nameIt": "给笔记本起个名字",
 
         "pj.creatorTitle": "研究一个博主",
 
@@ -1594,7 +1594,7 @@ const STRINGS = {
 
         "src.open": "打开",
 
-        "src.removeConfirm": "从这个项目里移除「{t}」？文件本身不会删。",
+        "src.removeConfirm": "从这个笔记本里移除「{t}」？文件本身不会删。",
 
         "src.indexing": "正在给新来源建索引，建好就能提问……",
 
@@ -1622,8 +1622,8 @@ const STRINGS = {
 
         "cx.scopePicked": "已挑 {n} 个",
 
-        "cx.introProject": "只凭这个项目的 {n} 个来源回答，每句都能点回出处。",
-        "cx.introProjectOne": "只凭这个项目的 1 个来源回答，每句都能点回出处。",
+        "cx.introProject": "只凭这个笔记本的 {n} 个来源回答，每句都能点回出处。",
+        "cx.introProjectOne": "只凭这个笔记本的 1 个来源回答，每句都能点回出处。",
         "cx.intro2P": "点引用就能打开出处：文档的那一页，或录音的那一秒。",
         "cx.intro3P": "来源里没有的内容会直说没有，不会替你猜。",
         "cx.placeholderP": "问这些资料里的任何事……",
@@ -1632,7 +1632,7 @@ const STRINGS = {
 
         "reader.page": "第 {n} 页",
 
-        "pj.untitled": "未命名项目",
+        "pj.untitled": "未命名笔记本",
 
         "nb.sources": "来源",
 
@@ -1650,7 +1650,7 @@ const STRINGS = {
         "vc.srcSub": "{main} 和另外 {n} 人",
         "vc.srcNone": "还没认",
         "vc.srcRun": "正在认声音…",
-        "cx.desc.voices": "按声音认的：整个项目里，名字一样就是同一个人。点 ▶ 听一下，认错了就改。只在这台电脑上算，音频不上传。",
+        "cx.desc.voices": "按声音认的：整个笔记本里，名字一样就是同一个人。点 ▶ 听一下，认错了就改。只在这台电脑上算，音频不上传。",
         "vc.coverage": "{total} 条录音里 {done} 条做了声纹",
         "vc.find": "在这台电脑里找原音频",
         "vc.findHint": "以前转写的录音没留音频。按原文件名在桌面、下载、音乐、影片、文稿里找，时长对得上才用。一小时录音约 3 分钟。",
@@ -1699,7 +1699,7 @@ const STRINGS = {
 
         "nb.srcEmptyD": "加文件、链接或文字，然后对它们提问。",
 
-        "nb.emptyT": "开始你的项目",
+        "nb.emptyT": "建你的第一个笔记本",
 
         "nb.emptyD": "把手头的材料加进来：录音、频道、文档或笔记。然后随便问，每句回答都能点回出处。",
 
@@ -1729,14 +1729,14 @@ const STRINGS = {
         "rd.catchUp": "现在更新（约 $0.1）",
         "rd.catchUpStarted": "正在后台更新综述，大约一两分钟，完成后重新打开就是新的。",
         "rd.regenConfirm": "重新生成「{name}」？现在这一版会留在历史记录里。",
-        "pj.home": "所有项目",
+        "pj.home": "所有笔记本",
         "st.emptyT": "生成的内容会存在这里。",
         "st.emptyD": "点上面的格子，用来源生成报告、闪卡、自测题等；对话里「存进工作台」的回答也放在这里。",
         "cx.copy": "复制",
         "cx.copied": "已复制。",
         "cx.copyFailed": "复制失败。",
         "cx.disclaimer": "回答只来自这些视频里的原话，点数字可以核对原话、跳到那一秒。",
-        "cx.disclaimerP": "回答只来自这个项目的来源，点数字可以核对原文。",
+        "cx.disclaimerP": "回答只来自这个笔记本的来源，点数字可以核对原文。",
         "pjm.more": "更多",
         "pjm.rename": "改名",
         "pjm.emoji": "换表情",
@@ -1756,7 +1756,7 @@ const STRINGS = {
         "pjm.colAdded": "已加入「{name}」。",
         "pjm.all": "全部",
         "pjm.colDelete": "删除这个合集",
-        "pjm.colDeleteConfirm": "删除合集「{name}」？里面的项目不会被删。",
+        "pjm.colDeleteConfirm": "删除合集「{name}」？里面的笔记本不会被删。",
         "nb.fold": "收起这一栏",
         "nb.unfold": "展开这一栏",
         "nav.collapse": "收起侧栏",
@@ -1880,9 +1880,9 @@ const STRINGS = {
 
         "as.queued": "已提交 {n} 个视频去转写，转完会出现在来源里。",
 
-        "as.channelHas": "这个项目已经有一个频道了；研究另一个频道请新建一个项目。",
+        "as.channelHas": "这个笔记本已经有一个频道了；研究另一个频道请新建一个笔记本。",
 
-        "as.channelElsewhere": "这个频道已经在另一个项目里了，帮你打开那个项目。",
+        "as.channelElsewhere": "这个频道已经在另一个笔记本里了，帮你打开那个笔记本。",
 
         "as.skipped": "跳过了 {n} 个不支持的文件",
 
@@ -1900,7 +1900,7 @@ const STRINGS = {
 
         "cards.building": "正在抽……",
 
-        'creators.title': '项目',
+        'creators.title': '笔记本',
         'creators.subtitle': '把录音、频道和文档放在一起，对它们随便提问。每句回答都能点回出处：录音里的那一秒，或者文档里的那一页。',
         'creators.urlPlaceholder': 'https://www.youtube.com/@creator  ·  频道/主页链接（单个视频请用「转写」）',
         'creators.authorPlaceholder': '作者（可选）',
@@ -1951,7 +1951,7 @@ const STRINGS = {
         'toast.summaryFailed': '摘要生成失败',
         'creators.hint': 'YouTube 小技巧：用 <code>channel/videos</code> 这种链接。B站和其它 yt-dlp '
             + '支持的网站也可以。<b>优先字幕</b>会在视频已有字幕时跳过下载+转写。',
-        'creators.empty': '还没有项目。点「新建项目」开始。',
+        'creators.empty': '还没有笔记本。点「新建笔记本」开始。',
         'creators.bangumiHidden': '另有 {n} 条番剧转写没列在这里——番剧背后没有博主。去资料库找它们。',
 
         'library.title': '资料库',
@@ -2452,8 +2452,8 @@ const STRINGS = {
         "clip.loading": "正在从原视频截这一段（第一次约 10 秒）……",
         "clip.download": "下载这段音频",
         "clip.failed": "没拿到音频。",
-        "col.open": "新建项目",
-        "col.newTitle": "新建项目",
+        "col.open": "新建笔记本",
+        "col.newTitle": "新建笔记本",
         "col.addTitle": "从资料库添加录音",
         "col.sub": "把任意一批录音放在一起——访谈、课程、会议、好几个博主——当成一个整体来提问、看立场、导出。",
         "col.namePh": "起个名字，比如：九月用户访谈",
@@ -2466,18 +2466,18 @@ const STRINGS = {
         "col.tabCreators": "整个博主",
         "col.searchPh": "搜标题……",
         "col.cost": "分析过的直接复用、不花钱；新的每条约 5 美分。",
-        "col.create": "建项目",
+        "col.create": "建笔记本",
         "col.none": "没有匹配的。",
         "col.picked": "已选 {n} 条转写 · {m} 个博主",
         "col.pickSome": "至少选一条转写或一个博主。",
         "col.nameIt": "先起个名字。",
         "col.creating": "开始建……",
         "col.started": "正在建——复用的马上好，新的每条一两分钟。",
-        'col.section': '项目',
+        'col.section': '笔记本',
         'col.creatorsSection': '博主',
         "col.cardMeta": "{kind} · {n} 条",
-        "col.fromCart": "建成项目",
-        "col.eyebrow": "项目 · {kind} · {n} 条",
+        "col.fromCart": "建成笔记本",
+        "col.eyebrow": "笔记本 · {kind} · {n} 条",
         "col.add": "加内容",
         "col.rebuild": "重新构建",
         "col.actionsHint": "加内容 = 再挑几条转写，只分析新加的。重新构建 = 重写综述、重打标签。",
@@ -2487,9 +2487,9 @@ const STRINGS = {
         "rd.overviewDesc": "这批材料讲了什么、谁怎么看、共识和分歧",
         "cx.introTitleCol": "在「{name}」里找答案",
         "cx.desc.readCol": "这批录音讲了什么、各方在哪里一致、在哪里分歧；也可以换角度读。",
-        "cx.desc.askCol": "在整个项目里问；回答会说清是谁、在哪一条里说的，附原话。",
+        "cx.desc.askCol": "在整个笔记本里问；回答会说清是谁、在哪一条里说的，附原话。",
         "cx.desc.topicsCol": "每个话题上，不同的人是看好还是看空。",
-        "cx.desc.episodesCol": "这个项目里的每一条录音。",
+        "cx.desc.episodesCol": "这个笔记本里的每一条录音。",
         "cards.speaker": "说话人",
         "cards.allSpeakers": "所有说话人",
         "radar.open": "话题雷达",
@@ -2546,8 +2546,8 @@ const STRINGS = {
         "cx.intro2": "每句话都挂着原话出处，点一下跳到转写或原视频的那一秒。",
         "cx.intro3": "他没谈过的事会直说没谈过——这本身也是答案。",
         "cx.tab.read": "人物画像",
-        "nb.tile.compare": "同一个问题，项目里的几个博主各怎么说",
-        "nb.tile.compareCol": "同一个问题，项目里的几个博主各怎么说",
+        "nb.tile.compare": "同一个问题，笔记本里的几个博主各怎么说",
+        "nb.tile.compareCol": "同一个问题，笔记本里的几个博主各怎么说",
         "cx.desc.compare": "问一个问题，几个博主的回答并排放，各自带原话出处。",
         "cx.tab.compare": "对比",
         "vp.needTag": "要先给 {n} 张证据卡打话题标签（约 {cost}），打完会出现在下面的列表里。",
@@ -2569,7 +2569,7 @@ const STRINGS = {
         "vs.goCost": "生成（约 {cost}）",
         "vs.doneN": "已做，{n} 张",
         "vs.noLink": "没有视频链接",
-        "vs.none": "这个项目里还没有转写好的录音。",
+        "vs.none": "这个笔记本里还没有转写好的录音。",
         "vs.noVideo": "这些录音都没有视频链接。画面卡目前只支持 YouTube / B 站链接。",
         "vs.started": "正在读画面，好了会出现在「已生成」里。",
         "vs.nEps": "{n} 期",
@@ -2642,14 +2642,14 @@ const STRINGS = {
         "src.openCreator": "打开他的单独页面",
         "pc.ph": "问他们同一个问题……",
         "pc.hint": "选 2 到 4 个人。",
-        "pp.loose": "项目里的录音",
+        "pp.loose": "笔记本里的录音",
         "pp.unnamed": "未命名",
         "pp.wait": "处理中",
         "pp.notYet": "还在转写和分析",
-        "src.removeCreator": "从项目里移除",
-        "src.removeCreatorConfirm": "把 {t} 从这个项目移除？他的转写和分析还留在资料库里（别的项目可能在用）。",
-        "src.sharedHint": "这个博主的转写和分析跟别的项目共用",
-        "as.channelShared": "资料库里已经有这个频道了，项目直接共用（不重新转写）。",
+        "src.removeCreator": "从笔记本里移除",
+        "src.removeCreatorConfirm": "把 {t} 从这个笔记本移除？他的转写和分析还留在资料库里（别的笔记本可能在用）。",
+        "src.sharedHint": "这个博主的转写和分析跟别的笔记本共用",
+        "as.channelShared": "资料库里已经有这个频道了，笔记本直接共用（不重新转写）。",
         "rd.docs": "选一篇读",
         "rd.portrait": "完整画像",
         "rd.portraitDesc": "世界观、思考方式、说话风格、盲区",
@@ -2665,8 +2665,8 @@ const STRINGS = {
         "lens.quotes.desc": "他最有代表性的原话",
         "lens.worldview.desc": "他对各类事的立场，一张表",
         "sub.unfollow": "关闭定期同步",
-        'creators.yours': '我的项目',
-        'creators.search': '找项目……',
+        'creators.yours': '我的笔记本',
+        'creators.search': '找笔记本……',
         "creators.noMatch": "没有匹配的博主。",
         "creators.nEpisodes": "{n} 期",
         "creators.chipPortrait": "画像",
@@ -2719,7 +2719,7 @@ const STRINGS = {
         "cx.covSearchP": "在 {m} 个来源的 {n} 段原文里查，{h} 段相关，读了最相关的 {k} 段",
         "cx.covSpreadP": "{m} 个来源里有 {n} 段原文，均匀读了 {k} 段",
         "cx.desc.askProj": "对你的来源提问。每句回答都能点回出处：文档的那一页，或者录音的那一秒。",
-        "cx.desc.episodesProj": "这个项目里的所有东西：文档、笔记、录音和视频。",
+        "cx.desc.episodesProj": "这个笔记本里的所有东西：文档、笔记、录音和视频。",
         "cx.desc.readProj": "根据来源写的综述，以及换个角度读同一批材料。",
         "cx.covAll": "查了全部 {n} 张卡，来自 {m} 期",
         "cx.covSearch": "在 {m} 期的 {n} 张卡里查，{h} 张相关，读了最相关的 {k} 张",
