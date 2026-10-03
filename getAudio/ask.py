@@ -346,6 +346,47 @@ def _add_repo_cards(corpus, reg):
                           'path': c['path'], 'line': c['start']})
 
 
+def source_key(ep):
+    """期 → 读书笔记用的来源键 (kind, id)；没有就 None。"""
+    if ep.get('doc_id'):
+        return 'doc', ep['doc_id']
+    if ep.get('repo_id'):
+        return 'repo', ep['repo_id']
+    if ep.get('task_id'):
+        return 'task', ep['task_id']
+    return None
+
+
+def note_cards(corpus, ep_idx, idxs):
+    """读书笔记里的段落下标 → 笔记本里的卡片（出处编号 d…-i / t…-i / r…-i）。转写段落没进索引的（博主频道默认
+    只有证据卡），现场切出那几段补进 corpus，出处照样能点。找不到的下标跳过。"""
+    ep = corpus['episodes'][ep_idx]
+    key = source_key(ep)
+    if not key or not idxs:
+        return []
+    kind, sid = key
+    pre = {'doc': 'd', 'task': 't', 'repo': 'r'}[kind]
+    no = _stable_no(sid)
+    by_id = corpus.setdefault('_by_id', {c['id']: c for c in corpus['cards']})
+    out, missing = [], []
+    for i in idxs:
+        c = by_id.get(f'{pre}{no}-{i}')
+        (out.append(c) if c else missing.append(i))
+    if missing and kind == 'task':
+        import sources
+        ps = {p['i']: p for p in sources.transcript_passages(sid)}
+        for i in missing:
+            p = ps.get(i)
+            if not p:
+                continue
+            c = _passage_card(f't{no}-{i}', ep_idx, p['text'])
+            c['ts'], c['sec'] = timecode.display(p.get('ts')), timecode.seconds(p.get('ts'))
+            corpus['cards'].append(c)
+            by_id[c['id']] = c
+            out.append(c)
+    return out
+
+
 def _passage_card(cid, ep, text, page=None, heading=None):
     return {'id': cid, 'ep': ep, 'obs': '', 'quote': text, 'ts': '', 'sec': None, 'layer': 'source',
             'topic': '', 'stance': '', 'pred': False, 'h': card_hash({'quote': text, 'obs': ''}),

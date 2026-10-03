@@ -4586,6 +4586,104 @@ def api_doc_original(doc_id):
     return send_file(path, download_name=meta['filename'], as_attachment=False)
 
 
+# ---- 读书笔记（notes.py，ADR 0010）：每份来源读一次，工作台放不下全部原文时按笔记定计划 ----
+
+def _note_sources(cid, single_only=False):
+    """笔记本里能读笔记的来源 [(kind, id, 标题)]：转好的文档、代码库、转完的录音 / 期（含引用的博主的期）。
+    single_only：只要单独加进来的（文档、代码库、录音），不要频道 / 引用博主的期——自动读只读这些。"""
+    import sources
+    reg, state = _reg(cid), _read_chain(cid)
+    out, seen = [], set()
+
+    def add(kind, sid, title):
+        if sid and (kind, sid) not in seen:
+            seen.add((kind, sid))
+            out.append((kind, sid, title or ''))
+    for d in reg['docs']:
+        m = sources.doc_meta(d.get('doc_id'))
+        if m and m.get('status') == 'ready':
+            add('doc', m['id'], m.get('title'))
+    for r in reg['repos']:
+        add('repo', r.get('repo_id'), '')
+    vids = _rec_rows(cid)                          # 额外加的录音：转写文件在了才算转完
+    if not (single_only and state.get('url')):
+        vids += list(state.get('videos') or [])
+    if not single_only:
+        for ref in _ref_rows(cid, reg):
+            vids += ref['state'].get('videos') or []
+    for v in vids:
+        if v.get('task_id') and v.get('status') == 'done':
+            add('task', v['task_id'], v.get('title'))
+    return out
+
+
+_notes_est_cache = {}
+
+
+@app.route('/api/chain/<chain_id>/notes')
+def api_notes_status(chain_id):
+    """左栏「读书笔记」那一行：读了几份、在读几份、读不了的；?estimate=1 再给没读的那些的估价（转写多时要一两秒）。"""
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    import notes
+    items = []
+    for kind, sid, title in _note_sources(chain_id):
+        st = notes.status(kind, sid)
+        items.append({'kind': kind, 'id': sid, 'title': title, 'status': st.get('status'),
+                      'done': st.get('done'), 'total': st.get('total'), 'error': st.get('error'),
+                      'skipped': st.get('skipped') or []})
+    unread = [x for x in items if x['status'] in ('none', 'failed')]
+    out = {'total': len(items), 'read': sum(1 for x in items if x['status'] == 'done'),
+           'reading': sum(1 for x in items if x['status'] == 'reading'), 'unread': len(unread),
+           'items': items if request.args.get('items') else []}
+    if request.args.get('estimate') and unread:
+        sig = (chain_id, tuple(sorted(x['id'] for x in unread)))
+        if sig not in _notes_est_cache:
+            usd = 0.0
+            for x in unread:
+                try:
+                    usd += notes.estimate(x['kind'], x['id'])['usd']
+                except Exception:  # noqa: BLE001
+                    pass
+            _notes_est_cache[sig] = round(usd, 3)
+        out['estimate_usd'] = _notes_est_cache[sig]
+    return jsonify(out)
+
+
+@app.route('/api/chain/<chain_id>/notes/read', methods=['POST'])
+def api_notes_read(chain_id):
+    """读还没读的来源（{ids?: [来源 id]} 只读这几份；不给 = 全部没读的）。后台读，花费记在 notes:<笔记本> 上。"""
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    import notes
+    want = set((request.get_json(silent=True) or {}).get('ids') or [])
+    todo = [(k, sid) for k, sid, _ in _note_sources(chain_id)
+            if (not want or sid in want) and notes.status(k, sid).get('status') in ('none', 'failed')]
+    with usage.scope(ref=f'notes:{chain_id[:8]}', chain=chain_id):
+        n = notes.start_read(todo)
+    return jsonify({'ok': True, 'started': n})
+
+
+def _notes_auto(cid):
+    """加完来源（_project_refresh 最后）：单份估价低于 notes.AUTO_USD 的自动读，一次最多花 $0.25；
+    贵的（整个频道、大代码库）等用户在左栏点。"""
+    import notes
+    budget, todo = 0.25, []
+    for kind, sid, _ in _note_sources(cid, single_only=True):
+        if notes.status(kind, sid).get('status') != 'none':
+            continue
+        try:
+            usd = notes.estimate(kind, sid)['usd']
+        except Exception:  # noqa: BLE001
+            continue
+        if usd <= notes.AUTO_USD and usd <= budget:
+            todo.append((kind, sid))
+            budget -= usd
+    if todo:
+        with usage.scope(ref=f'notes:{cid[:8]}', chain=cid):
+            notes.start_read(todo)
+
+
 @app.route('/api/chain/<chain_id>/studio/fit')
 def api_studio_fit(chain_id):
     """工作台弹框打开时问：勾选的来源一次放得下吗？放不下就在「重点」里预先填默认要求（study.DEFAULT_LARGE）。
@@ -4605,8 +4703,10 @@ def api_studio_fit(chain_id):
     pool = ask.scope_pool(corpus, scope if isinstance(scope, dict) else None)
     pool = corpus['cards'] if pool is None else pool
     ok, size = study.fit(corpus, pool)
+    have, missing = ([], 0) if ok else study._notes_for(corpus, pool)
     return jsonify({'fits': ok, 'tokens': size, 'budget': study.BUDGET_TOKENS, 'passages': len(pool),
-                    'sources': len({c['ep'] for c in pool}), 'default': study.DEFAULT_LARGE})
+                    'sources': len({c['ep'] for c in pool}), 'default': study.DEFAULT_LARGE,
+                    'notes_read': len(have), 'notes_missing': missing})
 
 
 @app.route('/api/sources/guide')
@@ -4682,6 +4782,8 @@ def _project_refresh(cid, force_build=False):
                         _build_collection(state, rewrite_overview=build)   # 已有的卡复用，只抽新的；综述每月最多自动重写一次
                 with usage.scope(ref=f'index:{cid[:8]}', chain=cid):
                     ask.embed_chain(_chain_dir(cid))
+                if not DEMO_MODE:
+                    _notes_auto(cid)                       # 新来源便宜的就顺手读成笔记（ADR 0010）
                 _voices_refresh(cid)                       # 录音变了：重新认说话人（没做过声纹的项目什么都不做）
                 with _project_jobs_lock:
                     if _project_jobs.get(cid) == 'dirty':

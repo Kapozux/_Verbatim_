@@ -30,7 +30,7 @@ import config
 import usage
 
 PURPOSES = {'ask', 'study', 'tag', 'summary', 'enrich', 'review', 'reflect', 'digest', 'compare',
-            'translate', 'speakers', 'beliefs', 'demo'}
+            'translate', 'speakers', 'beliefs', 'demo', 'notes'}
 MODEL = os.environ.get('CHEAP_TEXT_MODEL') or 'deepseek-v4-flash'
 GENERIC_MIN = 3
 PAUSE_S = 30 * 60

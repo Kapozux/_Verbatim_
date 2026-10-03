@@ -278,6 +278,133 @@ def _themes(corpus, pool, what, request=''):
     return out[:THEMES_K]
 
 
+PLAN_PROMPT = """You are planning a {what} built from the sources of the project "{name}". The sources are too long to read in full, but every one of them has already been read and summarized part by part (below).
+Request: "{request}"
+Plan {k_min}-{k_max} segments that serve the request. For each segment decide whether it gives an overview (a broad picture across several sources) or goes into detail (one specific idea, case, example or passage explained closely); a good {what} mixes both. List the parts each segment draws on, by their labels (like S3.2). Overall, draw on parts from several different sources, and prefer concrete parts over vague ones. If the request names a subject, every segment must be about that subject; if it is only about language, format or tone, ignore it for choosing content.
+Return JSON only: {{"title": "...", "segments": [{{"title": "...", "mode": "overview or detail", "angle": "one sentence: what this segment will say", "parts": ["S3.2", "S7.1"]}}]}}
+
+Sources and their parts (label [where] summary | topics){sampled}:
+{listing}"""
+PLAN_LISTING_CHARS = 600_000
+NOTES_MIN_SHARE = 0.5          # 勾选范围里至少这么多来源读过笔记，才按笔记定计划
+
+
+def _notes_for(corpus, pool):
+    """勾选范围里每个来源的读书笔记：[(期下标, 笔记)]，按时间先后；外加没读过的来源数。"""
+    import notes
+    rank = ask.chrono(corpus)
+    eps = sorted({c['ep'] for c in pool}, key=lambda i: rank.get(i, 0))
+    have, missing = [], 0
+    for i in eps:
+        key = ask.source_key(corpus['episodes'][i])
+        n = notes.load(*key) if key else None
+        if n and n.get('units'):
+            have.append((i, n))
+        else:
+            missing += 1
+    return have, missing
+
+
+def _listing(corpus, have, short=False):
+    lines = []
+    for k, (i, n) in enumerate(have, 1):
+        e = corpus['episodes'][i]
+        kind = {'doc': 'document', 'repo': 'code', 'task': 'recording'}.get(n.get('kind'), '')
+        lines.append(f"S{k} = {e.get('title') or n.get('title')} ({kind})")
+        for u, unit in enumerate(n['units'], 1):
+            summ = unit.get('summary') or ''
+            if short:
+                summ = summ[:90]
+            topics = '' if short else ' | ' + ', '.join(unit.get('topics') or [])
+            lines.append(f"  S{k}.{u} [{unit.get('where')}] {summ}{topics}")
+    return '\n'.join(lines)
+
+
+def _notes_plan(corpus, pool, request, what, budget):
+    """按读书笔记定计划，再按计划取原文（ADR 0010）。→ (卡片, 计划 dict) 或 None（笔记不够 / 模型没给出能用的计划）。
+    概括的段只取笔记要点引的那几段；细讲的段取那几块的原文（先取引到的、再按顺序补），预算按段平分。"""
+    have, missing = _notes_for(corpus, pool)
+    if not have or len(have) < (len(have) + missing) * NOTES_MIN_SHARE:
+        return None
+    listing, sampled = _listing(corpus, have), ''
+    if len(listing) > PLAN_LISTING_CHARS:
+        listing = _listing(corpus, have, short=True)
+    if len(listing) > PLAN_LISTING_CHARS:          # 还放不下：均匀抽一部分来源给它看
+        step = len(listing) / PLAN_LISTING_CHARS
+        keep = [have[int(k * step)] for k in range(int(len(have) / step))]
+        listing = _listing(corpus, keep, short=True)
+        sampled = f', {len(keep)} of {len(have)} sources shown'
+        have_lbl = {k: x for k, x in enumerate(keep, 1)}
+    else:
+        have_lbl = {k: x for k, x in enumerate(have, 1)}
+    try:
+        raw = ask._llm(PLAN_PROMPT.format(what=what, name=corpus['author'] or 'this project', request=request.replace('"', "'"),
+                                          k_min=3, k_max=6, listing=listing, sampled=sampled), purpose='study')
+        plan = ask._json_from(raw) or {}
+    except Exception as e:  # noqa: BLE001
+        print(f'[study] notes plan: {e}')
+        return None
+    segs = [sg for sg in plan.get('segments') or [] if isinstance(sg, dict) and sg.get('parts')]
+    if not segs:
+        return None
+    pos = {c['id']: k for k, c in enumerate(_ordered(corpus, pool))}
+    in_pool = set(pos)
+    per = budget // len(segs)
+    picked, have_ids, out_segs = [], set(), []
+    for sg in segs:
+        units = []
+        for lbl in sg.get('parts') or []:
+            m = re.fullmatch(r'S(\d+)\.(\d+)', str(lbl).strip())
+            if m and int(m.group(1)) in have_lbl:
+                i, n = have_lbl[int(m.group(1))]
+                u = int(m.group(2)) - 1
+                if 0 <= u < len(n['units']):
+                    units.append((i, n['units'][u], str(lbl).strip()))
+        if not units:
+            continue
+        detail = str(sg.get('mode') or '').startswith('detail')
+        want = []                                   # [(期下标, 段落下标)]，按优先顺序
+        for i, unit, _ in units:
+            cited = [c for p in unit.get('points') or [] for c in p.get('cite') or []] + \
+                    [c for q in unit.get('quotes') or [] for c in q.get('cite') or []]
+            want += [(i, c) for c in dict.fromkeys(cited)]
+        if detail:
+            for i, unit, _ in units:
+                want += [(i, c) for c in unit.get('ids') or []]
+        used = 0
+        for i, c in dict.fromkeys(want):
+            card = (ask.note_cards(corpus, i, [c]) or [None])[0]
+            if not card or card['id'] in have_ids:
+                continue
+            if card['id'] not in in_pool and not card['id'].startswith('t'):
+                continue                            # 不在勾选范围里的不要（转写段落是现场补的，不在 pool 里也算）
+            n_tok = ask.est_tokens(ask._card_line(card, corpus, alias=True))
+            if used + n_tok > per:
+                break
+            picked.append(card)
+            have_ids.add(card['id'])
+            used += n_tok
+        out_segs.append({'title': str(sg.get('title') or '')[:80], 'mode': 'detail' if detail else 'overview',
+                         'angle': str(sg.get('angle') or '')[:300], 'units': units})
+    if not picked and not any(u for sg in out_segs for _, u, _ in sg['units'] if not u.get('ids')):
+        return None
+    return picked, {'title': str(plan.get('title') or '')[:80], 'segments': out_segs,
+                    'sources_read': len(have), 'sources_missing': missing}
+
+
+def _plan_text(plan, corpus):
+    """写进提示词的计划 + 挑中的笔记（模型据此组织内容；事实和引语仍只能来自下面的原文段落）。"""
+    out = ['Plan, made from reading notes on every source (follow its structure; state facts only as the passages below support them):']
+    for sg in plan['segments']:
+        out.append(f"## {sg['title']} ({sg['mode']}): {sg['angle']}")
+        for i, unit, lbl in sg['units']:
+            e = corpus['episodes'][i]
+            pts = '; '.join(p['text'] for p in (unit.get('points') or [])[:6])
+            out.append(f"- {e.get('label') or ''} {e.get('title') or ''} [{unit.get('where')}]: {unit.get('summary') or ''}"
+                       + (f' Key points: {pts}' if pts else ''))
+    return '\n'.join(out)[:40_000] + '\n'
+
+
 def _pick(corpus, pool, focus, budget=None, what='study material', info=None):
     """全部放得下就全给（有重点时让模型自己挑）；放不下：按「重点」里的要求（没写就用默认要求 DEFAULT_LARGE）
     先挑几个主题，每个主题检索一批（预算平分）——要求原文不直接当检索词（「给我个中文的」检索不出东西）。
@@ -285,6 +412,14 @@ def _pick(corpus, pool, focus, budget=None, what='study material', info=None):
     budget = budget or BUDGET_TOKENS
     if _size(corpus, pool) <= budget:
         return _ordered(corpus, pool), False
+    got = _notes_plan(corpus, pool, focus or DEFAULT_LARGE['en'], what, budget)
+    if got:
+        cards, plan = got
+        corpus['_plan'] = _plan_text(plan, corpus)
+        if info is not None:
+            info.update(themes=[sg['title'] for sg in plan['segments']], plan='notes',
+                        notes_read=plan['sources_read'], notes_missing=plan['sources_missing'])
+        return _ordered(corpus, cards), True
     themes = _themes(corpus, pool, what, focus)
     if not themes and focus and not is_default_focus(focus):
         hits, _, _ = ask.hybrid(corpus, ask._terms(focus), focus, FOCUS_K, pool=pool)
@@ -418,7 +553,7 @@ def _prompt(corpus, cards, lang, focus, task):
                    + '); each source line names whose it is. Attribute every point to that person and never '
                      'blend different people\'s views into one.\n') if len(people) > 1 else ''
     return HEAD.format(
-        name=corpus['author'] or 'this project', lang=lang, focus=focus_line, people=people_line,
+        name=corpus['author'] or 'this project', lang=lang, focus=focus_line + (corpus.get('_plan') or ''), people=people_line,
         sources='\n'.join(f"{corpus['episodes'][i].get('label')} = {who(corpus['episodes'][i])}{corpus['episodes'][i]['title']}"
                           for i in eps),
         cards='\n'.join(ask._card_line(c, corpus, alias=True) for c in cards)) + task
