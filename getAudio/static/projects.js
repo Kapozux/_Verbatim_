@@ -151,6 +151,9 @@ const SRC_PATHS = {
     video: '<rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M10.5 9.3v5.4l4.5-2.7z"/>',
     channel: '<rect x="3" y="6" width="18" height="13" rx="2.5"/><path d="M8 3l4 3 4-3"/>',
     folder: '<path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v7.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/>',
+    label: '<path d="M3.5 12.5V5a1.5 1.5 0 0 1 1.5-1.5h7.5l8 8-9 9z"/><circle cx="8" cy="8" r="1.3"/>',
+    autolabel: '<path d="M4 13V8.5A1.5 1.5 0 0 1 5.5 7H13l6.5 6.5L13 20H5.5A1.5 1.5 0 0 1 4 18.5z"/><path d="M18 2.5v4M16 4.5h4"/>',
+    sort: '<path d="M4 7h16M4 12h11M4 17h6"/>',
 };
 function srcSvg(kind) {
     return `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7"
@@ -236,13 +239,18 @@ function srcRender() {
     document.getElementById('nb-src-top').classList.toggle('ro', ro);
     box.innerHTML = `
         ${d.indexing ? `<p class="src-note cx-thinking">${T('src.indexing')}</p>` : ''}
-        ${rows.length ? `<label class="sr-all"><span>${T('src.selectAll')}</span>
-            <input type="checkbox" id="sr-all" ${allOn ? 'checked' : ''} ${all.length ? '' : 'disabled'}></label>
+        ${rows.length ? `<div class="sr-tools">
+            ${ro ? '' : `<button type="button" class="sr-tool" id="sr-autolabel" title="${escapeHtml(T('src.autoLabelHint'))}" aria-label="${escapeHtml(T('src.autoLabelHint'))}">${srcSvg('autolabel')}</button>`}
+            <button type="button" class="sr-tool" id="sr-sort" title="${escapeHtml(T('src.sortHint'))}" aria-label="${escapeHtml(T('src.sortHint'))}">${srcSvg('sort')}</button>
+            <label class="sr-all"><span>${T('src.selectAll')}</span>
+            <input type="checkbox" id="sr-all" ${allOn ? 'checked' : ''} ${all.length ? '' : 'disabled'}></label></div>
             <div class="sr-list">${rows.join('')}${typeof vcSrcRowHtml === 'function' ? vcSrcRowHtml() : ''}${typeof ntSrcRowHtml === 'function' ? ntSrcRowHtml() : ''}</div>`
             : `<div class="sr-empty"><div class="sr-empty-ic">${srcSvg('doc')}</div><b>${T('nb.srcEmptyT')}</b>
                 <span>${T('nb.srcEmptyD')}</span></div>`}`;
+    srcSortRows(box);
     srcApplyFolders(box, ro);
     srcWire(box);
+    srcWireTools(box);
     if (typeof vcWireSrc === 'function') vcWireSrc(box);
     if (typeof ntWireSrc === 'function') ntWireSrc(box);
     srcRenderRail(d, ro);
@@ -337,7 +345,80 @@ function srcWire(box) {
     });
 }
 
-// ---- 来源文件夹：只是把左栏理整齐（提问范围照旧按勾选算）。存在 sources.json 的 folders 里 ----
+// ---- 排序（照 NotebookLM：最近添加 / 标题 / 类型）：只排单个来源，频道那几组固定在最上面。按笔记本记在这个浏览器里 ----
+const SRC_SORTS = ['recent', 'title', 'type'];
+function srcSortMode() {
+    try { return localStorage.getItem('verbatim.srcSort.' + srcState.id) || ''; } catch { return ''; }
+}
+function srcSetSortMode(m) {
+    try { localStorage.setItem('verbatim.srcSort.' + srcState.id, m); } catch { /* 存不了就只这次生效 */ }
+}
+
+function srcSortRows(box) {
+    const mode = srcSortMode();
+    const list = box.querySelector('.sr-list');
+    if (!mode || !list) return;
+    const d = srcState.data || {};
+    const info = {};
+    const TYPE = { pdf: 1, ppt: 2, pptx: 2, doc: 3, docx: 3, md: 4, markdown: 4, txt: 4, text: 4, rtf: 4, html: 4, htm: 4, web: 5,
+                   png: 6, jpg: 6, jpeg: 6, webp: 6, heic: 6 };
+    (d.docs || []).forEach(x => { info[x.doc_id] = { t: x.title, a: x.added_at || '', k: TYPE[x.ext] || 4 }; });
+    (d.recordings || []).forEach(x => { info[x.task_id] = { t: x.title, a: x.added_at || '', k: 7 }; });
+    if (!d.channel) (d.videos || []).forEach(v => { info[v.task_id] = { t: v.title, a: String(v.upload_date || ''), k: 7 }; });
+    (d.repos || []).forEach(x => { info[x.repo_id] = { t: x.title, a: x.added_at || '', k: 8 }; });
+    const rows = [...list.querySelectorAll(':scope > .sr-row[data-sid]:not(.sr-child)')].filter(r => info[r.dataset.sid]);
+    if (rows.length < 2) return;
+    const after = rows.map(r => (r.nextElementSibling && r.nextElementSibling.classList.contains('sr-err') ? r.nextElementSibling : null));
+    const pos = new Map(rows.map((r, i) => [r, i]));
+    const cmpT = (a, b) => (info[a.dataset.sid].t || '').localeCompare(info[b.dataset.sid].t || '', undefined, { numeric: true });
+    const sorted = [...rows].sort((a, b) => {
+        const x = info[a.dataset.sid], y = info[b.dataset.sid];
+        if (mode === 'recent') return (y.a > x.a) - (y.a < x.a) || pos.get(b) - pos.get(a);   // 新加的在前
+        if (mode === 'type') return x.k - y.k || cmpT(a, b);
+        return cmpT(a, b);
+    });
+    const anchor = list.querySelector(':scope > .vc-src, :scope > .nt-src');
+    sorted.forEach(r => {
+        const err = after[pos.get(r)];
+        list.insertBefore(r, anchor);
+        if (err) list.insertBefore(err, anchor);
+    });
+}
+
+function srcWireTools(box) {
+    const sortBtn = box.querySelector('#sr-sort');
+    if (sortBtn) sortBtn.addEventListener('click', () => setTimeout(() => {
+        const cur = srcSortMode();
+        const pop = pjPop(sortBtn, SRC_SORTS.map(m => `<button type="button" class="pj-mi" data-sort="${m}">
+            <span>${escapeHtml(T('src.sort.' + m))}</span>${cur === m ? '<span class="sr-fd-on">✓</span>' : ''}</button>`).join(''), 'sr-sort-pop');
+        pop.addEventListener('click', e => e.stopPropagation());
+        pop.querySelectorAll('[data-sort]').forEach(b => b.addEventListener('click', () => {
+            srcSetSortMode(b.dataset.sort);
+            pjPopClose();
+            srcRender();
+        }));
+    }, 0));
+    const auto = box.querySelector('#sr-autolabel');
+    if (auto) auto.addEventListener('click', srcAutoLabel);
+}
+
+// 按主题自动给来源分组（照 NotebookLM 的 auto-label）：分的时候清单换成一句「正在分组」；重新分只换自动分的组，手动放的留着
+async function srcAutoLabel() {
+    const list = document.querySelector('#cx-sources .sr-list');
+    const id = srcState.id;
+    if (list) list.innerHTML = `<div class="sr-labeling"><span class="sr-svg">${srcSvg('autolabel')}</span>
+        <b>${escapeHtml(T('src.autoLabeling'))}</b><span>${escapeHtml(T('src.autoLabelingTip'))}</span></div>`;
+    const r = await srcPost(`/api/chain/${id}/sources/autolabel`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lang: currentLang === 'zh' ? 'zh' : 'en' }) });
+    if (srcState.id !== id) return;
+    if (r) {
+        srcState.data.folders = r.folders;
+        r.folders.forEach(f => { srcState.open['f:' + f.id] = false; });     // 分好默认收起，跟 NotebookLM 一样
+    }
+    srcRender();
+}
+
+// ---- 来源标签（以前叫文件夹）：只是把左栏理整齐（提问范围照旧按勾选算）。存在 sources.json 的 folders 里，一个来源一个标签 ----
 function srcFolders() { return (srcState.data && srcState.data.folders) || []; }
 
 // 已经画好的行按文件夹收进去：文件夹排在最前，默认收起；文件夹里的行缩进
@@ -349,7 +430,8 @@ function srcApplyFolders(box, ro) {
     const bySid = new Map([...list.querySelectorAll(':scope > .sr-row[data-sid]:not(.sr-child)')].map(el => [el.dataset.sid, el]));
     const frag = document.createDocumentFragment();
     folders.forEach(f => {
-        const items = (f.items || []).filter(sid => bySid.has(sid));
+        const order = [...bySid.keys()];
+        const items = (f.items || []).filter(sid => bySid.has(sid)).sort((a, b) => order.indexOf(a) - order.indexOf(b));
         const ids = items.filter(sid => ready.has(sid));
         const open = !!srcState.open['f:' + f.id];
         const on = ids.length && ids.every(srcIsOn);
@@ -357,7 +439,7 @@ function srcApplyFolders(box, ro) {
         head.className = 'sr-row sr-group sr-folder';
         head.dataset.kind = 'folder';
         head.dataset.fid = f.id;
-        head.innerHTML = `<span class="sr-ic"><span class="sr-svg" data-k="folder">${srcSvg('folder')}</span></span>
+        head.innerHTML = `<span class="sr-ic"><span class="sr-svg" data-k="folder">${srcSvg('label')}</span></span>
             <button type="button" class="sr-title sr-fold" aria-expanded="${open}" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</button>
             <span class="sr-sub">${items.length}</span>
             ${ro ? '' : `<details class="sr-menu"><summary aria-label="⋯">⋯</summary><div>

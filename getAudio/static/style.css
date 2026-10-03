@@ -2908,3 +2908,13 @@ pre.cc-quote.repo-quote { font-family: var(--mono); font-size: 13px; line-height
 .nt-where { font-size: 12.5px; font-weight: 700; letter-spacing: .04em; color: var(--faint); }
 .nt-reader ul { margin: 6px 0 0; padding-left: 18px; font-size: 14px; line-height: 1.6; color: var(--ink-soft); }
 .nt-skip { font-size: 13px; color: var(--muted); }
+/* 来源栏「全选」那一行左边：自动分组、排序两个图标（照 NotebookLM），悬停出说明 */
+.sr-tools { display: flex; align-items: center; gap: 2px; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
+.sr-tools .sr-all { flex: 1; border-bottom: none; margin-bottom: 0; justify-content: flex-end; gap: 10px; }
+.sr-tool { width: 30px; height: 30px; display: grid; place-items: center; padding: 0; border: none; border-radius: 50%;
+  background: none; color: var(--muted); cursor: pointer; }
+.sr-tool:hover { background: var(--code-bg); color: var(--ink); }
+.sr-labeling { display: grid; justify-items: center; gap: 8px; text-align: center; padding: 48px 12px; color: var(--muted); font-size: 14.5px; }
+.sr-labeling b { color: var(--ink-soft); font-weight: 500; font-size: 15.5px; }
+.sr-labeling .sr-svg { color: var(--coral-deep); }
+.sr-sort-pop { min-width: 160px; }
