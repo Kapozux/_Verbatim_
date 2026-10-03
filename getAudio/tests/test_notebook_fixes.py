@@ -108,4 +108,53 @@ gt = r.get(f'/api/sources/guide?task={tid}').get_json()
 t.check('转写用现成的摘要', gt['guide'] == {'summary': 'An episode about hiring.', 'topics': ['Hiring', 'Pay']}
         and len(calls) == 1)
 
+# ---- 6 材料太多：不只拿片头；没重点先挑主题再检索；播客太短接着写 ----
+pid2 = r.post('/api/projects', json={'name': 'Big show'}).get_json()['id']
+for k in range(30):
+    paras = [f'大家好，欢迎收看第{k}期节目。'] + [f'第{k}期第{j}段：讨论{"房价" if k % 3 == 0 else "教育" if k % 3 == 1 else "医疗"}问题的细节，'
+                                              f'包括数据、案例和政策建议。' * 3 for j in range(1, 10)]
+    r.post(f'/api/chain/{pid2}/sources/docs', json={'title': f'第{k}期', 'text': '\n\n'.join(f'# 段{j}\n\n{x}' for j, x in enumerate(paras))})
+big = ask.load(A._chain_dir(pid2), passages=True)
+size = study._size(big, big['cards'])
+few, thinned = study._thin(big, big['cards'], size // 40)
+t.check('来源比预算多得多：挑一部分期、不超预算、不拿片头', thinned and len({c['ep'] for c in few}) < 30
+        and study._size(big, few) <= size // 40 * 1.5 and not any('欢迎收看' in c['quote'] for c in few))
+one, _ = study._thin(big, big['cards'], size // 9)
+t.check('每期一段时拿中间、不拿片头', len({c['ep'] for c in one}) == 30 and not any('欢迎收看' in c['quote'] for c in one))
+llm_calls = []
+
+
+def fake_llm2(prompt, model=None, purpose='ask', grounded=False):
+    llm_calls.append(prompt)
+    if 'Pick the' in prompt and 'themes' in prompt:
+        return json.dumps({'themes': [{'title': '房价', 'query': '房价 数据 政策'}, {'title': '医疗', 'query': '医疗 案例'}]},
+                          ensure_ascii=False)
+    return '{"standalone": "q", "keywords": []}'
+
+
+ask._llm = fake_llm2
+info = {}
+picked, th = study._pick(big, big['cards'], '', budget=size // 10, what='podcast episode', info=info)
+topics = {'房价' if '房价' in c['quote'] else '医疗' if '医疗' in c['quote'] else '其它' for c in picked}
+t.check('没重点：先挑主题，按主题检索', info.get('themes') == ['房价', '医疗'] and th and topics <= {'房价', '医疗'}
+        and len({c['ep'] for c in picked}) >= 4 and 'podcast episode' in llm_calls[0] and '第29期' in llm_calls[0])
+short = {'title': 'T', 'plan': ['a'], 'lines': [{'speaker': '小林', 'text': '房价很高。', 'style': '', 'cite': []}]}
+long_ = {'title': 'T', 'lines': short['lines'] + [{'speaker': '阿周', 'text': '对，' + '房价的细节很多。' * 40, 'style': '', 'cite': []}]}
+seen = []
+
+
+def fake_json(prompt):
+    seen.append(prompt)
+    if 'Make it that long.' in prompt:
+        return dict(long_)
+    if 'you are the editor' in prompt:
+        return json.loads(prompt.split('Draft:\n', 1)[1].split('\n\n1. Check it', 1)[0])
+    return dict(short)
+
+
+podcast._llm_json = fake_json
+script, _ = podcast.write_script(big, picked[:20], ZH, '', 'deep_dive', 4, ('小林', '阿周'), n_clips=0)
+t.check('播客写短了：接着写一次，用长的那版', any('Make it that long.' in p for p in seen)
+        and len(script['lines']) == 2 and 'never reuse the sources\' own greetings' in seen[0])
+
 t.finish()

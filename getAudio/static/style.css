@@ -2892,3 +2892,5 @@ pre.cc-quote.repo-quote { font-family: var(--mono); font-size: 13px; line-height
 #chain-detail-view .nb-main > [data-cx-panel] { scrollbar-width: thin; scrollbar-color: transparent transparent; }
 #chain-detail-view .nb-pane:hover, #chain-detail-view .cx-scroll:hover, #chain-detail-view .nbv-body:hover,
 #chain-detail-view .nb-main > [data-cx-panel]:hover { scrollbar-color: var(--line-2) transparent; }
+/* 弹框底部「来自 1 / 1021 个来源」：只勾了一部分时用强调色，免得以为用的是全部 */
+.st-subset { color: var(--coral-deep); font-weight: 600; }

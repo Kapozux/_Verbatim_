@@ -26,7 +26,7 @@ async function slidesPicker() {
             <div class="pod-f"><span class="pod-l">${escapeHtml(T('sl.count'))}</span><div class="pod-lens" id="sl-counts" role="radiogroup"></div></div>
             <label class="pod-f"><span class="pod-l">${escapeHtml(T('st.focus'))}</span>
                 <input type="text" id="sl-focus" maxlength="200" placeholder="${escapeHtml(T('st.focusPh'))}"></label>
-            <div class="vp-foot"><span class="rd-pick-s" id="sl-msg">${escapeHtml(T('st.from', { s: srcCountText() }))}</span>
+            <div class="vp-foot"><span class="rd-pick-s${srcScopeBody() ? ' st-subset' : ''}" id="sl-msg">${escapeHtml(T('st.from', { s: srcCountText() }))}</span>
                 <button type="submit" class="rd-pick-go primary" id="sl-go">${escapeHtml(est ? T('vs.goCost', { cost: fmtUsd(est) }) : T('rd.generate'))}</button></div>
         </form></div>`;
     const render = () => {

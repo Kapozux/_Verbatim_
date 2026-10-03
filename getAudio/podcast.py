@@ -57,6 +57,7 @@ plan: what the listener should come away with, and the 3–5 segments that get t
 Lines:
 - Each line is one turn: {{"speaker": "...", "text": "...", "style": "...", "cite": ["4-12"]}}.
 - text is spoken language: short sentences, no lists, no headings, no brackets, no Markdown, no ids. Never say "passage", "source" or "citation".
+- This is a new show about the material, not a rerun of it: never reuse the sources' own greetings, sign-offs or catchphrases ("欢迎收看……", "我们周五再见", "see you next week").
 - When you mention where something comes from, name the person, or describe the video or recording by its topic ("in the video on remembering words forever"). Never call it by its label: no "EP4", "episode 4", "第四期", "DOC2".
 - cite: the ids of the passages this line's facts rest on, exactly as shown in brackets at the start of each passage line but without "[#" and "]" (e.g. "4-12", "t3-7"). Every factual claim needs one; reactions and questions can have an empty list.
 - style: how the line is delivered, a few English words for a voice model ("curious, rising", "dry, amused", "slow, serious"). Vary it with the content.
@@ -165,6 +166,18 @@ def _llm_json(prompt):
     raise RuntimeError('The model returned nothing usable' + (f': {str(last)[:120]}' if last else ''))
 
 
+PODCAST_EXTEND = """Task: the podcast script below is only about {have} {unit} of dialogue; the episode needs about {want}. Make it that long.
+Keep every existing line as it is and in order (you may only replace the last two or three lines with a new ending). Add whole new segments built on passages above that the script does not use yet, with the same hosts, the same rules for text, style and cite, and the same {{"clip": ...}} lines where they are. The new ending sums up the one or two things worth remembering.
+Script:
+{script}
+Return JSON only: {{"title": "...", "lines": [...]}}"""
+
+
+def _script_len(obj, zh):
+    text = ' '.join(str(ln.get('text') or '') for ln in (obj or {}).get('lines') or [] if isinstance(ln, dict))
+    return len(re.findall(r'[一-鿿]', text)) if zh else len(text.split())
+
+
 def write_script(corpus, cards, lang, focus, fmt, minutes, hosts, sides=('', ''), n_clips=CLIPS, cands=None):
     """→ (脚本 dict {title, plan, lines}, 候选原声卡)。cands：核对过的候选（verify_clips）；不给就现挑。"""
     zh = lang.startswith('Chinese')
@@ -181,6 +194,15 @@ def write_script(corpus, cards, lang, focus, fmt, minutes, hosts, sides=('', '')
         clip_example=', {"clip": "4-12"}' if n_clips else '')
     head = study._prompt(corpus, cards, lang, focus, '')
     draft = _llm_json(head + task)
+    want = minutes * (250 if zh else 150)
+    have = _script_len(draft, zh)
+    if have < want * 0.6:                     # 模型常常写一半就收尾：让它在原稿上接着加段落，只多这一次调用
+        longer = _llm_json(head + PODCAST_EXTEND.format(have=have, want=want, unit='Chinese characters' if zh else 'words',
+                                                        script=json.dumps({'title': draft.get('title', ''), 'lines': draft['lines']},
+                                                                          ensure_ascii=False)))
+        if _script_len(longer, zh) > have:
+            longer.setdefault('plan', draft.get('plan'))
+            draft = longer
     polished = _llm_json(head + PODCAST_POLISH.format(script=json.dumps(
         {'title': draft.get('title', ''), 'lines': draft['lines']}, ensure_ascii=False)))
     polished.setdefault('title', draft.get('title', ''))
@@ -673,7 +695,8 @@ def start(cdir, chain_id, fmt='deep_dive', length='default', focus='', scope=Non
             raise RuntimeError('Nothing to work from in the selected sources')
         lng = study._lang(corpus, lang, focus)
         hosts = HOSTS['zh' if lng.startswith('Chinese') else 'en']
-        cards, thinned = study._pick(corpus, pool, focus)
+        pinfo = {}
+        cards, thinned = study._pick(corpus, pool, focus, what='podcast episode', info=pinfo)
         cites = citations.Citations().add(corpus, cards)
         import tempfile
         with tempfile.TemporaryDirectory(prefix='podcast_') as work_dir:
@@ -705,7 +728,8 @@ def start(cdir, chain_id, fmt='deep_dive', length='default', focus='', scope=Non
                            'hosts': list(hosts if fmt != 'brief' else hosts[:1]), 'lines': lines},
                    citations=cites.used, dropped_citations=cites.dropped,
                    coverage={'passages_used': len(cards), 'passages_total': len(pool), 'thinned': thinned,
-                             'sources': len({c['ep'] for c in pool})})
+                             'sources': len({c['ep'] for c in pool}), 'themes': pinfo.get('themes') or [],
+                             'sources_used': len({c['ep'] for c in cards})})
 
     (run or (lambda f: threading.Thread(target=f, daemon=True).start()))(job)
     return out

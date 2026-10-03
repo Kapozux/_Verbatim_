@@ -235,6 +235,7 @@ function stOpenDialog(kind) {
             `<option value="${escapeHtml(x.id)}"${guess && guess.id === x.id ? ' selected' : ''}>${escapeHtml(x.title)}</option>`).join('');
     }
     ov.querySelector('#st-from').textContent = T(kind === 'coverage' ? 'st.fromList' : 'st.from', { s: srcCountText() });
+    ov.querySelector('#st-from').classList.toggle('st-subset', !!srcScopeBody());     // 只勾了一部分来源：标出来，别以为用的是全部
     ov.classList.remove('hidden');
     setTimeout(() => ov.querySelector(kind === 'coverage' ? '#st-outline' : '#st-focus').focus(), 50);
 }
@@ -320,7 +321,9 @@ function stCoverage(o) {
     if (o.kind === 'visual') return o.cost_usd ? fmtUsd(o.cost_usd) : '';
     if (!c) return '';
     const bits = [T('st.covSources', { n: c.sources })];
-    if (c.thinned) bits.push(T(o.focus ? 'st.covFocus' : 'st.covThinned', { n: c.passages_used, m: c.passages_total }));
+    if (c.thinned && (c.themes || []).length) {          // 材料太多、没写重点：先挑了几个主题
+        bits.push(T('st.covThemes', { n: c.passages_used, m: c.passages_total, t: c.themes.join('、') }));
+    } else if (c.thinned) bits.push(T(o.focus ? 'st.covFocus' : 'st.covThinned', { n: c.passages_used, m: c.passages_total }));
     if (o.cost_usd) bits.push(fmtUsd(o.cost_usd));
     return bits.join(' · ');
 }

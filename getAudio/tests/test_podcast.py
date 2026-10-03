@@ -60,6 +60,8 @@ prompts = []
 
 def fake_llm(prompt, model=None, purpose='ask', grounded=False):
     prompts.append((purpose, prompt))
+    if 'Make it that long.' in prompt:          # 太短时的「接着写」：桩原样还回去（等于没变长，代码会留原稿）
+        return json.dumps(json.loads(prompt.split('Script:\n', 1)[1].split('\nReturn JSON only', 1)[0]))
     if 'you are the editor of a podcast' in prompt:
         draft = json.loads(prompt.split('Draft:\n', 1)[1].split('\n\n1. Check it', 1)[0])
         return json.dumps(draft)

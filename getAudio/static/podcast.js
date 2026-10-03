@@ -39,7 +39,7 @@ async function podcastPicker() {
             <div class="pod-f"><span class="pod-l">${escapeHtml(T('pod.length'))}</span><div class="pod-lens" id="pod-lens" role="radiogroup"></div></div>
             <label class="pod-f"><span class="pod-l">${escapeHtml(T('st.focus'))}</span>
                 <input type="text" id="pod-focus" maxlength="200" placeholder="${escapeHtml(T('pod.focusPh'))}"></label>
-            <div class="vp-foot"><span class="rd-pick-s" id="pod-msg">${escapeHtml(T('st.from', { s: srcCountText() }))}</span>
+            <div class="vp-foot"><span class="rd-pick-s${srcScopeBody() ? ' st-subset' : ''}" id="pod-msg">${escapeHtml(T('st.from', { s: srcCountText() }))}</span>
                 <button type="submit" class="rd-pick-go primary" id="pod-go">${escapeHtml(T('rd.generate'))}</button></div>
         </form></div>`;
     const render = () => {

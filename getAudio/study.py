@@ -17,6 +17,7 @@ from datetime import datetime
 
 import ask
 import citations
+import config
 import usage
 
 KINDS = ('report', 'flashcards', 'quiz', 'coverage')
@@ -198,16 +199,67 @@ def _thin(corpus, cards, budget):
     by_ep = {}
     for c in _ordered(corpus, cards):
         by_ep.setdefault(c['ep'], []).append(c)
+    room = int(len(cards) * ratio)
+    if room * 2 < len(by_ep):
+        # 来源比放得下的段多得多（马督工 1021 期、只放得下几百段）：每期一段会超预算好几倍。均匀挑 room 期，每期拿中间那段
+        eps = list(by_ep.values())
+        step = len(eps) / max(1, room)
+        return _ordered(corpus, [eps[int(i * step)][len(eps[int(i * step)]) // 2] for i in range(max(1, room))]), True
     out = []
     for cs in by_ep.values():
+        # 等间距取、从每一格的中间取：原来从第 0 段起，每期只取一段时拿到的全是片头「大家好，欢迎收看……」
         k = max(1, int(len(cs) * ratio))
         step = len(cs) / k
-        out += [cs[int(i * step)] for i in range(k)]
+        out += [cs[int((i + 0.5) * step)] for i in range(k)]
     return _ordered(corpus, out), True
 
 
-def _pick(corpus, pool, focus, budget=None):
-    """全部放得下就全给（有重点时让模型自己挑）；放不下：有重点按重点检索，没重点均匀抽。"""
+THEMES_PROMPT = """Below is the list of sources in the project "{name}": {n} sources{sampled}, one line each (title and, when known, a one-line summary).
+They are far too many to read in full, so the {what} will be built around a few themes. Pick the {k} themes that run through the most sources and would make the best {what}: concrete subjects, not vague categories, and different from each other.
+Return JSON only: {{"themes": [{{"title": "short theme name, in the sources' language", "query": "what to search the sources for: 5-15 words in the sources' language"}}]}}
+
+Sources:
+{lines}"""
+THEMES_K = 4
+MAP_CHARS = 60_000
+
+
+def _overview(task_id):
+    sm = ask._read_json(os.path.join(config.RESULTS_FOLDER, task_id, 'summary.json'), None) if task_id else None
+    return re.sub(r'\s+', ' ', str((sm or {}).get('overview') or ''))[:90]
+
+
+def _themes(corpus, pool, what):
+    """材料太多又没写重点：先看每个来源的标题 + 一句摘要，挑几个贯穿多期的主题。失败返回 []。"""
+    eps = sorted({c['ep'] for c in pool})
+    lines = []
+    for i in eps:
+        e = corpus['episodes'][i]
+        ov = _overview(e.get('task_id'))
+        lines.append(f"- {e.get('title') or e.get('label')}" + (f": {ov}" if ov else ''))
+    sampled = ''
+    if sum(len(x) + 1 for x in lines) > MAP_CHARS:
+        keep = max(1, MAP_CHARS // max(1, sum(len(x) + 1 for x in lines) // len(lines)))
+        step = len(lines) / keep
+        lines = [lines[int(i * step)] for i in range(keep)]
+        sampled = f', {len(lines)} of them shown, spread evenly'
+    try:
+        raw = ask._llm(THEMES_PROMPT.format(name=corpus['author'] or 'this project', n=len(eps), sampled=sampled,
+                                            what=what, k=THEMES_K, lines='\n'.join(lines)), purpose='study')
+        obj = ask._json_from(raw) or {}
+    except Exception as e:  # noqa: BLE001
+        print(f'[study] themes: {e}')
+        return []
+    out = []
+    for t in obj.get('themes') or []:
+        if isinstance(t, dict) and str(t.get('title') or '').strip():
+            out.append({'title': str(t['title']).strip()[:40], 'query': str(t.get('query') or t['title']).strip()[:200]})
+    return out[:THEMES_K]
+
+
+def _pick(corpus, pool, focus, budget=None, what='study material', info=None):
+    """全部放得下就全给（有重点时让模型自己挑）；放不下：有重点按重点检索；没重点先挑几个贯穿多期的主题，
+    每个主题检索一批（预算平分），挑不出主题才均匀抽。info（dict）：挑了哪些主题写进 info['themes']。"""
     budget = budget or BUDGET_TOKENS
     if _size(corpus, pool) <= budget:
         return _ordered(corpus, pool), False
@@ -215,6 +267,27 @@ def _pick(corpus, pool, focus, budget=None):
         hits, _, _ = ask.hybrid(corpus, ask._terms(focus), focus, FOCUS_K, pool=pool)
         if hits:
             return _thin(corpus, hits, budget)
+    themes = _themes(corpus, pool, what)
+    if themes:
+        picked, have = [], set()
+        for th in themes:
+            q = f"{th['title']} {th['query']}"
+            hits, _, _ = ask.hybrid(corpus, ask._terms(q), q, FOCUS_K // len(themes) * 2, pool=pool)
+            sel, used = [], 0                       # 按相关度从高往低拿，拿满这个主题的那份预算
+            for c in hits:
+                if c['id'] in have:
+                    continue
+                n = ask.est_tokens(ask._card_line(c, corpus, alias=True))
+                if used + n > budget // len(themes):
+                    break
+                sel.append(c)
+                used += n
+            picked += sel
+            have.update(c['id'] for c in sel)
+        if picked:
+            if info is not None:
+                info['themes'] = [t['title'] for t in themes]
+            return _ordered(corpus, picked), True
     return _thin(corpus, pool, budget)
 
 
@@ -492,10 +565,12 @@ def start(cdir, chain_id, kind, focus='', n=None, scope=None, outline=None, lang
             if not pool:
                 raise RuntimeError('Nothing to work from in the selected sources')
             lng = _lang(corpus, lang, focus)
+            pinfo = {}
             if kind == 'coverage':
                 result, cites, used, thinned = _outline(corpus, pool, lng, focus, outline)
             else:
-                cards, thinned = _pick(corpus, pool, focus)
+                cards, thinned = _pick(corpus, pool, focus, what={'report': 'report', 'flashcards': 'set of flashcards',
+                                                                  'quiz': 'quiz'}.get(kind, 'study material'), info=pinfo)
                 if kind == 'report':
                     result, cites = _report(corpus, cards, lng, focus, n, oid, fmt, prompt)
                 else:
@@ -504,7 +579,7 @@ def start(cdir, chain_id, kind, focus='', n=None, scope=None, outline=None, lang
             out.update(status='done', result=result, citations=cites.used, dropped_citations=cites.dropped,
                        lang='zh' if lng.startswith('Chinese') else 'en', finished_at=_now(),
                        coverage={'passages_used': used, 'passages_total': len(pool), 'thinned': thinned,
-                                 'sources': len({c['ep'] for c in pool})})
+                                 'sources': len({c['ep'] for c in pool}), 'themes': pinfo.get('themes') or []})
         except Exception as e:  # noqa: BLE001
             out.update(status='failed', error=str(e)[:300], finished_at=_now())
 
