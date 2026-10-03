@@ -16,6 +16,7 @@ import glob
 import json
 import os
 import re
+import shutil
 import subprocess
 import threading
 import uuid
@@ -164,10 +165,11 @@ def _llm_json(prompt):
     raise RuntimeError('The model returned nothing usable' + (f': {str(last)[:120]}' if last else ''))
 
 
-def write_script(corpus, cards, lang, focus, fmt, minutes, hosts, sides=('', ''), n_clips=CLIPS):
-    """→ (脚本 dict {title, plan, lines}, 候选原声卡)"""
+def write_script(corpus, cards, lang, focus, fmt, minutes, hosts, sides=('', ''), n_clips=CLIPS, cands=None):
+    """→ (脚本 dict {title, plan, lines}, 候选原声卡)。cands：核对过的候选（verify_clips）；不给就现挑。"""
     zh = lang.startswith('Chinese')
-    cands = clip_candidates(corpus, cards) if n_clips else []
+    if cands is None:
+        cands = clip_candidates(corpus, cards) if n_clips else []
     n_clips = min(n_clips, len(cands))
     clip_rules = CLIP_RULES.format(clips=n_clips, candidates='\n'.join(
         f'{c["id"]} | {_who(c, corpus) or "-"} | "{c["quote"]}"' for c in cands)) if n_clips else \
@@ -377,6 +379,10 @@ def snap_to_pauses(path, want_start, want_end):
 
 
 _whisper_lock = threading.Lock()
+# 不给提示时 Whisper 常把普通话写成繁体，跟简体的原话逐字对不上
+ZH_PROMPT = '以下是普通话的句子，用简体中文。'
+# 原声要放之前先核对：识别出来的字至少这么多跟原话对得上，才算「放的就是这句」
+VERIFY_MIN = 0.7
 
 
 def _words(path, zh):
@@ -385,21 +391,24 @@ def _words(path, zh):
         try:
             import mlx_whisper
             r = mlx_whisper.transcribe(path, path_or_hf_repo='mlx-community/whisper-large-v3-mlx',
-                                       word_timestamps=True, language='zh' if zh else None)
+                                       word_timestamps=True, language='zh' if zh else None,
+                                       initial_prompt=ZH_PROMPT if zh else None)
             return [(w['word'], w['start'], w['end']) for sg in r.get('segments', []) for w in sg.get('words', [])]
         except Exception:  # noqa: BLE001
             pass
         try:
             from faster_whisper import WhisperModel
             m = WhisperModel('small', device='cpu', compute_type='int8')
-            segs, _ = m.transcribe(path, word_timestamps=True, language='zh' if zh else None)
+            segs, _ = m.transcribe(path, word_timestamps=True, language='zh' if zh else None,
+                                   initial_prompt=ZH_PROMPT if zh else None)
             return [(w.word, w.start, w.end) for sg in segs for w in (sg.words or [])]
         except Exception:  # noqa: BLE001
             return None
 
 
-def align_quote(words, quote):
-    """把原话跟识别出的词对上（识别文字跟转写不全一样：95% / 百分之九十五），→ (起, 止) 秒或 None。"""
+def align_quote(words, quote, min_ratio=0.5):
+    """把原话跟识别出的词对上（识别文字跟转写不全一样：95% / 百分之九十五），→ (起, 止) 秒或 None。
+    min_ratio：原话里至少这么多字要对上。"""
     import difflib
     q = _norm(quote).lower()
     chars, owner = [], []
@@ -411,7 +420,7 @@ def align_quote(words, quote):
     if not asr or not q:
         return None
     blocks = [b for b in difflib.SequenceMatcher(None, asr, q, autojunk=False).get_matching_blocks() if b.size >= 2]
-    if not blocks or sum(b.size for b in blocks) < len(q) * 0.5:
+    if not blocks or sum(b.size for b in blocks) < len(q) * min_ratio:
         return None
     first, last = blocks[0], blocks[-1]
     # 原话开头 / 结尾没对上的几个字：按识别结果往前 / 往后补上同样多的字
@@ -432,9 +441,13 @@ def _cut(path, s, e):
         w.writeframes(data)
 
 
-def fetch_clip(card, ep, dst):
+def fetch_clip(card, ep, dst, strict=False, info=None):
     """把原话那几秒裁成 wav。本机有音频就从本机裁；没有就按链接只下那一段。取不到返回 None。
-    先多裁一截，再精修：本机有 Whisper 就逐词对齐原话，没有就在停顿处下刀。"""
+    先多裁一截，再精修：本机有 Whisper 就逐词对齐原话，没有就在停顿处下刀。
+    strict：有 Whisper 时必须听得出就是这句原话（VERIFY_MIN），对不上返回 None——转写的时间点会漂
+    （长段落的 Gemini 转写差过几分钟），原话本身也可能是识别错的乱码，不核对就会放出另一段话。
+    最后降噪、统一响度、头尾淡入淡出（课堂录音底噪大，硬切会有咔哒声）。
+    info（dict）：对上了就写进 info['heard']——这一段实际听到的字（比转写准，转写可能是旧引擎的乱码）。"""
     s0, e0 = clip_window(card, ep)
     s, e = max(0.0, s0 - PAD_BEFORE), e0 + PAD_AFTER
     got = _fetch_range(ep, dst, s, e)
@@ -442,7 +455,12 @@ def fetch_clip(card, ep, dst):
         return None
     try:
         words = _words(got, bool(re.search(r'[\u4e00-\u9fff]', card.get('quote') or '')))
-        span = align_quote(words, card.get('quote')) if words else None
+        span = align_quote(words, card.get('quote'), VERIFY_MIN if strict else 0.5) if words else None
+        if strict and words is not None and not span:
+            os.remove(got)
+            return None
+        if span and info is not None:
+            info['heard'] = ''.join(w for w, a, b in words if a >= span[0] - 0.05 and b <= span[1] + 0.05).strip()
         if span:
             dur = _wav_seconds(got)
             _cut(got, max(0.0, span[0] - 0.15), min(dur, span[1] + 0.3))
@@ -452,7 +470,39 @@ def fetch_clip(card, ep, dst):
             _cut(got, 0, CLIP_MAX_SEC)
     except Exception as ex:  # noqa: BLE001
         print(f'[podcast] trim {card.get("id")}: {ex}')
+    _polish(got)
     return got
+
+
+def _polish(path):
+    """去低频嗡声、轻度降噪、响度拉到跟主持人差不多，头尾 40 / 80 毫秒淡入淡出。失败就留原样。"""
+    try:
+        dur = _wav_seconds(path)
+        tmp = path + '.polish.wav'
+        _ffmpeg('-i', path, '-af', f'highpass=f=80,afftdn=nf=-25,loudnorm=I=-16:TP=-1.5:LRA=11,'
+                f'afade=t=in:d=0.04,afade=t=out:st={max(0.0, dur - 0.08):.2f}:d=0.08',
+                '-ac', '1', '-ar', str(RATE), '-sample_fmt', 's16', tmp)
+        os.replace(tmp, path)
+    except Exception as ex:  # noqa: BLE001
+        print(f'[podcast] polish {os.path.basename(path)}: {ex}')
+
+
+def verify_clips(corpus, cands, work, need, tries=None, heard=None):
+    """写脚本之前先把候选原声裁出来、听一遍（strict），只把对得上的交给写脚本的模型。
+    → (核对过的候选, {卡片 id: 裁好的 wav})。凑够 need 的两倍就停；最多试 tries 个（默认全部，本机识别一个两三秒；
+    转写时间点漂得厉害的笔记本四个里只对得上一个）。heard（dict）：顺手记下每段实际听到的字。"""
+    ok, paths = [], {}
+    for c in cands[:tries or len(cands)]:
+        if len(ok) >= need * 2:
+            break
+        p = os.path.join(work, 'cand_' + re.sub(r'\W', '_', c['id']) + '.wav')
+        info = {}
+        if fetch_clip(c, corpus['episodes'][c['ep']], p, strict=True, info=info):
+            ok.append(c)
+            paths[c['id']] = p
+            if heard is not None and info.get('heard'):
+                heard[c['id']] = info['heard']
+    return ok, paths
 
 
 def _fetch_range(ep, dst, s, e):
@@ -493,8 +543,8 @@ def _silence(path, sec):
     return path
 
 
-def synthesize(lines, corpus, hosts, work, out_mp3, on_progress=None):
-    """逐块合成 + 插原声 + 拼接。给每行写上 t（开始秒）。→ 总秒数"""
+def synthesize(lines, corpus, hosts, work, out_mp3, on_progress=None, clips=None):
+    """逐块合成 + 插原声 + 拼接。给每行写上 t（开始秒）。clips：已经裁好、核对过的原声 {卡片 id: wav}。→ 总秒数"""
     voices = dict(zip(hosts, VOICES))
     by_id = {c['id']: c for c in corpus['cards']}
     pieces = []                                  # [(kind, payload)]，kind = tts | clip
@@ -519,6 +569,9 @@ def synthesize(lines, corpus, hosts, work, out_mp3, on_progress=None):
         path = os.path.join(work, f'{i:03d}.wav')
         if kind == 'clip':
             c = by_id[payload['clip']]
+            if (clips or {}).get(c['id']) and os.path.isfile(clips[c['id']]):
+                shutil.copyfile(clips[c['id']], path)
+                return path
             if fetch_clip(c, corpus['episodes'][c['ep']], path):
                 return path
             payload['fallback'] = True           # 原声取不到：主持人念原话
@@ -622,26 +675,30 @@ def start(cdir, chain_id, fmt='deep_dive', length='default', focus='', scope=Non
         hosts = HOSTS['zh' if lng.startswith('Chinese') else 'en']
         cards, thinned = study._pick(corpus, pool, focus)
         cites = citations.Citations().add(corpus, cards)
-        script, cands = write_script(corpus, cards, lng, focus, fmt, LENGTHS[length],
-                                     hosts if fmt != 'brief' else (hosts[0], hosts[0]), sides)
-        lines = check(script, corpus, hosts if fmt != 'brief' else (hosts[0],), cands, cites)
-        if not any('speaker' in ln for ln in lines):
-            raise RuntimeError('The script came back empty')
-        out['progress'] = {'stage': 'audio', 'done': 0, 'total': 1}
-        study._save(cdir, out)
-
-        def prog(d, n):
-            out['progress'] = {'stage': 'audio', 'done': d, 'total': n}
-            study._save(cdir, out)
         import tempfile
         with tempfile.TemporaryDirectory(prefix='podcast_') as work_dir:
-            duration = synthesize(lines, corpus, hosts, work_dir, audio_path(cdir, oid), on_progress=prog)
+            # 原声先裁、先听：只把对得上原话的交给写脚本的模型
+            heard = {}
+            cands, clip_wavs = verify_clips(corpus, clip_candidates(corpus, cards), work_dir, CLIPS, heard=heard)
+            script, cands = write_script(corpus, cards, lng, focus, fmt, LENGTHS[length],
+                                         hosts if fmt != 'brief' else (hosts[0], hosts[0]), sides, cands=cands)
+            lines = check(script, corpus, hosts if fmt != 'brief' else (hosts[0],), cands, cites)
+            if not any('speaker' in ln for ln in lines):
+                raise RuntimeError('The script came back empty')
+            out['progress'] = {'stage': 'audio', 'done': 0, 'total': 1}
+            study._save(cdir, out)
+
+            def prog(d, n):
+                out['progress'] = {'stage': 'audio', 'done': d, 'total': n}
+                study._save(cdir, out)
+            duration = synthesize(lines, corpus, hosts, work_dir, audio_path(cdir, oid), on_progress=prog,
+                                  clips=clip_wavs)
         by_id = {c['id']: c for c in corpus['cards']}
         for ln in lines:
             if 'clip' in ln:
                 c = by_id[ln['clip']]
                 cites.resolve(c['id'])
-                ln.update(quote=c['quote'], who=_who(c, corpus))
+                ln.update(quote=heard.get(c['id']) or c['quote'], who=_who(c, corpus))
         out.update(status='done', finished_at=study._now(), duration=duration, title=str(script.get('title') or '')[:80],
                    lang='zh' if lng.startswith('Chinese') else 'en',
                    result={'title': str(script.get('title') or '')[:80], 'plan': script.get('plan') or [],

@@ -77,7 +77,7 @@ def fake_llm(prompt, model=None, purpose='ask', grounded=False):
         {'clip': long_id},                     # 不在候选里：丢掉
         {'clip': ep0[0]},                      # 重复的原声：丢掉
         {'speaker': 'Alex', 'text': 'And here is the second one.', 'style': 'calm', 'cite': [ids[-1]]},
-        {'clip': ep1[0]},                      # 那期没本机音频、下载失败：主持人念原话
+        {'clip': ep1[0] if ep1 else long_id},  # 那期没本机音频、下载失败：先核对时就不交给模型，写了也丢掉
         {'speaker': 'Sam', 'text': 'Right.', 'style': '', 'cite': []},
     ] + [{'speaker': 'Alex' if k % 2 else 'Sam', 'text': f'Filler line {k}.', 'style': 'easy', 'cite': [ids[0]]}
          for k in range(12)]
@@ -124,13 +124,15 @@ ok['text_clean'] = (talk[0]['text'] == 'So <laugh> small teams win?' and talk[2]
                     and not any('[#' in ln['text'] for ln in talk))
 ok['cites'] = (all(c in o['citations'] for ln in talk for c in ln['cite']) and o['dropped_citations'] >= 1
                and '9-99' not in json.dumps(talk))
-ok['clips'] = (len(clips) == 2 and not clips[0].get('fallback') and clips[1].get('fallback') is True
+ok['clips'] = (len(clips) == 1 and not clips[0].get('fallback')
                and clips[0]['quote'] in SHORT and clips[0]['clip'] in o['citations'] and 0.5 < clips[0]['dur'] <= podcast.CLIP_MAX_SEC)
 ok['timing'] = ts == sorted(ts) and ts[0] == 0 and ts[-1] < o['duration']
 ok['tts_blocks'] = (all(c['n'] <= podcast.MAX_TURNS_PER_CALL and len(c['speakers']) <= 2 for c in tts_calls)
                     and any(c['voices'].get('Alex') == 'Kore' and c['voices'].get('Sam') == 'Puck' for c in tts_calls)
-                    and any(t.startswith('In their own words: ') for c in tts_calls for t in c['texts']))
+                    and not any(t.startswith('In their own words: ') for c in tts_calls for t in c['texts']))
 script_prompt = next(p for purpose, p in prompts if purpose == 'podcast' and 'Task: write the script' in p)
+cand_part = script_prompt.split('Choose ONLY from these candidates', 1)[1]
+ok['unfetchable_not_offered'] = not re.search(r'^1-\d+ \| ', cand_part, re.M)      # 第二期取不到音频：不当候选
 ok['prompt'] = ('Choose ONLY from these candidates' in script_prompt and LONG.strip()[:40] not in script_prompt.split('Choose ONLY')[1]
                 and 'about 4 minutes' in script_prompt and 'Never call it by its label' in script_prompt)
 cost = usage.cost_for(ref='study:' + o['id']) or {}
@@ -142,6 +144,26 @@ w = podcast.fetch_clip(card0, corpus['episodes'][0], os.path.join(TMP, 'clip0.wa
 with wave.open(w) as f:
     clip_sec = f.getnframes() / f.getframerate()
 ok['fetch_local'] = w is not None and 1.0 < clip_sec < podcast.CLIP_MAX_SEC
+with wave.open(w) as f:                               # 头上淡入：开头 10 毫秒几乎没声
+    head = f.readframes(int(f.getframerate() * 0.01))
+ok['fade_in'] = max(abs(int.from_bytes(head[i:i + 2], 'little', signed=True)) for i in range(0, len(head), 2)) < 3000
+
+# 5b 核对原声：Whisper 听到的跟原话对不上（时间点漂了 / 原话是乱码）就不放
+real_words = podcast._words
+podcast._words = lambda path, zh: [('Talk', 0.2, 0.5), ('about', 0.5, 0.7), ('the', 0.7, 0.8), ('weather', 0.8, 1.3)]
+bad = podcast.fetch_clip(card0, corpus['episodes'][0], os.path.join(TMP, 'clip_bad.wav'), strict=True)
+podcast._words = lambda path, zh: [('Small', 0.5, 0.8), ('teams', 0.8, 1.1), ('ship', 1.1, 1.3), ('faster', 1.3, 1.7),
+                                   ('than', 1.7, 1.9), ('big', 1.9, 2.1), ('ones', 2.1, 2.5)]
+info = {}
+good = podcast.fetch_clip(card0, corpus['episodes'][0], os.path.join(TMP, 'clip_good.wav'), strict=True, info=info)
+ok['verify_clip'] = (bad is None and not os.path.exists(os.path.join(TMP, 'clip_bad.wav')) and good is not None
+                     and info.get('heard') == 'Smallteamsshipfasterthanbigones')
+podcast._words = lambda path, zh: [('Small', 0.5, 0.8), ('teams', 0.8, 1.1), ('ship', 1.1, 1.3), ('faster', 1.3, 1.7),
+                                   ('than', 1.7, 1.9), ('big', 1.9, 2.1), ('ones', 2.1, 2.5)] if 'cand_' + card0['id'].replace('-', '_') + '.wav' in path else \
+    [('Talk', 0.2, 0.5), ('about', 0.5, 0.7), ('weather', 0.8, 1.3)]
+vc, vp = podcast.verify_clips(corpus, podcast.clip_candidates(corpus, corpus['cards']), TMP, 3)
+ok['verify_candidates'] = [c['id'] for c in vc] == [card0['id']] and os.path.isfile(vp[card0['id']])
+podcast._words = real_words
 
 # 6 接口：估价、做一份（后台）、列表、取音频、删掉连 mp3 一起删、辩论没填双方 400
 c = A.app.test_client()
