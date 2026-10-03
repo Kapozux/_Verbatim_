@@ -2918,3 +2918,8 @@ pre.cc-quote.repo-quote { font-family: var(--mono); font-size: 13px; line-height
 .sr-labeling b { color: var(--ink-soft); font-weight: 500; font-size: 15.5px; }
 .sr-labeling .sr-svg { color: var(--coral-deep); }
 .sr-sort-pop { min-width: 160px; }
+/* 收起的来源栏：一组一个图标，右下角写份数 */
+.nb-rail-grp { position: relative; }
+.nb-rail-n { position: absolute; right: 1px; bottom: 1px; min-width: 15px; height: 15px; padding: 0 3px; border-radius: 999px;
+  font-size: 10.5px; font-weight: 600; line-height: 15px; text-align: center; color: var(--on-ink); background: var(--ink-soft); }
+#nb-src-rail { overflow-y: auto; scrollbar-width: none; }

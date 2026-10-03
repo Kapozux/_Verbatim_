@@ -258,6 +258,8 @@ function srcRender() {
 }
 
 // 来源栏收起后剩一条竖栏：展开键（在栏头）、＋、每个来源一个图标；点图标 = 展开并打开那条原文
+const RAIL_MAX = 8;                     // 收起的来源栏：超过这么多份就合并显示
+
 function srcRenderRail(d, ro) {
     const rail = document.getElementById('nb-src-rail');
     if (!rail) return;
@@ -275,22 +277,45 @@ function srcRenderRail(d, ro) {
         data-sid="${escapeHtml(ch.chain_id)}" title="${escapeHtml(ch.name || '')}" aria-label="${escapeHtml(ch.name || '')}">${ch.avatar
             ? `<img src="${escapeHtml(ch.avatar)}" alt="" referrerpolicy="no-referrer" onerror="this.replaceWith(document.createRange().createContextualFragment(srcSvg('channel')))">`
             : srcSvg('channel')}</button>`));
-    if (!d.channel) {
-        (d.videos || []).filter(v => v.task_id).forEach(v => items.push(it('video', v.task_id, srcSvg('audio'), v.title || v.task_id, v.status === 'done')));
-    }
-    (d.recordings || []).forEach(r => items.push(it('recording', r.task_id, srcSvg('audio'), r.title, r.status === 'done')));
+    const singles = [];                              // [(kind, sid, 图标类型, 标题, 能用)]
+    if (!d.channel) (d.videos || []).filter(v => v.task_id).forEach(v => singles.push(['video', v.task_id, 'audio', v.title || v.task_id, v.status === 'done']));
+    (d.recordings || []).forEach(r => singles.push(['recording', r.task_id, 'audio', r.title, r.status === 'done']));
     (d.docs || []).forEach(x => {
         const k = x.ext === 'web' ? 'web' : ['ppt', 'pptx'].includes(x.ext) ? 'slides'
             : ['png', 'jpg', 'jpeg', 'webp', 'heic'].includes(x.ext) ? 'image' : x.ext === 'text' ? 'note' : 'doc';
-        items.push(it('doc', x.doc_id, srcSvg(k), x.title, x.status === 'ready'));
+        singles.push(['doc', x.doc_id, k, x.title, x.status === 'ready']);
     });
-    if (typeof repoRailItems === 'function') items.push(...repoRailItems(d, it));
+    (d.repos || []).forEach(r => singles.push(['repo', r.repo_id, 'code', r.title, r.cards > 0]));
+    // 来源多了，一份一个图标会排成一长串一样的图标（用户：「这个有点恶心」）：分过组的一组一个，没分组的按类型合并，角上写份数
+    const grp = (key, icon, title, n) => `<button type="button" class="nb-rail-it nb-rail-grp" data-grp="${escapeHtml(key)}"
+        title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}">${icon}<span class="nb-rail-n">${n}</span></button>`;
+    const labels = srcFolders().filter(f => (f.items || []).some(sid => singles.some(x => x[1] === sid)));
+    if (singles.length <= RAIL_MAX) {
+        singles.forEach(([kind, sid, k, title, ok]) => items.push(it(kind, sid, srcSvg(k), title, ok)));
+    } else {
+        const inLabel = new Set(labels.flatMap(f => f.items));
+        labels.forEach(f => {
+            const n = f.items.filter(sid => singles.some(x => x[1] === sid)).length;
+            items.push(grp('f:' + f.id, srcSvg('label'), T('src.railLabel', { name: f.name, n }), n));
+        });
+        const byType = {};
+        singles.filter(x => !inLabel.has(x[1])).forEach(x => { (byType[x[2]] = byType[x[2]] || []).push(x); });
+        Object.entries(byType).forEach(([k, xs]) => items.push(grp('t:' + k, srcSvg(k),
+            T('src.railType', { type: T('src.type.' + k), n: xs.length }), xs.length)));
+    }
     rail.innerHTML = (ro ? '' : `<button type="button" class="nb-rail-it nb-rail-add" title="${escapeHtml(T('nb.srcRailAdd'))}"
         aria-label="${escapeHtml(T('nb.srcRailAdd'))}"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"
         stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>`)
         + (items.length ? `<span class="nb-rail-sep"></span>${items.join('')}` : '');
     const add = rail.querySelector('.nb-rail-add');
     if (add) add.addEventListener('click', e => { e.stopPropagation(); openAddSources(); });
+    rail.querySelectorAll('.nb-rail-grp').forEach(b => b.addEventListener('click', () => {
+        // 点一组：展开来源栏（整条栏的点击负责），分组的打开那一组，按类型合并的改成按类型排序
+        const g = b.dataset.grp;
+        if (g.startsWith('f:')) srcState.open[g] = true;
+        else srcSetSortMode('type');
+        srcRender();
+    }));
     rail.querySelectorAll('.nb-rail-it[data-kind]').forEach(b => b.addEventListener('click', () => {
         // 点击会冒泡到整条栏，那边负责展开、记住状态；这里只管打开哪一条
         const { kind, sid } = b.dataset;

@@ -29,10 +29,6 @@ function repoSrcRows(d) {
     return out;
 }
 
-function repoRailItems(d, it) {
-    return (d.repos || []).map(r => it('repo', r.repo_id, srcSvg('code'), r.title, r.cards > 0));
-}
-
 // ---- 读：中间弹框，问题可空（= 导览），估价写在按钮上 ----
 function repoReadPicker(repoId) {
     const r = ((srcState.data || {}).repos || []).find(x => x.repo_id === repoId);
