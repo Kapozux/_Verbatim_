@@ -6,6 +6,7 @@
 计数而不计时：数一次请求里碰了多少次 _chains 目录（os.stat / os.listdir），转写条数翻倍时这个数不该变——计时在忙的机器上会抖。"""
 import json
 import os
+import threading
 
 from _support import Checks, isolate, make_transcript, write_json
 
@@ -47,17 +48,19 @@ n += 29                                              # 一共 60 条
 
 
 def chain_touches(path):
-    """一次请求里碰 _chains 目录的次数。"""
+    """一次请求里碰 _chains 目录的次数。只数这个线程的：转写索引在后台对账时也会碰到（看 _chains 下有没有 meta.json），
+    跟这次请求撞上就会多数一两次（Python 3.12 上撞上过）。"""
     count = [0]
+    me = threading.get_ident()
     real_stat, real_listdir = os.stat, os.listdir
 
     def stat(p, *a, **k):
-        if str(p).startswith(A.CHAINS_DIR):
+        if str(p).startswith(A.CHAINS_DIR) and threading.get_ident() == me:
             count[0] += 1
         return real_stat(p, *a, **k)
 
     def listdir(p='.'):
-        if str(p).startswith(A.CHAINS_DIR):
+        if str(p).startswith(A.CHAINS_DIR) and threading.get_ident() == me:
             count[0] += 1
         return real_listdir(p)
 

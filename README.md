@@ -42,13 +42,15 @@ Your data stays in `~/Library/Application Support/Verbatim`. Full walkthrough:
 ### Run from source
 
 ```bash
-brew install ffmpeg yt-dlp
-git clone https://github.com/Kapozux/_Verbatim_.git && cd _Verbatim_/getAudio
-pip install -r requirements.txt
-bash run.sh        # open http://localhost:5001
+git clone https://github.com/Kapozux/_Verbatim_.git && cd _Verbatim_ && ./install.sh
 ```
 
-Python 3.9+. Use Homebrew's `yt-dlp`, not the pip package.
+`install.sh` installs whatever is missing (ffmpeg, yt-dlp and uv through Homebrew; its own Python 3.12 and the
+dependencies into `venv/`, without touching your system Python), then starts Verbatim and opens
+http://localhost:5001. Running it again is safe. Afterwards, start it with `bash getAudio/run.sh`.
+
+On macOS you need [Homebrew](https://brew.sh); on Linux, install ffmpeg, yt-dlp and uv yourself first. It takes
+about 1.3 GB, and local Whisper downloads its model (about 3 GB for large-v3) the first time you use it.
 
 ## Documentation
 
@@ -111,8 +113,7 @@ stances, predictions, recurring claims, radar) are in this repo for now — inst
 - Gemini may block sensitive material; that file falls back to local Whisper instead of failing.
 - The **Xiaohongshu tab** needs a companion scraper project (`XHS_PROJECT` env var) and `uv`. It's not a
   pip dependency, since it drives a real logged-in browser session.
-- **Not built yet:** a full-text index for search at scale (currently a linear scan), pipeline
-  auto-resume across restarts, and Gemini Batch API for cheaper bulk analysis.
+- **Not built yet:** pipeline auto-resume across restarts, and Gemini Batch API for cheaper bulk analysis.
 
 <details>
 <summary><b>Under the hood</b></summary>

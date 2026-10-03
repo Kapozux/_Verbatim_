@@ -132,13 +132,14 @@ Flask (app.py, ~3000 lines)
 
 ## Setup
 
-**Requirements:** Python 3.9+, `ffmpeg` and `yt-dlp` on `PATH` (Homebrew recommended on macOS).
+From the repository root:
 
 ```bash
-brew install ffmpeg yt-dlp          # yt-dlp MUST be the system binary, not a pip package
-python3 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt     # mlx-whisper auto-skips on non-Apple-Silicon
+./install.sh        # ffmpeg / yt-dlp / uv via Homebrew, Python 3.12 + requirements.txt into ../venv, then starts
 ```
+
+`run.sh` uses the repository-root `venv/` (`../venv` from here). mlx-whisper is skipped automatically off
+Apple Silicon.
 
 Create `getAudio/.env`:
 

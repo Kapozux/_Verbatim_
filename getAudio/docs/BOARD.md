@@ -90,4 +90,5 @@
 - 界面「项目」改叫「笔记本」
 - 侧栏笔记本图标换成本子；转写页「最近转写」从 2.3 秒降到 0.2 秒（列转写时每条都重查一遍笔记本，改成一次请求查一次；最近转写只取 12 条）
 - 转写列表和搜索走 SQLite 索引（`library.py` / `library.db`，ADR 0009）：最近 12 条 122 ms → 3 ms，搜索 600 ms → 7–150 ms，结果跟原来逐条一样
+- 从源码一键安装：`git clone … && cd _Verbatim_ && ./install.sh`（uv 装 Python 3.12 + 依赖到 venv/，再启动）。新克隆空缓存 42 秒装完，3.12 下测试全过、Whisper 转写走通；README / 两份上手文档 / getAudio/README 的旧步骤（`pip install` 在新 Mac 上必失败）都改了。Docker 和 Linux 没实测
 - 重构阶段 0–3（在分支上）

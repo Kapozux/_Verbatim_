@@ -145,16 +145,18 @@ now in **Settings → Storage** (**Backup folder**, **Back up now**).
 
 ## Run from source
 
-For developers. You need macOS or Linux, Python 3.9+, and Homebrew.
+For developers. On macOS you need [Homebrew](https://brew.sh); on Linux, install ffmpeg, yt-dlp and uv first.
 
 ```bash
-brew install ffmpeg yt-dlp          # use Homebrew's yt-dlp, not the pip package
-git clone https://github.com/Kapozux/_Verbatim_.git && cd _Verbatim_/getAudio
-pip install -r requirements.txt
-bash run.sh                         # then open http://localhost:5001
+git clone https://github.com/Kapozux/_Verbatim_.git && cd _Verbatim_ && ./install.sh
 ```
 
-- `run.sh` uses `../venv` if it exists, otherwise the system `python3`.
+- `install.sh` installs what's missing (ffmpeg, yt-dlp and uv through Homebrew; Python 3.12 and the dependencies
+  into `venv/` with uv, without touching the system Python), starts Verbatim and opens http://localhost:5001.
+  Running it again is safe; `./install.sh --no-start` only installs.
+- After that, start it with `bash getAudio/run.sh` (it uses `venv/`).
+- Plain `pip install` usually fails on a current Mac: there is no `pip` command, and Homebrew's `pip3` refuses
+  with `externally-managed-environment`. That's why the script uses its own environment.
 - Keys can go in Settings, or in `getAudio/.env`:
 
   ```ini

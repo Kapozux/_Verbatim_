@@ -128,16 +128,17 @@ key 保存在数据目录的 `settings.local.json` 里，只会发给它所属�
 
 ## 从源码运行
 
-给开发者。需要 macOS 或 Linux、Python 3.9+ 和 Homebrew。
+给开发者。macOS 需要先装 [Homebrew](https://brew.sh)；Linux 先自己装好 ffmpeg、yt-dlp 和 uv。
 
 ```bash
-brew install ffmpeg yt-dlp          # 用 Homebrew 的 yt-dlp，不要用 pip 装的
-git clone https://github.com/Kapozux/_Verbatim_.git && cd _Verbatim_/getAudio
-pip install -r requirements.txt
-bash run.sh                         # 然后打开 http://localhost:5001
+git clone https://github.com/Kapozux/_Verbatim_.git && cd _Verbatim_ && ./install.sh
 ```
 
-- `run.sh` 会优先用 `../venv`，没有就用系统的 `python3`。
+- `install.sh` 把缺的装上（ffmpeg、yt-dlp、uv 用 Homebrew 装；用 uv 装一份 Python 3.12 和依赖到 `venv/`，不碰系统
+  Python），然后启动 Verbatim、打开 http://localhost:5001。再跑一遍也安全；`./install.sh --no-start` 只装不启动。
+- 以后启动：`bash getAudio/run.sh`（它用 `venv/`）。
+- 直接 `pip install` 在现在的 Mac 上通常装不上：没有 `pip` 这个命令，Homebrew 的 `pip3` 又会以
+  `externally-managed-environment` 拒绝。所以脚本自己建环境。
 - key 可以在设置里填，也可以写进 `getAudio/.env`：
 
   ```ini

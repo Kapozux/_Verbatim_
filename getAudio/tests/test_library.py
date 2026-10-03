@@ -8,6 +8,7 @@ _review_episode_transcript、enrich.enrich_task、DELETE /api/history/<id>、DEL
 import builtins
 import json
 import os
+import threading
 import time
 import uuid
 
@@ -128,8 +129,11 @@ opened = []
 real_open = builtins.open
 
 
+ME = threading.get_ident()      # 只数请求这个线程的：后台对账读文件不算
+
+
 def spy_open(p, *a, **k):
-    if str(p).startswith(R) and str(p).endswith(('meta.json', 'transcript.json')):
+    if str(p).startswith(R) and str(p).endswith(('meta.json', 'transcript.json')) and threading.get_ident() == ME:
         opened.append(p)
     return real_open(p, *a, **k)
 
