@@ -60,7 +60,7 @@ GitHub 反垃圾系统眼里的"新账号 + 改名 + 关键词描述 + 批量 to
 - 演示实例：`启动演示.command` → 只读演示库，端口 5002（`VERBATIM_DEMO=1`）。
 - 数据目录：`results/`（每条转写一个 uuid 目录）、`results/_chains/`（博主分析链）、
   `uploads/`、`tasks.db`、`usage.db`（每次模型调用的 token / 费用记账，Settings → Costs 汇总；
-  价格表可用 `prices.json` 覆盖）。别 `rm -rf`、别改动结构。
+  价格表可用 `prices.json` 覆盖）、`library.db`（转写列表和搜索的索引，删了会自动重建）。别 `rm -rf`、别改动结构。
 - 详细功能与架构见 `README.md`（写于 2026-08-10，之后新增的 Gemini 3.5 引擎、Reflect
   面板、演示模式、合并转写、单期重转写还没写进去）。
 - MCP server 在 `../verbatim-mcp`（已发 PyPI）；打包脚本在 `packaging/`。
@@ -78,6 +78,8 @@ GitHub 反垃圾系统眼里的"新账号 + 改名 + 关键词描述 + 批量 to
 - 分析/回顾面板的叙事、模型选择约定见记忆里的「回顾面板约定」。
 - 长任务（转写、分析）都是后台线程 + 轮询/SSE，验证功能时用 curl 打接口或看 `server.log`，
   不要重启正在跑任务的服务。
+- 写了 `results/<tid>/meta.json` 或 `transcript.json`（新建、改、删）之后调 `library.changed(tid)`：资料库列表和搜索
+  走 SQLite 索引 `library.db`（ADR 0009），漏调不会错，只是最多晚 60 秒才在列表 / 搜索里变。
 
 ## 多窗口一起开发（2026-10-03 起）
 

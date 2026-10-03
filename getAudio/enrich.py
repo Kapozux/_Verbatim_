@@ -233,6 +233,8 @@ def enrich_task(task_dir):
     meta['filename_meaningful'] = card['filename_meaningful']
     with open(meta_path, 'w', encoding='utf-8') as f:
         json.dump(meta, f, ensure_ascii=False, indent=2)
+    import library
+    library.changed(os.path.basename(os.path.normpath(task_dir)))
     return True
 
 

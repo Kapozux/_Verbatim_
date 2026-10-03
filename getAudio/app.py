@@ -22,6 +22,7 @@ from concurrent.futures import ThreadPoolExecutor
 from flask import Flask, Response, jsonify, render_template, request, send_file
 
 import config
+import library
 import taskdb
 import timecode
 import usage
@@ -514,6 +515,7 @@ def _save_results(task_id, original_filename, engine, audio_source_path,
     if summary:
         with open(os.path.join(task_dir, 'summary.json'), 'w', encoding='utf-8') as f:
             json.dump(summary, f, ensure_ascii=False, indent=2)
+    library.changed(task_id)
 
 
 # 云引擎「内容拦截」标记：确定性拒绝（版权/安全/敏感），重试同一引擎毫无意义
@@ -1846,30 +1848,16 @@ def api_task_status(task_id):
 def api_history():
     """List all saved transcription sessions（附带 source：pipeline / mine）。
     ?limit=N 只要最新的 N 条（转写页「最近转写」只用 12 条，不必传 3 MB 的全表）。"""
-    results_dir = config.RESULTS_FOLDER
-    entries = []
     limit = request.args.get('limit', type=int)
-
-    if not os.path.isdir(results_dir):
-        return jsonify(entries)
-
     cm = _chain_task_map()
-    for name in os.listdir(results_dir):
-        meta_path = os.path.join(results_dir, name, 'meta.json')
-        if os.path.isfile(meta_path):
-            try:
-                with open(meta_path, 'r', encoding='utf-8') as f:
-                    e = json.load(f)
-            except Exception:
-                continue
-            author = _chain_author_for(e.get('id') or name, e.get('filename'), cm)
-            e['source'] = 'pipeline' if author else 'mine'
-            if author:
-                e['creator'] = author
-            entries.append(e)
-
-    entries.sort(key=lambda e: e.get('date', ''), reverse=True)
-    return jsonify(entries[:limit] if limit and limit > 0 else entries)
+    entries = []
+    for name, e in library.entries(limit if limit and limit > 0 else None):   # SQLite 索引，见 library.py
+        author = _chain_author_for(e.get('id') or name, e.get('filename'), cm)
+        e['source'] = 'pipeline' if author else 'mine'
+        if author:
+            e['creator'] = author
+        entries.append(e)
+    return jsonify(entries)
 
 
 @app.route('/api/history/<task_id>')
@@ -2000,6 +1988,7 @@ def api_history_delete(task_id):
     task_dir = os.path.join(config.RESULTS_FOLDER, task_id)
     if os.path.isdir(task_dir):
         shutil.rmtree(task_dir, ignore_errors=True)
+        library.changed(task_id)
         return jsonify({'ok': True})
     return jsonify({'error': 'Not found'}), 404
 
@@ -2080,11 +2069,6 @@ def api_search():
     if not query:
         return jsonify([])
 
-    results_dir = config.RESULTS_FOLDER
-    hits = []
-    if not os.path.isdir(results_dir):
-        return jsonify(hits)
-
     link_mode = _looks_like_url(raw_query)
     link_vid = _video_id_from_url(raw_query, resolve_short=True).lower() if link_mode else ''
     # 没抠出 id 的链接（未知平台）：退化成整串子串匹配（只去掉协议/www/末尾斜杠，
@@ -2093,69 +2077,22 @@ def api_search():
     if link_mode and not link_vid:
         link_plain = re.sub(r'^https?://(www\.)?', '', query).rstrip('/')
 
-    cm = _chain_task_map()
-    for name in os.listdir(results_dir):
-        task_dir = os.path.join(results_dir, name)
-        meta_path = os.path.join(task_dir, 'meta.json')
-        if not os.path.isfile(meta_path):
-            continue
-        try:
-            with open(meta_path, 'r', encoding='utf-8') as f:
-                meta = json.load(f)
-        except Exception:
-            continue
-
-        snippet = ''
-        if link_mode:
+    if link_mode:
+        found = []
+        for name, meta in library.entries():
             src = (meta.get('source_url') or '')
-            matched = bool(
-                (link_vid and link_vid in _link_ids(meta))
-                or (link_plain and link_plain in src.lower())
-            )
-            if matched:
-                snippet = '🔗 ' + (src or meta.get('video_id') or raw_query)
-                author = _chain_author_for(meta.get('id') or name, meta.get('filename'), cm)
-                hits.append({**meta, 'snippet': snippet,
-                             'source': 'pipeline' if author else 'mine',
-                             **({'creator': author} if author else {})})
-            continue
+            if (link_vid and link_vid in _link_ids(meta)) or (link_plain and link_plain in src.lower()):
+                found.append((name, meta, '🔗 ' + (src or meta.get('video_id') or raw_query)))
+    else:
+        found = library.search(query)   # 标题 / 标签 / 正文，走 SQLite 索引，见 library.py
 
-        haystacks = [
-            meta.get('filename', ''),
-            meta.get('ai_title', ''),
-            meta.get('ai_one_line', ''),
-            ' '.join(meta.get('ai_tags', []) or []),
-            meta.get('video_id', '') or '',
-            meta.get('source_url', '') or '',
-        ]
-        matched = any(query in h.lower() for h in haystacks if h)
-
-        if not matched:
-            transcript_path = os.path.join(task_dir, 'transcript.json')
-            if os.path.isfile(transcript_path):
-                try:
-                    with open(transcript_path, 'r', encoding='utf-8') as f:
-                        segs = json.load(f)
-                    for s in segs:
-                        text = s.get('text', '')
-                        idx = text.lower().find(query)
-                        if idx != -1:
-                            start = max(0, idx - 20)
-                            snippet = (
-                                f"[{s.get('timestamp', '')}] "
-                                f"...{text[start:idx + len(query) + 40]}..."
-                            )
-                            matched = True
-                            break
-                except Exception:
-                    pass
-
-        if matched:
-            author = _chain_author_for(meta.get('id') or name, meta.get('filename'), cm)
-            hits.append({**meta, 'snippet': snippet,
-                         'source': 'pipeline' if author else 'mine',
-                         **({'creator': author} if author else {})})
-
+    cm = _chain_task_map()
+    hits = []
+    for name, meta, snippet in found:
+        author = _chain_author_for(meta.get('id') or name, meta.get('filename'), cm)
+        hits.append({**meta, 'snippet': snippet,
+                     'source': 'pipeline' if author else 'mine',
+                     **({'creator': author} if author else {})})
     hits.sort(key=lambda e: e.get('date', ''), reverse=True)
     return jsonify(hits)
 
@@ -2182,6 +2119,7 @@ def api_history_clear():
         task_dir = os.path.join(results_dir, name)
         if os.path.isdir(task_dir):
             shutil.rmtree(task_dir, ignore_errors=True)
+            library.changed(name)
             deleted += 1
 
     return jsonify({'ok': True, 'deleted': deleted, 'skipped': skipped})
@@ -2244,6 +2182,9 @@ def _update_meta(meta_path, updates):
         os.replace(tmp, meta_path)
     except Exception:  # noqa: BLE001
         pass
+    d = os.path.dirname(os.path.abspath(meta_path))
+    if os.path.dirname(d) == os.path.abspath(config.RESULTS_FOLDER):
+        library.changed(os.path.basename(d))
 
 
 def _save_chain(state):
@@ -2517,6 +2458,7 @@ def _save_subtitle_task_inner(task_id, target, segments, source, lang, timing, s
     if summary:
         with open(os.path.join(task_dir, 'summary.json'), 'w', encoding='utf-8') as f:
             json.dump(summary, f, ensure_ascii=False, indent=2)
+    library.changed(task_id)
     taskdb.create(task_id, display, 'subtitle', None, None)
     taskdb.set_status(task_id, 'done')
     try:
@@ -2677,6 +2619,7 @@ def _review_episode_transcript(task_id, preset=None):
                 json.dump(segs, f, ensure_ascii=False, indent=2)
         except OSError:
             pass
+        library.changed(task_id)
     return segs
 
 
@@ -7210,6 +7153,7 @@ def start_background():
     recover_unfinished_chains()
     threading.Thread(target=_backfill_source_links, daemon=True).start()
     threading.Thread(target=_subscription_loop, daemon=True).start()   # 订阅的博主定时增量更新
+    library.start()   # 转写索引跟磁盘对一次账（第一次装上时后台建正文索引，十来秒）
     if DEMO_MODE:
         return   # 演示库只读不花钱：不预算回顾（调模型），也不备份（task_id 与真实库相同，会覆盖真实备份）
     try:

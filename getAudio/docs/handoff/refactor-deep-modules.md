@@ -30,6 +30,7 @@
 - `voices.py` 和 `app._voices_projects_of` 直接读 chain.json / meta.json / transcript.json → 改用 `chainstore` / `transcripts`。
 - main 上 `analyze.analyze_episode` 加了长节目分段抽卡，要跟 `cards.ensure` 注入的 `extract` 对上。
 - main 上建合集的十分钟去重、补发布日期（`_fill_missing_dates`）、预测核对带上下文，都要搬到分支的新结构里。
+- main 上资料库列表和搜索改走 `library.py`（SQLite 索引，ADR 0009）：`api_history` / `api_search` 不再自己读文件；写 meta.json / transcript.json 的地方都调了 `library.changed(tid)`——合进来后挪进 `transcripts.py`（它是唯一的写入者），`tests/test_library.py`、`tests/test_history_fast.py` 要继续过。
 - 字母、决策记录编号以 `docs/BOARD.md` 的登记为准。
 
 ## 阶段 4–6（还没做）
