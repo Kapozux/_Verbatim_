@@ -250,7 +250,13 @@ _LANG_LINES = {
 }
 
 
-def _lang_line(lang):
+def _lang_line(lang, episodes=None):
+    """'auto' 时按证据卡里的原话判断中英，明确写进提示词——只写「跟随原文」时模型会跟着中文提示词写中文
+    （2026-10-03 All-In 英文笔记本的综述成了中文）。判断不了才退回「跟随原文」。"""
+    if (lang or 'auto') == 'auto' and episodes:
+        import textlang
+        quotes = ' '.join(str(c.get('quote') or '') for e in episodes for c in (e.get('cards') or [])[:40])
+        lang = textlang.detect(quotes) or 'auto'
     return _LANG_LINES.get(lang or 'auto', _LANG_LINES['auto'])
 
 
@@ -536,6 +542,19 @@ def _extract_cards_chunked(title, chunks, author, provider, model):
     return data
 
 
+def _cards_lang_rule(transcript_text):
+    """提示词里「语言跟随转写」那条，模型不思考时会被中文提示词带偏（2026-10-04 对比：Gemini 关思考、DeepSeek
+    都把英文节目的 obs 写成了中文）。判断好语言，写在转写后面——模型最看重最后读到的。layer 的取值是代码认的，原样保留。"""
+    import textlang
+    lang = textlang.detect(transcript_text)
+    if lang == 'en':
+        return ('\n\nWrite obs and topic in English — the transcript is in English. Keep quote verbatim, '
+                'and keep layer values exactly as listed (转写自证 / 他的主张 / 外部核实).')
+    if lang == 'zh':
+        return '\n\nobs、topic 用中文写（转写是中文）。quote 照抄原话，layer 只用列出的三个值。'
+    return ''
+
+
 def _extract_cards(title, transcript_text, author, provider, model):
     """逐期抽取证据卡。返回 {cards, metrics, asr_suspects} 或 None。
 
@@ -545,7 +564,7 @@ def _extract_cards(title, transcript_text, author, provider, model):
     prompt = CARDS_PROMPT.format(
         author=author, title=title, transcript=transcript_text,
         today=datetime.now().strftime('%Y-%m-%d'),
-    )
+    ) + _cards_lang_rule(transcript_text)
     data = agent(lambda p: _llm(p, provider, model, purpose='cards'),
                  prompt, schema=['cards'], retries=2, retry_on_error=False)
     if not isinstance(data, dict):
@@ -825,7 +844,7 @@ def synthesize(episodes, author='该博主', critique_level='analytical',
     digest = _build_digest(good, author, provider, extract_model)
 
     portrait = _llm(PORTRAIT_PROMPT.format(
-        author=author, n=len(good), rules=_rules(), lang_line=_lang_line(lang),
+        author=author, n=len(good), rules=_rules(), lang_line=_lang_line(lang, good),
         level=level, tone=_TONE[level], impression=impression,
         digest=_metrics_block(agg, len(good)) + '\n\n' + digest,
     ), provider, synth_model, purpose='synth')
@@ -925,7 +944,7 @@ def render_lens(episodes, lens, author='该博主', preset=None, lang='auto'):
     provider, extract_model, synth_model = resolve_analysis(preset)
     agg = _agg_metrics(episodes)
     digest = _build_digest(episodes, author, provider, extract_model)
-    return _llm(_lang_line(lang) + '\n\n' + tpl.format(
+    return _llm(_lang_line(lang, episodes) + '\n\n' + tpl.format(
         author=author, n=len(episodes),
         digest=_metrics_block(agg, len(episodes)) + '\n\n' + digest,
     ), provider, synth_model, purpose='lens')
@@ -1126,7 +1145,7 @@ def synthesize_collection(episodes, name, kind='mixed', preset=None, lang='auto'
     digest = _build_digest(good, name, provider, extract_model)
     return _llm(COLLECTION_PROMPT.format(
         name=name, kind=KIND_LABEL.get(kind, kind), n=len(good), rules=_rules(),
-        lang_line=_lang_line(lang), digest=digest), provider, synth_model, purpose='synth')
+        lang_line=_lang_line(lang, good), digest=digest), provider, synth_model, purpose='synth')
 
 
 # ---- 定期同步：画像增量更新（在原画像上并入新几期，原有结论不动，除非被新证据推翻）----
@@ -1160,7 +1179,7 @@ def update_portrait(old_md, new_episodes, author, total, preset=None, lang='auto
         return old_md
     out = _llm(UPDATE_PORTRAIT_PROMPT.format(
         author=author, m=len(good), total=total, today=datetime.now().strftime('%Y-%m-%d'),
-        lang_line=_lang_line(lang), rules=_rules(), portrait=old_md[:60000],
+        lang_line=_lang_line(lang, good), rules=_rules(), portrait=old_md[:60000],
         digest=_digest(good, _digest_budget(provider))), provider, synth_model, purpose='synth')
     # 模型偶尔只回一小段：太短就当失败，交给调用方整份重写
     if not out or len(out) < len(old_md) * 0.5:

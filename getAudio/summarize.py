@@ -37,7 +37,7 @@ SUMMARY_PROMPT = """你是一个专业的内容分析助手。请对以下音频
 2. sections 按照内容的自然段落/话题切换来划分，通常 3-8 个段落
 3. 每个 section 要标注对应的时间范围（从转录文本中的时间戳推断）
 4. title 要简短有力，能概括该段主题
-5. 所有文字（overview / title / summary）用与转录文本相同的语言输出——转录是中文就用中文，是英文就用英文
+5. {lang_rule}
 6. 只输出 JSON，不要有其他文字
 
 以下是转录文本：
@@ -59,7 +59,10 @@ def summarize_transcript(full_text, use_qwen=False):
     if not full_text or len(full_text.strip()) < 50:
         return None
 
-    prompt = SUMMARY_PROMPT + full_text
+    import textlang
+    rule = textlang.rule(full_text, 'overview / title / summary')
+    # 语言要求写在规则里，转录文本后面再说一遍：只写「跟原文同一种语言」时模型会跟着中文提示词写中文
+    prompt = SUMMARY_PROMPT.replace('{lang_rule}', rule) + full_text + '\n\n' + rule
 
     if use_qwen:
         raw = _call_qwen(prompt)
