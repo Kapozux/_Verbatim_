@@ -67,6 +67,11 @@ _SETTING_ENV = {
     'gemini_base_url': 'GEMINI_BASE_URL',
     'dashscope_key': 'DASHSCOPE_API_KEY',
     'openrouter_key': 'OPENROUTER_API_KEY',
+    'deepseek_key': 'DEEPSEEK_API_KEY',
+    'kimi_key': 'MOONSHOT_API_KEY',
+    'deepseek_model': 'DEEPSEEK_MODEL',
+    'deepseek_pro_model': 'DEEPSEEK_PRO_MODEL',
+    'kimi_model': 'KIMI_MODEL',
     # Models（非秘密，运行时读 env，保存即生效）
     'whisper_model': 'WHISPER_MODEL_SIZE',
     'gemini_transcribe_model': 'GEMINI_TRANSCRIBE_MODEL',
@@ -80,7 +85,9 @@ _SETTING_ENV = {
 
 # 非秘密、可清空（空 = 回默认）的设置字段
 _PLAIN_FIELDS = ('gemini_base_url', 'whisper_model', 'gemini_transcribe_model',
-                 'gemini_analysis_model', 'gemini_extract_model', 'keep_audio', 'backup_dir')
+                 'gemini_analysis_model', 'gemini_extract_model', 'keep_audio', 'backup_dir',
+                 'deepseek_model', 'deepseek_pro_model', 'kimi_model')
+_KEY_FIELDS = ('gemini_key', 'dashscope_key', 'openrouter_key', 'deepseek_key', 'kimi_key')
 
 
 def _keep_audio():
@@ -6725,6 +6732,9 @@ def api_settings_get():
         'dashscope': {'set': dset, 'hint': dhint},
         'openrouter': {'set': oset, 'hint': ohint},
     }
+    for name, env in (('deepseek', 'DEEPSEEK_API_KEY'), ('kimi', 'MOONSHOT_API_KEY')):
+        kset, khint = _mask_key(env)
+        out[name] = {'set': kset, 'hint': khint}
     # 非秘密字段直接回显供编辑（模型名空 = 用默认）
     for field in _PLAIN_FIELDS:
         out[field] = (os.environ.get(_SETTING_ENV[field]) or '').strip()
@@ -6737,7 +6747,7 @@ def api_settings_save():
     data = _load_settings()
 
     # key：只有传了非空值才更新（留空 = 保持不变，避免用户没重填就被清空）
-    for field in ('gemini_key', 'dashscope_key', 'openrouter_key'):
+    for field in _KEY_FIELDS:
         if field in body:
             v = (body.get(field) or '').strip()
             if v:
@@ -6841,7 +6851,39 @@ def api_settings_test():
         except Exception as e:
             return jsonify({'ok': False, 'reason': str(e)[:180]})
 
+    if engine in ('deepseek', 'kimi'):
+        return jsonify(_test_compat_key(engine, body))
+
     return jsonify({'ok': False, 'reason': 'Unknown engine.'}), 400
+
+
+def _test_compat_key(engine, body):
+    """DeepSeek / Kimi 官方 key：打一次 GET /models（不花钱），看 key 能不能用、填的模型名在不在里面。"""
+    if engine == 'deepseek':
+        key = (body.get('deepseek_key') or '').strip() or config.deepseek_key()
+        base, want = config.DEEPSEEK_COMPAT_BASE, [(body.get('deepseek_model') or '').strip() or config.deepseek_models()[0],
+                                                   (body.get('deepseek_pro_model') or '').strip() or config.deepseek_models()[1]]
+    else:
+        key = (body.get('kimi_key') or '').strip() or config.moonshot_key()
+        base, want = config.MOONSHOT_COMPAT_BASE, [(body.get('kimi_model') or '').strip() or config.kimi_model()]
+    if not key:
+        return {'ok': False, 'reason': 'No key entered or saved yet.'}
+    try:
+        import requests as _rq
+        r = _rq.get(base.rstrip('/') + '/models', headers={'Authorization': f'Bearer {key}'}, timeout=15)
+    except Exception as e:  # noqa: BLE001
+        return {'ok': False, 'reason': str(e)[:180]}
+    if r.status_code in (401, 403):
+        return {'ok': False, 'reason': 'API key looks invalid.'}
+    if r.status_code != 200:
+        return {'ok': False, 'reason': f'Error {r.status_code}: {r.text[:120]}'}
+    ids = [m.get('id') for m in (r.json() or {}).get('data') or [] if m.get('id')]
+    missing = [m for m in dict.fromkeys(want) if ids and m not in ids]
+    if missing:
+        return {'ok': False, 'models': ids,
+                'reason': f'Key works, but this key has no model named {", ".join(missing)}. '
+                          f'Available: {", ".join(ids[:12])}'}
+    return {'ok': True, 'models': ids, 'reason': 'Works — key accepted. Models: ' + ', '.join(dict.fromkeys(want))}
 
 
 # ========== 存储 / 音频压缩 ==========

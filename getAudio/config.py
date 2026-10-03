@@ -167,6 +167,30 @@ ALIYUN_COMPAT_BASE = os.environ.get('ALIYUN_COMPAT_BASE') or \
 # OpenRouter：一把 key 通吃 Claude 等海外模型（OpenAI 兼容端点，无内容审查）。
 OPENROUTER_COMPAT_BASE = os.environ.get('OPENROUTER_COMPAT_BASE') or \
     'https://openrouter.ai/api/v1'
+# 用户自己的 DeepSeek / Kimi（月之暗面）key：官方 OpenAI 兼容端点。填了就直接走官方，不经阿里云。
+# 模型名可在 Settings 里改（官方改名时不用等发版）；「测试连接」会列出这把 key 能用的模型。
+DEEPSEEK_COMPAT_BASE = os.environ.get('DEEPSEEK_COMPAT_BASE') or 'https://api.deepseek.com/v1'
+MOONSHOT_COMPAT_BASE = os.environ.get('MOONSHOT_COMPAT_BASE') or 'https://api.moonshot.cn/v1'
+
+
+def deepseek_key():
+    return (os.environ.get('DEEPSEEK_API_KEY') or '').strip()
+
+
+def moonshot_key():
+    return (os.environ.get('MOONSHOT_API_KEY') or '').strip()
+
+
+def deepseek_models():
+    """(快模型, 强模型)：抽卡 / 便宜路由用快的，合成用强的。"""
+    return ((os.environ.get('DEEPSEEK_MODEL') or '').strip() or 'deepseek-v4-flash',
+            (os.environ.get('DEEPSEEK_PRO_MODEL') or '').strip() or 'deepseek-v4-pro')
+
+
+def kimi_model():
+    return (os.environ.get('KIMI_MODEL') or '').strip() or 'kimi-k2.6'
+
+
 ANALYSIS_PRESET_DEFAULT = os.environ.get('ANALYSIS_PRESET') or 'gemini'
 # 预设 → (provider, 抽取模型, 合成模型)
 ANALYSIS_PRESETS = {
@@ -193,6 +217,12 @@ def resolve_analysis(preset):
         return ('gemini',
                 os.environ.get('GEMINI_EXTRACT_MODEL') or p[1],
                 os.environ.get('GEMINI_ANALYSIS_MODEL') or p[2])
+    # DeepSeek / Kimi：用户填了自己的官方 key 就直接走官方，没填照旧走阿里云百炼
+    name = preset or ANALYSIS_PRESET_DEFAULT
+    if name == 'deepseek' and deepseek_key():
+        return ('deepseek',) + deepseek_models()
+    if name == 'kimi' and moonshot_key():
+        return ('moonshot', kimi_model(), kimi_model())
     return p
 # 每条转写的摘要、卡片元数据（标题/标签）：照着原文归纳的机械活，用最便宜的 flash-lite。
 # 2026-10-02 从 2.5-flash 换成 3.1-flash-lite（$0.25/$1.50 vs $0.30/$2.50 每百万 token，实测摘要便宜四成、质量相当）；

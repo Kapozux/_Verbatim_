@@ -661,8 +661,8 @@
             <option value="gemini" selected data-i18n="creators.providerGemini">Analyze: Gemini</option>
             <option value="opus5" data-i18n="creators.providerOpus5">Analyze: Claude Opus 5  (OpenRouter · thinking)</option>
             <option value="opus46" data-i18n="creators.providerOpus46">Analyze: Claude Opus 4.6  (OpenRouter · thinking)</option>
-            <option value="deepseek" data-i18n="creators.providerDeepseek">Analyze: DeepSeek  (Alibaba)</option>
-            <option value="kimi" data-i18n="creators.providerKimi">Analyze: Kimi  (Alibaba)</option>
+            <option value="deepseek" data-i18n="creators.providerDeepseek">Analyze: DeepSeek  (your key, or Alibaba)</option>
+            <option value="kimi" data-i18n="creators.providerKimi">Analyze: Kimi  (your key, or Alibaba)</option>
             <option value="glm" data-i18n="creators.providerGlm">Analyze: GLM  (Alibaba)</option>
             <option value="qwen" data-i18n="creators.providerQwen">Analyze: Qwen  (Alibaba)</option>
             </select></label>
@@ -824,6 +824,8 @@
                 <button class="settings-nav-item" data-pane="gemini"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/></svg><span data-i18n="settings.paneGemini">Gemini</span></button>
                 <button class="settings-nav-item" data-pane="dashscope"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M4 12h16"/><path d="M12 4c3 3 3 13 0 16"/></svg><span data-i18n="settings.paneDashscope">DashScope</span></button>
                 <button class="settings-nav-item" data-pane="openrouter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h10l4 5-4 5H4"/><path d="M14 7l6 5-6 5"/></svg><span data-i18n="settings.paneOpenrouter">OpenRouter</span></button>
+                <button class="settings-nav-item" data-pane="deepseek"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13c3-5 9-7 14-4l4-2-1 5c-2 5-8 8-13 6"/><circle cx="15" cy="11" r=".6"/></svg><span data-i18n="settings.paneDeepseek">DeepSeek</span></button>
+                <button class="settings-nav-item" data-pane="kimi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></svg><span data-i18n="settings.paneKimi">Kimi</span></button>
                 <button class="settings-nav-item" data-pane="models"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 9h6v6H9z"/></svg><span data-i18n="settings.paneModels">Models</span></button>
                 <button class="settings-nav-item" data-pane="storage"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16v4H4z"/><path d="M4 14h16v4H4z"/><path d="M7 8h.01M7 16h.01"/></svg><span data-i18n="settings.paneStorage">Storage</span></button>
                 <button class="settings-nav-item" data-pane="costs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M14.5 9.5a2.5 2.5 0 0 0-2.5-1.5c-1.4 0-2.5.8-2.5 2s1.1 1.7 2.5 2 2.5.8 2.5 2-1.1 2-2.5 2a2.5 2.5 0 0 1-2.5-1.5"/><path d="M12 6.5v1.5M12 16v1.5"/></svg><span data-i18n="settings.paneCosts">Costs</span></button>
@@ -947,6 +949,52 @@
                         <div class="settings-test-row">
                             <button type="button" id="test-openrouter" class="btn-secondary" data-i18n="settings.testConnection">Test connection</button>
                             <span id="test-openrouter-res" class="test-res"></span>
+                        </div>
+                    </section>
+
+                    <!-- Deepseek -->
+                    <section class="settings-pane" data-pane="deepseek">
+                        <h3 data-i18n="settings.paneDeepseek">Deepseek</h3>
+                        <p class="settings-desc" data-i18n-html="settings.deepseekDesc"></p>
+                        <label class="settings-field">
+                            <span class="settings-label"><span data-i18n="settings.apiKey">API key</span>
+                                <a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noopener" data-i18n="settings.getOne">get one ↗</a>
+                            </span>
+                            <input type="password" id="set-deepseek-key" class="search-input"
+                                   data-i18n-placeholder="settings.pasteKey" placeholder="paste key…" autocomplete="off">
+                        </label>
+                        <label class="settings-field">
+                            <span class="settings-label" data-i18n="settings.modelFast">modelFast</span>
+                            <input type="text" id="set-deepseek-model" class="search-input" placeholder="deepseek-v4-flash" autocomplete="off">
+                        </label>
+                        <label class="settings-field">
+                            <span class="settings-label" data-i18n="settings.modelStrong">modelStrong</span>
+                            <input type="text" id="set-deepseek-pro-model" class="search-input" placeholder="deepseek-v4-pro" autocomplete="off">
+                        </label>
+                        <div class="settings-test-row">
+                            <button type="button" id="test-deepseek" class="btn-secondary" data-i18n="settings.testConnection">Test connection</button>
+                            <span id="test-deepseek-res" class="test-res"></span>
+                        </div>
+                    </section>
+
+                    <!-- Kimi -->
+                    <section class="settings-pane" data-pane="kimi">
+                        <h3 data-i18n="settings.paneKimi">Kimi</h3>
+                        <p class="settings-desc" data-i18n-html="settings.kimiDesc"></p>
+                        <label class="settings-field">
+                            <span class="settings-label"><span data-i18n="settings.apiKey">API key</span>
+                                <a href="https://platform.moonshot.cn/console/api-keys" target="_blank" rel="noopener" data-i18n="settings.getOne">get one ↗</a>
+                            </span>
+                            <input type="password" id="set-kimi-key" class="search-input"
+                                   data-i18n-placeholder="settings.pasteKey" placeholder="paste key…" autocomplete="off">
+                        </label>
+                        <label class="settings-field">
+                            <span class="settings-label" data-i18n="settings.modelName">modelName</span>
+                            <input type="text" id="set-kimi-model" class="search-input" placeholder="kimi-k2.6" autocomplete="off">
+                        </label>
+                        <div class="settings-test-row">
+                            <button type="button" id="test-kimi" class="btn-secondary" data-i18n="settings.testConnection">Test connection</button>
+                            <span id="test-kimi-res" class="test-res"></span>
                         </div>
                     </section>
 

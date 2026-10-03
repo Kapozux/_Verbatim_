@@ -34,3 +34,10 @@
 - 每段原声：去低频、轻度降噪、响度对齐、头尾淡入淡出（实测语音比底噪从高约 15 dB 变成约 24 dB）。
 - 本机没装 Whisper 时照旧不核对。
 没做：Gemini 3.5 长段落时间点漂移本身（总表 P3「414 条转写时间戳中途乱跳」）；那两期旧 Whisper 转写重转能让原话也变准。
+
+## 自己的 DeepSeek / Kimi key（10-03）
+设置里多了 DeepSeek、Kimi 两页：key、模型名（空 = 默认 `deepseek-v4-flash` / `deepseek-v4-pro` / `kimi-k2.6`）、测试连接（只查 `/models`，不花钱，模型名不在列表里会直说）。
+- 分析预设「DeepSeek」「Kimi」：填了自己的 key 就走官方端点（`config.resolve_analysis` → provider `deepseek` / `moonshot`），没填照旧走阿里云。
+- 省钱路由（`llmroute.py`）：两条路按顺序，阿里云在前；阿里云没 key 或欠费停用时接官方 DeepSeek，各自停用 30 分钟。政治内容两条都不走。
+- 记账按端点认服务商（`analyze._provider_of`），费用页多了 DeepSeek、Kimi 两项。
+- 测试：`tests/test_compat_keys.py`。没用真 key 测过——模型名、Kimi 单价都待用户填 key 后核实（总表「等用户拍板」）。

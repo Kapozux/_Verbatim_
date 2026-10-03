@@ -19,6 +19,7 @@
 | 画面证据卡质量评测 | 8 期覆盖幻灯片 / 录屏 / 白板 / 真人出镜等，人工标答案，量漏帧、重复、抄错、编造，约 $0.2 | 跑，再按结果调挑帧和去重 |
 | All-In 预测对账发布 | 51 条已核完，标了「需人工复核」的几条要人看；发布形式（X 串推 / Show HN / 公开页面）没定 | 见 `~/verbatim_outreach/HANDOFF.md` 第 6 节 |
 | 转写音频的单价 | Gemini 3.5 Transcribe（约 377 小时）和阿里云 Qwen-Audio（约 422 小时）没有单价，费用页里这部分是 0 | 用户从控制台抄单价，写进 `prices.json` |
+| 官方 DeepSeek / Kimi 的价格 | 10-03 加了自己的 DeepSeek / Kimi key：官方 DeepSeek 先按百炼同名模型的价记；Kimi（`kimi-k2.6`）没有价，费用页记 0；模型名是照百炼上的叫法猜的，填 key 后点「测试连接」会列出真名 | 用户填 key 后测一次，模型名 / 单价不对就在设置里改、写进 `prices.json` |
 | deepseek-v4-pro 价格 | 读代码用它，价格来自第三方文章 | 用户在百炼控制台核实 |
 | 重构阶段 4–6 什么时候做 | 阶段 4 要改转写排队、取字幕，跟别的窗口的功能是同一块 | 先把 main 合进重构分支，再挑没有别的窗口在改转写的时候做 |
 
@@ -63,7 +64,7 @@
 | 预测核对模型 / 思考上限 | 跟抽卡同一个模型；`PREDICTION_CHECK_THINKING=1024` | 10-03 实测：8 条结论不变、便宜约 40 倍 |
 | 摘要、标题标签 | `gemini-3.1-flash-lite` | 用户 10-02 |
 | 回顾面板、笔记本综述 | 每月最多自动写一次，手动刷新随时可用 | 用户 10-02 |
-| 非中国议题的便宜路由 | `deepseek-v4-flash`（`llmroute.py`），政治词一次即回 Gemini | 用户 10-01 |
+| 非中国议题的便宜路由 | `deepseek-v4-flash`（`llmroute.py`），政治词一次即回 Gemini；先走阿里云，填了自己的 DeepSeek key 时阿里云没 key / 欠费就接官方 DeepSeek | 用户 10-01；官方 DeepSeek 兜底 10-03 |
 | 5001 | 不开 `FLASK_DEBUG`（不热重载）；改完后端，没任务在跑时手动重启 | 用户 10-03 |
 | 转写完自动做声纹 | 开，子进程里跑；`VOICES_AUTO=off` 可关 | 用户 10-02 |
 | 叫法 | 产品叫 Verbatim；界面「笔记本」/ Notebook；宣传这个功能叫 Verbatim Notebook；代码和接口仍叫 project | 用户 10-03 |

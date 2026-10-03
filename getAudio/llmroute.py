@@ -16,6 +16,9 @@
 
 只接管下面 PURPOSES 里的用途。抽证据卡 / 画像 / 镜头 / 预测核对等跟着项目自己选的「分析模型」走，不归这里管。
 关掉：.env 里 CHEAP_TEXT_ROUTE=off；换模型：CHEAP_TEXT_MODEL=…
+
+两条路，按顺序：阿里云百炼（原来的），用户在 Settings 里填了自己的 DeepSeek 官方 key 就再加一条官方 DeepSeek——
+阿里云没 key、欠费停用时接着走官方，不用一下子全回到 Gemini。两条路各自停用、各自恢复；红线判断两条都一样。
 """
 import json
 import os
@@ -51,8 +54,22 @@ _GEN_EN = [r'China', r'Beijing', r'Shanghai', r'Hong Kong', r'Taiwan', r'RMB', r
 _POLITICAL = re.compile('|'.join(map(re.escape, _POL_ZH)) + r'|\b(?:' + '|'.join(_POL_EN) + r')\b')
 _GENERIC = re.compile('|'.join(map(re.escape, _GEN_ZH)) + r'|\b(?:' + '|'.join(_GEN_EN) + r')\b')
 
-_state = {'paused_until': 0.0, 'reason': ''}
+_state = {'paused_until': 0.0, 'reason': ''}               # 阿里云那条
+_ds_state = {'paused_until': 0.0, 'reason': ''}            # 官方 DeepSeek 那条
 _lock = threading.Lock()
+
+
+def _routes():
+    """现在能走的便宜路由（没停用的），按顺序。"""
+    now = time.time()
+    out = []
+    if config.dashscope_key() and now >= _state['paused_until']:
+        out.append({'name': 'aliyun', 'base': config.ALIYUN_COMPAT_BASE, 'key': config.dashscope_key(),
+                    'model': MODEL, 'extra': {'enable_thinking': False}, 'state': _state})
+    if config.deepseek_key() and now >= _ds_state['paused_until']:
+        out.append({'name': 'deepseek', 'base': config.DEEPSEEK_COMPAT_BASE, 'key': config.deepseek_key(),
+                    'model': config.deepseek_models()[0], 'extra': {}, 'state': _ds_state})
+    return out
 
 
 def china_related(text):
@@ -70,9 +87,7 @@ def china_related(text):
 def enabled():
     if (os.environ.get('CHEAP_TEXT_ROUTE') or 'on').strip().lower() in ('off', '0', 'false', 'no'):
         return False
-    if not config.dashscope_key():
-        return False
-    return time.time() >= _state['paused_until']
+    return bool(_routes())
 
 
 def use_cheap(prompt, purpose):
@@ -80,15 +95,16 @@ def use_cheap(prompt, purpose):
     return purpose in PURPOSES and enabled() and china_related(prompt) is None
 
 
-def _pause(err):
+def _pause(err, route=None):
     """欠费 / key 错 / 模型不存在：会连着失败，停一阵。审核拦截、超时只是这一次，不停。"""
     s = str(err)
     if any(k in s for k in ('data_inspection', 'DataInspection', 'inappropriate', 'timeout', 'Timeout',
                             '429', '500', '502', '503', '504')):
         return
+    st = route['state'] if route else _state
     with _lock:
-        _state.update(paused_until=time.time() + PAUSE_S, reason=s[:200])
-    print(f'[llmroute] DeepSeek paused 30 min: {s[:160]}')
+        st.update(paused_until=time.time() + PAUSE_S, reason=s[:200])
+    print(f'[llmroute] {route["name"] if route else "aliyun"} paused 30 min: {s[:160]}')
 
 
 def text(prompt, purpose):
@@ -96,13 +112,15 @@ def text(prompt, purpose):
     if not use_cheap(prompt, purpose):
         return None
     from analyze import _call_openai_compat
-    try:
-        return _call_openai_compat(prompt, MODEL, config.ALIYUN_COMPAT_BASE, config.dashscope_key(),
-                                   extra_payload={'enable_thinking': False}, label='DeepSeek',
-                                   purpose=purpose) or None
-    except Exception as e:  # noqa: BLE001
-        _pause(e)
-        return None
+    for r in _routes():
+        try:
+            out = _call_openai_compat(prompt, r['model'], r['base'], r['key'], extra_payload=r['extra'] or None,
+                                      label='DeepSeek', purpose=purpose)
+            if out:
+                return out
+        except Exception as e:  # noqa: BLE001
+            _pause(e, r)
+    return None
 
 
 def stream(prompt, purpose):
@@ -111,20 +129,25 @@ def stream(prompt, purpose):
     if not use_cheap(prompt, purpose):
         return None
     import requests
-    url = config.ALIYUN_COMPAT_BASE.rstrip('/') + '/chat/completions'
-    try:
-        r = requests.post(url, headers={'Authorization': f'Bearer {config.dashscope_key()}'}, stream=True,
-                          timeout=(15, 300),
-                          json={'model': MODEL, 'messages': [{'role': 'user', 'content': prompt}],
-                                'enable_thinking': False, 'stream': True,
-                                'stream_options': {'include_usage': True}})
-    except requests.RequestException as e:
-        _pause(e)
-        return None
-    if r.status_code != 200:
-        _pause(f'{r.status_code}: {r.text[:200]}')
-        r.close()
-        return None
+    for route in _routes():
+        try:
+            r = requests.post(route['base'].rstrip('/') + '/chat/completions',
+                              headers={'Authorization': f'Bearer {route["key"]}'}, stream=True, timeout=(15, 300),
+                              json={'model': route['model'], 'messages': [{'role': 'user', 'content': prompt}],
+                                    **route['extra'], 'stream': True, 'stream_options': {'include_usage': True}})
+        except requests.RequestException as e:
+            _pause(e, route)
+            continue
+        if r.status_code != 200:
+            _pause(f'{r.status_code}: {r.text[:200]}', route)
+            r.close()
+            continue
+        return _relay(r, route, prompt, purpose)
+    return None
+
+
+def _relay(r, route, prompt, purpose):
+    model, provider = route['model'], route['name']
 
     def gen():
         got, final = [], None
@@ -149,15 +172,17 @@ def stream(prompt, purpose):
         finally:
             r.close()
             if final:
-                usage.record_openai(final, 'aliyun', MODEL, purpose)
+                usage.record_openai(final, provider, model, purpose)
             else:                   # 中途被停：按字数粗估一笔，别让这次花费消失
                 est = lambda s: len(re.findall(r'[一-鿿]', s)) + len(s) // 4   # noqa: E731
-                usage.record('aliyun', MODEL, purpose, input_tokens=est(prompt), output_tokens=est(''.join(got)))
+                usage.record(provider, model, purpose, input_tokens=est(prompt), output_tokens=est(''.join(got)))
     return gen()
 
 
 def status():
     """给设置页 / 排查用：现在走不走、为什么。"""
     return {'model': MODEL, 'enabled': enabled(), 'has_key': bool(config.dashscope_key()),
+            'deepseek_direct': bool(config.deepseek_key()),
+            'deepseek_paused_until': _ds_state['paused_until'] if _ds_state['paused_until'] > time.time() else 0,
             'paused_until': _state['paused_until'] if _state['paused_until'] > time.time() else 0,
             'pause_reason': _state['reason'] if _state['paused_until'] > time.time() else ''}
