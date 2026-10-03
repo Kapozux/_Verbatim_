@@ -177,6 +177,16 @@ def _convert(doc_id):
     _save_meta(meta)
     errors = []
     try:
+        # PPTX / DOCX：直接从文件里读字（几秒）。原来先交墨页，墨页要先用 Office 转成 PDF，大的幻灯片会超时
+        # （IB 计算机科学 19 份里两份就是这样失败的）。读出来几乎没字（整页是图）再交墨页 OCR
+        if meta['ext'] in ('pptx', 'docx'):
+            try:
+                md, pages, conv = _office_text(src, meta['ext'])
+                if len(md) >= 40 * max(1, len(pages or [1])):
+                    _finish_text(meta, md, pages, conv)
+                    return
+            except Exception as e:  # noqa: BLE001
+                errors.append(f'{meta["ext"]}: {e}')
         if moye_alive():
             try:
                 md, pages, conv = _via_moye(src, meta)
@@ -431,6 +441,73 @@ def _via_moye(src, meta):
 
 
 # ================= 本机兜底 =================
+
+_A_NS = '{http://schemas.openxmlformats.org/drawingml/2006/main}'
+_W_NS = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
+
+
+def _pptx_order(z, names):
+    """幻灯片的真实顺序在 presentation.xml 的 sldIdLst 里（文件名编号是创建顺序，挪过页就对不上）。读不出返回 []。"""
+    import xml.etree.ElementTree as ET
+    try:
+        rel_ns = '{http://schemas.openxmlformats.org/officeDocument/2006/relationships}'
+        pres = ET.fromstring(z.read('ppt/presentation.xml'))
+        rels = ET.fromstring(z.read('ppt/_rels/presentation.xml.rels'))
+        target = {r.get('Id'): r.get('Target') for r in rels}
+        out = []
+        for sid in pres.iter('{http://schemas.openxmlformats.org/presentationml/2006/main}sldId'):
+            t = target.get(sid.get(rel_ns + 'id')) or ''
+            n = 'ppt/' + t.lstrip('/').removeprefix('ppt/') if not t.startswith('/') else t.lstrip('/')
+            if n in names:
+                out.append(n)
+        return out
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _office_text(src, ext):
+    """PPTX / DOCX 本身是 zip 里的 XML：不装任何库、不转 PDF，直接读字。
+    PPTX 一页幻灯片算一页（加上演讲者备注）；DOCX 按段落，标题样式转成 Markdown 标题。→ (md, pages, 转换器名)"""
+    import zipfile
+    import xml.etree.ElementTree as ET
+    with zipfile.ZipFile(src) as z:
+        names = z.namelist()
+        if ext == 'pptx':
+            def num(n):
+                m = re.search(r'(\d+)\.xml$', n)
+                return int(m.group(1)) if m else 0
+            slides = _pptx_order(z, names) or sorted((n for n in names if re.fullmatch(r'ppt/slides/slide\d+\.xml', n)), key=num)
+            pages = []
+            for i, n in enumerate(slides, 1):
+                root = ET.fromstring(z.read(n))
+                paras = []
+                for para in root.iter(_A_NS + 'p'):
+                    t = ''.join(x.text or '' for x in para.iter(_A_NS + 't')).strip()
+                    if t:
+                        paras.append(t)
+                note = f'ppt/notesSlides/notesSlide{num(n)}.xml'
+                if note in names:
+                    nroot = ET.fromstring(z.read(note))
+                    extra = [''.join(x.text or '' for x in p.iter(_A_NS + 't')).strip() for p in nroot.iter(_A_NS + 'p')]
+                    extra = [x for x in extra if x and not x.isdigit()]       # 备注里常有个页码
+                    if extra:
+                        paras.append('Notes: ' + ' '.join(extra))
+                text = _tidy('\n\n'.join(paras))
+                if text:
+                    pages.append({'page': i, 'text': text})
+            md = '\n\n'.join(f"<!-- page {p['page']} -->\n{p['text']}" for p in pages)
+            return md, pages or None, 'pptx-text'
+        root = ET.fromstring(z.read('word/document.xml'))
+        out = []
+        for para in root.iter(_W_NS + 'p'):
+            t = ''.join(x.text or '' for x in para.iter(_W_NS + 't')).strip()
+            if not t:
+                continue
+            style = para.find(f'{_W_NS}pPr/{_W_NS}pStyle')
+            lvl = re.search(r'(?:Heading|标题)\s*(\d)', (style.get(_W_NS + 'val') or '') if style is not None else '')
+            out.append(('#' * min(3, int(lvl.group(1))) + ' ' if lvl else '') + t)
+        return _tidy('\n\n'.join(out)), None, 'docx-text'
+
 
 def _via_local(src, ext):
     if ext == 'pdf' and shutil.which('pdftotext'):

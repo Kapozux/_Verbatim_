@@ -281,7 +281,7 @@ def _add_passages(corpus, state, docs=True, extra=True):
             continue
         idx = len(eps)
         eps.append({'key': f'd{n}', 'title': meta.get('title') or 'Document', 'task_id': '',
-                    'doc_id': meta['id'], 'video_url': '', 'date': (ref.get('added_at') or '')[:10],
+                    'doc_id': meta['id'], 'ext': meta.get('ext') or '', 'video_url': '', 'date': (ref.get('added_at') or '')[:10],
                     'order': 10 ** 6 + n, 'metrics': {}, 'label': f'DOC{n}', 'kind': 'doc'})
         no = _stable_no(meta['id'])
         for p in ps:
@@ -878,7 +878,7 @@ Citation rules (strict):
 - Keep it tight: a direct answer first, then supporting points. No headings unless the answer is long.
 - LANGUAGE: write the whole answer in {lang}, even though the cards may be in another language. Keep verbatim quotes as they are.
 
-{background}Episodes, listed from OLDEST to NEWEST (EP numbers are just labels, not order; publish date when known):
+{background}All sources in this notebook, listed from OLDEST to NEWEST (EP / DOC numbers are just labels, not order; publish date when known). Sources with no passages below simply had nothing matching this question; they are still in the notebook, so when asked which sources there are, answer from this list:
 {episodes}
 
 Evidence cards and source passages (id | episode/document | time or page | type | topic | observation | quote):
@@ -971,15 +971,26 @@ def chrono(corpus):
     return {i: r for r, i in enumerate(sorted(range(len(eps)), key=key))}
 
 
-def _episode_lines(corpus, used_eps=None):
-    """按时间从早到晚列（EP 编号只是编号，不代表先后）。"""
+SOURCE_LIST_MAX = 200
+
+
+def _episode_lines(corpus, used_eps=None, full=False, scope_eps=None):
+    """按时间从早到晚列（EP 编号只是编号，不代表先后）。文档标出文件类型（PDF / PPTX…）。
+    full：来源不多（≤ SOURCE_LIST_MAX）时把勾选范围里的全部来源都列上（scope_eps，None = 整个笔记本），
+    不只列这次挑中的——不然问「我传的 PPTX 呢」，模型只看到挑中的那几份，就答没有。"""
+    if full:
+        every = scope_eps if scope_eps is not None else set(range(len(corpus['episodes'])))
+        if len(every) <= SOURCE_LIST_MAX:
+            used_eps = every | (used_eps or set())
     rank = chrono(corpus)
     out = []
     for i in sorted(range(len(corpus['episodes'])), key=lambda i: rank[i]):
         if used_eps is not None and i not in used_eps:
             continue
         ep = corpus['episodes'][i]
-        kind = {'doc': ' (document)', 'repo': ' (code repository)'}.get(ep.get('kind'), '')
+        kind = {'doc': ' (web page)' if ep.get('ext') == 'web' else
+                f" (document{', ' + ep['ext'].upper() if ep.get('ext') and ep['ext'] not in ('text', 'md') else ''})",
+                'repo': ' (code repository)'}.get(ep.get('kind'), '')
         who = f"[{ep['person']}] " if ep.get('person') else ''
         out.append(f"{ep.get('label') or 'EP' + str(i + 1)} = {who}{ep['title']}{kind}"
                    + (f" ({ep['date']})" if ep['date'] and not kind else ''))
@@ -1150,7 +1161,8 @@ def _prepare(chain_dir, question, mode='about', history=None, topic=None, ui_lan
         author=who['author'] or 'this creator', subject=_subject(who), mode_rules=MODE_RULES[mode],
         not_covered=NOT_COVERED[mode].format(author=who['author'] or 'the creator'),
         lang=lang, background=_bg_block(who),
-        episodes=_episode_lines(corpus, {c['ep'] for c in picked}),
+        episodes=_episode_lines(corpus, {c['ep'] for c in picked}, full=True,
+                                scope_eps=None if pool is None else {c['ep'] for c in pool}),
         cards='\n'.join(_card_line(c, corpus, alias=True) for c in picked),
         history=_history_text(history), question=question.strip())
     return {'corpus': corpus, 'picked': picked, 'cov': cov, 'mode': mode, 'lang': lang, 'prompt': prompt,

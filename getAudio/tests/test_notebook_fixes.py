@@ -192,4 +192,64 @@ ths = [threading.Thread(target=writer, args=(k,)) for k in range(4)]
 [x.join() for x in ths]
 t.check('并发写同一个文件不报错', not errs and json.load(open(os.path.join(TMP, 'race.json')))['i'] == 199, errs[:1])
 
+# ---- 9 PPTX / DOCX 直接读字（不经墨页转 PDF）；提问时列出笔记本里全部来源和文件类型 ----
+import io  # noqa: E402
+import time  # noqa: E402
+import zipfile  # noqa: E402
+A_NS = 'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"'
+P_NS = ('xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"')
+
+
+def slide(*paras):
+    body = ''.join(f'<a:p><a:r><a:t>{x}</a:t></a:r></a:p>' for x in paras)
+    return f'<p:sld {P_NS} {A_NS}><p:cSld><p:spTree><p:sp><p:txBody>{body}</p:txBody></p:sp></p:spTree></p:cSld></p:sld>'
+
+
+buf = io.BytesIO()
+with zipfile.ZipFile(buf, 'w') as z:
+    # 文件 slide1 / slide2 / slide3，演示顺序是 3、1、2（挪过页）；第 2 张是空白图片页；slide1 有备注
+    z.writestr('ppt/slides/slide1.xml', slide('Quantization', 'Reduces precision of high-frequency coefficients'))
+    z.writestr('ppt/slides/slide2.xml', slide())
+    z.writestr('ppt/slides/slide3.xml', slide('Transform coding', 'DCT turns pixels into frequencies'))
+    z.writestr('ppt/notesSlides/notesSlide1.xml', f'<p:notes {P_NS} {A_NS}><a:p><a:r><a:t>The eye misses fine detail</a:t></a:r></a:p>'
+                                                  f'<a:p><a:r><a:t>7</a:t></a:r></a:p></p:notes>')
+    z.writestr('ppt/presentation.xml', f'<p:presentation {P_NS}><p:sldIdLst><p:sldId id="1" r:id="rId3"/>'
+                                       '<p:sldId id="2" r:id="rId1"/><p:sldId id="3" r:id="rId2"/></p:sldIdLst></p:presentation>')
+    z.writestr('ppt/_rels/presentation.xml.rels', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+               '<Relationship Id="rId1" Target="slides/slide1.xml"/><Relationship Id="rId2" Target="slides/slide2.xml"/>'
+               '<Relationship Id="rId3" Target="slides/slide3.xml"/></Relationships>')
+dm = sources.create_doc(filename='Compression.pptx', data=buf.getvalue())
+for _ in range(50):
+    dm = sources.doc_meta(dm['id'])
+    if dm['status'] != 'converting':
+        break
+    time.sleep(0.1)
+pp = sources.doc_pages(dm['id']) or []
+t.check('PPTX 直接读字：按演示顺序、空白页跳过、带备注、不用墨页',
+        dm['status'] == 'ready' and dm['converter'] == 'pptx-text'
+        and [p['page'] for p in pp] == [1, 2] and pp[0]['text'].startswith('Transform coding')
+        and 'Notes: The eye misses fine detail' in pp[1]['text'] and 'Notes: The eye misses fine detail 7' not in pp[1]['text'],
+        (dm.get('converter'), dm.get('error'), pp))
+W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+buf = io.BytesIO()
+with zipfile.ZipFile(buf, 'w') as z:
+    z.writestr('word/document.xml', f'<w:document {W}><w:body>'
+               '<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Virtual memory</w:t></w:r></w:p>'
+               '<w:p><w:r><w:t>The OS uses disk space </w:t></w:r><w:r><w:t>as an extension of RAM.</w:t></w:r></w:p>'
+               '</w:body></w:document>')
+docx_path = os.path.join(TMP, 'n.docx')
+with open(docx_path, 'wb') as f:
+    f.write(buf.getvalue())
+md_docx, _, conv = sources._office_text(docx_path, 'docx')
+t.check('DOCX 直接读字、标题转 Markdown', conv == 'docx-text' and md_docx.startswith('# Virtual memory')
+        and 'The OS uses disk space as an extension of RAM.' in md_docx)
+r.post(f'/api/chain/{pid}/sources/docs', json={'title': 'Unrelated', 'text': 'Bananas grow in bunches on tall plants.'})
+A._project_add_docs(pid, [dm['id']])
+ask._llm = lambda *a, **k: '{"standalone": "q", "keywords": []}'
+p2 = ask._prepare(cdir, 'What uploaded files are there?')['prompt']
+src_part = p2.split('All sources in this notebook', 1)[1].split('Evidence cards', 1)[0]
+t.check('提问时列出全部来源（含这次没挑中的）和文件类型', 'Compression (document, PPTX)' in src_part and 'Unrelated' in src_part
+        and 'Notes' in src_part)
+
 t.finish()
