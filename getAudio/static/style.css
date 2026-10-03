@@ -2766,9 +2766,9 @@ body.demo .creator-hide { display: none; }
 .pod-pick .cx-modal-title { display: flex; align-items: center; gap: 8px; }
 .pod-f { display: grid; gap: 6px; }
 .pod-l { font-size: 13.5px; color: var(--muted); }
-.pod-f input[type=text] { font: inherit; font-size: 15px; color: var(--ink); background: var(--card); border: 1px solid var(--line-2);
+.pod-f input[type=text], .pod-f textarea { font: inherit; font-size: 15px; color: var(--ink); background: var(--card); border: 1px solid var(--line-2);
   border-radius: 12px; padding: 8px 12px; min-width: 0; }
-.pod-f input[type=text]:focus { outline: none; border-color: var(--coral); }
+.pod-f input[type=text]:focus, .pod-f textarea:focus { outline: none; border-color: var(--coral); }
 .pod-sides { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 8px; align-items: center; }
 .pod-lens { display: flex; flex-wrap: wrap; gap: 6px; }
 .pod-len { font: inherit; font-size: 14px; color: var(--ink); background: none; border: 1px solid var(--line-2); border-radius: 999px;
@@ -2894,3 +2894,6 @@ pre.cc-quote.repo-quote { font-family: var(--mono); font-size: 13px; line-height
 #chain-detail-view .nb-main > [data-cx-panel]:hover { scrollbar-color: var(--line-2) transparent; }
 /* 弹框底部「来自 1 / 1021 个来源」：只勾了一部分时用强调色，免得以为用的是全部 */
 .st-subset { color: var(--coral-deep); font-weight: 600; }
+.st-fit { font-size: 13.5px; line-height: 1.5; margin: -4px 0 10px; }
+.pod-f textarea, textarea.st-focus { resize: vertical; min-height: 54px; line-height: 1.5; font: inherit; font-size: 15px; }
+.st-field textarea.st-focus { height: auto; min-height: 58px; padding-top: 8px; padding-bottom: 8px; white-space: pre-wrap; }

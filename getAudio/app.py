@@ -4586,6 +4586,29 @@ def api_doc_original(doc_id):
     return send_file(path, download_name=meta['filename'], as_attachment=False)
 
 
+@app.route('/api/chain/<chain_id>/studio/fit')
+def api_studio_fit(chain_id):
+    """工作台弹框打开时问：勾选的来源一次放得下吗？放不下就在「重点」里预先填默认要求（study.DEFAULT_LARGE）。
+    ?scope=<JSON>（跟生成时一样）。只读、不花钱。"""
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    import ask
+    import study
+    try:
+        scope = json.loads(request.args.get('scope') or 'null')
+    except ValueError:
+        scope = None
+    try:
+        corpus = ask.load(_chain_dir(chain_id), passages=True)
+    except Exception as e:  # noqa: BLE001
+        return jsonify({'error': str(e)[:200]}), 500
+    pool = ask.scope_pool(corpus, scope if isinstance(scope, dict) else None)
+    pool = corpus['cards'] if pool is None else pool
+    ok, size = study.fit(corpus, pool)
+    return jsonify({'fits': ok, 'tokens': size, 'budget': study.BUDGET_TOKENS, 'passages': len(pool),
+                    'sources': len({c['ep'] for c in pool}), 'default': study.DEFAULT_LARGE})
+
+
 @app.route('/api/sources/guide')
 def api_source_guide():
     """来源概述（来源栏阅读器顶上那块）：?doc=<id> | ?task=<id>，&lang=zh|en。只读现成的，不花钱：

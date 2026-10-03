@@ -38,7 +38,7 @@ async function podcastPicker() {
                 <datalist id="pod-people">${people.map(n => `<option value="${escapeHtml(n)}">`).join('')}</datalist></div>
             <div class="pod-f"><span class="pod-l">${escapeHtml(T('pod.length'))}</span><div class="pod-lens" id="pod-lens" role="radiogroup"></div></div>
             <label class="pod-f"><span class="pod-l">${escapeHtml(T('st.focus'))}</span>
-                <input type="text" id="pod-focus" maxlength="200" placeholder="${escapeHtml(T('pod.focusPh'))}"></label>
+                <textarea id="pod-focus" rows="2" maxlength="200" placeholder="${escapeHtml(T('pod.focusPh'))}"></textarea></label>
             <div class="vp-foot"><span class="rd-pick-s${srcScopeBody() ? ' st-subset' : ''}" id="pod-msg">${escapeHtml(T('st.from', { s: srcCountText() }))}</span>
                 <button type="submit" class="rd-pick-go primary" id="pod-go">${escapeHtml(T('rd.generate'))}</button></div>
         </form></div>`;
@@ -55,6 +55,7 @@ async function podcastPicker() {
     };
     render();
     ov.classList.remove('hidden');
+    stFitHint(ov, '#pod-focus');                    // 材料放不下：说一句，并预填默认要求
     ov.querySelector('#pod-form').addEventListener('submit', async e => {
         e.preventDefault();
         const body = { format: st.fmt, length: st.len, focus: ov.querySelector('#pod-focus').value.trim(), scope: srcScopeBody() };

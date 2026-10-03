@@ -214,8 +214,28 @@ def _thin(corpus, cards, budget):
     return _ordered(corpus, out), True
 
 
+# 材料放不下时的默认要求：弹框里「重点」一栏预先填好，用户看得见、能改；后端没收到重点时也按它来
+DEFAULT_LARGE = {
+    'zh': '资料很多：挑出贯穿最多来源的 3–4 个主题，每个主题讲清来龙去脉、主要观点和前后变化，引用多个来源。',
+    'en': 'There is a lot of material: pick the 3-4 themes that run through the most sources, and for each explain '
+          'the background, the main points and how they changed over time, citing several sources.',
+}
+
+
+def is_default_focus(focus):
+    return (focus or '').strip() in DEFAULT_LARGE.values()
+
+
+def fit(corpus, pool):
+    """→ (放得下全部吗, 估计 token 数)：弹框打开时问一下，放不下就预先填默认要求。"""
+    size = _size(corpus, pool)
+    return size <= BUDGET_TOKENS, size
+
+
 THEMES_PROMPT = """Below is the list of sources in the project "{name}": {n} sources{sampled}, one line each (title and, when known, a one-line summary).
-They are far too many to read in full, so the {what} will be built around a few themes. Pick the {k} themes that run through the most sources and would make the best {what}: concrete subjects, not vague categories, and different from each other.
+They are far too many to read in full, so the {what} will be built around a few themes, chosen to serve this request:
+"{request}"
+Pick the {k} themes that best serve that request (if it names a subject, every theme must be about that subject; if it is only about language, format or tone, ignore it for choosing themes and take the themes that run through the most sources): concrete subjects, not vague categories, different from each other, each one found in several sources.
 Return JSON only: {{"themes": [{{"title": "short theme name, in the sources' language", "query": "what to search the sources for: 5-15 words in the sources' language"}}]}}
 
 Sources:
@@ -229,7 +249,7 @@ def _overview(task_id):
     return re.sub(r'\s+', ' ', str((sm or {}).get('overview') or ''))[:90]
 
 
-def _themes(corpus, pool, what):
+def _themes(corpus, pool, what, request=''):
     """材料太多又没写重点：先看每个来源的标题 + 一句摘要，挑几个贯穿多期的主题。失败返回 []。"""
     eps = sorted({c['ep'] for c in pool})
     lines = []
@@ -245,7 +265,8 @@ def _themes(corpus, pool, what):
         sampled = f', {len(lines)} of them shown, spread evenly'
     try:
         raw = ask._llm(THEMES_PROMPT.format(name=corpus['author'] or 'this project', n=len(eps), sampled=sampled,
-                                            what=what, k=THEMES_K, lines='\n'.join(lines)), purpose='study')
+                                            what=what, k=THEMES_K, lines='\n'.join(lines),
+                                            request=(request or DEFAULT_LARGE['en']).replace('"', "'")), purpose='study')
         obj = ask._json_from(raw) or {}
     except Exception as e:  # noqa: BLE001
         print(f'[study] themes: {e}')
@@ -258,16 +279,17 @@ def _themes(corpus, pool, what):
 
 
 def _pick(corpus, pool, focus, budget=None, what='study material', info=None):
-    """全部放得下就全给（有重点时让模型自己挑）；放不下：有重点按重点检索；没重点先挑几个贯穿多期的主题，
-    每个主题检索一批（预算平分），挑不出主题才均匀抽。info（dict）：挑了哪些主题写进 info['themes']。"""
+    """全部放得下就全给（有重点时让模型自己挑）；放不下：按「重点」里的要求（没写就用默认要求 DEFAULT_LARGE）
+    先挑几个主题，每个主题检索一批（预算平分）——要求原文不直接当检索词（「给我个中文的」检索不出东西）。
+    挑不出主题：有重点按重点检索，没有就均匀抽。info（dict）：挑了哪些主题写进 info['themes']。"""
     budget = budget or BUDGET_TOKENS
     if _size(corpus, pool) <= budget:
         return _ordered(corpus, pool), False
-    if focus:
+    themes = _themes(corpus, pool, what, focus)
+    if not themes and focus and not is_default_focus(focus):
         hits, _, _ = ask.hybrid(corpus, ask._terms(focus), focus, FOCUS_K, pool=pool)
         if hits:
             return _thin(corpus, hits, budget)
-    themes = _themes(corpus, pool, what)
     if themes:
         picked, have = [], set()
         for th in themes:
@@ -298,6 +320,8 @@ def _lang(corpus, want=None, focus=''):
         return 'Chinese (简体中文)'
     if want == 'en':
         return 'English'
+    if is_default_focus(focus):                # 预先填好的默认要求不算用户选了语言
+        focus = ''
     said = ask.asked_lang(focus)
     if said:
         return said

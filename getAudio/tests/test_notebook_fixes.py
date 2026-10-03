@@ -157,4 +157,39 @@ script, _ = podcast.write_script(big, picked[:20], ZH, '', 'deep_dive', 4, ('小
 t.check('播客写短了：接着写一次，用长的那版', any('Make it that long.' in p for p in seen)
         and len(script['lines']) == 2 and 'never reuse the sources\' own greetings' in seen[0])
 
+# ---- 7 材料放不下：弹框问一下、预填默认要求；要求带进挑主题那一步；默认要求不算选了语言 ----
+f_small = r.get(f'/api/chain/{pid}/studio/fit').get_json()
+study.BUDGET_TOKENS, keep_budget = 50, study.BUDGET_TOKENS
+f_big = r.get(f'/api/chain/{pid2}/studio/fit').get_json()
+f_scoped = r.get(f'/api/chain/{pid2}/studio/fit?scope=' + json.dumps({'type': 'all', 'sources': [big['episodes'][0]['doc_id']]})).get_json()
+study.BUDGET_TOKENS = keep_budget
+t.check('放得下 / 放不下、按勾选的范围算', f_small['fits'] and not f_big['fits'] and f_big['sources'] == 30
+        and f_scoped['sources'] == 1 and f_big['default']['zh'] == study.DEFAULT_LARGE['zh'])
+llm_calls.clear()
+ask._llm = fake_llm2
+study._pick(big, big['cards'], '只讲医疗', budget=size // 10, what='quiz', info={})
+t.check('重点里的要求带进挑主题那一步', '只讲医疗' in llm_calls[0] and 'Pick the' in llm_calls[0])
+llm_calls.clear()
+study._pick(big, big['cards'], '', budget=size // 10, what='quiz', info={})
+t.check('没写重点：用默认要求', study.DEFAULT_LARGE['en'] in llm_calls[0])
+t.check('预填的默认要求不算选了中文', study._lang(corpus_en, None, study.DEFAULT_LARGE['zh']) == EN)
+
+# ---- 8 两个线程同时写同一份缓存不会撞 ----
+import threading  # noqa: E402
+errs = []
+
+
+def writer(k):
+    try:
+        for i in range(200):
+            sources._write_json(os.path.join(TMP, 'race.json'), {'k': k, 'i': i})
+    except Exception as e:  # noqa: BLE001
+        errs.append(e)
+
+
+ths = [threading.Thread(target=writer, args=(k,)) for k in range(4)]
+[x.start() for x in ths]
+[x.join() for x in ths]
+t.check('并发写同一个文件不报错', not errs and json.load(open(os.path.join(TMP, 'race.json')))['i'] == 199, errs[:1])
+
 t.finish()

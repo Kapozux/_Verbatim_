@@ -59,7 +59,9 @@ def _read_json(path, default=None):
 
 
 def _write_json(path, data):
-    tmp = path + '.tmp'
+    # 临时文件名带进程和线程号：两个线程同时给同一份文档建段落缓存（加完文档后台在建、这边又马上提问）时，
+    # 共用一个 .tmp 会被对方先 rename 走，这边就 FileNotFoundError
+    tmp = f'{path}.{os.getpid()}.{threading.get_ident()}.tmp'
     with open(tmp, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=1)
     os.replace(tmp, path)
