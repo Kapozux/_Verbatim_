@@ -1,5 +1,14 @@
 # 交接：音频播客 + 幻灯片（2026-10-02 ~ 10-03）
 
+## 速览（2026-10-03 更新）
+
+| | |
+|---|---|
+| 现状 | 两个工作台格子都在用：已在 main 本地提交（`15c3915`），5001 已重启。下面正文里「没提交、没重启」是 10-02 写时的状态 |
+| 怎么跑 | 笔记本 → 工作台格子「音频播客」/「幻灯片」；后端测试 `./run_tests.sh podcast slides` |
+| 已知问题 | Windows 上幻灯片字体（PingFang SC）会被替换，没验证；TTS 2026 年底前免费，但费用页按以后的价记 |
+| 下一步 | 播客改单句；幻灯片 AI 配图、导出 Google Slides（都等用户定） |
+
 两个都是 NotebookLM 式的工作台产出，已经做完、测试全过，**但都没提交，5001 也还没重启**（重启后才看得到）。
 
 ## 一句话现状
@@ -18,7 +27,6 @@
 - `static/slide-icons/`：62 个 Lucide 图标 × 白 / 珊瑚两色 PNG + LICENSE（ISC）
 - `tests/test_podcast.py`（15 项）、`tests/test_slides.py`（14 项）
 - `tools/slides_dev/gen_deck.py`、`render_sheet.sh`：调排版用（见下）
-- `docs/drafts/slides_podcast_prompts.md`：早期草稿，现在只是指向两个 .py
 
 **改过的共用文件（都是增量）**
 - `app.py`：路由 `/studio/podcast`、`/studio/podcast/estimate`、`/studio/<oid>/audio`、`/studio/slides`、
