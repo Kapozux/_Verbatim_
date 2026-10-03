@@ -2923,3 +2923,4 @@ pre.cc-quote.repo-quote { font-family: var(--mono); font-size: 13px; line-height
 .nb-rail-n { position: absolute; right: 1px; bottom: 1px; min-width: 15px; height: 15px; padding: 0 3px; border-radius: 999px;
   font-size: 10.5px; font-weight: 600; line-height: 15px; text-align: center; color: var(--on-ink); background: var(--ink-soft); }
 #nb-src-rail { overflow-y: auto; scrollbar-width: none; }
+.nb-rail-abbr { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 9px; background: var(--code-bg); font-size: 11.5px; font-weight: 600; color: var(--ink-soft); letter-spacing: -.02em; }

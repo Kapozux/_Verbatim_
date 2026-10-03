@@ -296,7 +296,12 @@ function srcRenderRail(d, ro) {
         const inLabel = new Set(labels.flatMap(f => f.items));
         labels.forEach(f => {
             const n = f.items.filter(sid => singles.some(x => x[1] === sid)).length;
-            items.push(grp('f:' + f.id, srcSvg('label'), T('src.railLabel', { name: f.name, n }), n));
+            // 一样的标签图标认不出是哪组：写组名的头两个字（英文取两个首字母 / 前两个字母）
+            const nm = String(f.name || '').trim();
+            const words = nm.split(/[\s/·、,，-]+/).filter(Boolean);
+            const abbr = /[\u4e00-\u9fff]/.test(nm) ? [...nm.replace(/[^\u4e00-\u9fffA-Za-z0-9]/g, '')].slice(0, 2).join('')
+                : (words.length > 1 ? words[0][0] + words[1][0] : nm.slice(0, 2));
+            items.push(grp('f:' + f.id, `<span class="nb-rail-abbr">${escapeHtml(abbr)}</span>`, T('src.railLabel', { name: f.name, n }), n));
         });
         const byType = {};
         singles.filter(x => !inLabel.has(x[1])).forEach(x => { (byType[x[2]] = byType[x[2]] || []).push(x); });
