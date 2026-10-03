@@ -74,6 +74,12 @@ _Avoid_：仓库（单说时容易跟 git 远端混）、笔记本（那是 Verb
 代码里：`sources.json` 的 `folders`（`[{id, name, items: [来源 id]}]`），`PUT /api/chain/<id>/sources/folders`。
 _Avoid_：分组（那是首页上笔记本的合集）、合集
 
+**读书笔记**：
+每份来源读一次存下的笔记：来源切成若干块，每块写「讲什么、要点（带出处）、原话、主题」。工作台放不下全部原文时，
+先看所有来源的块摘要定计划，再按计划取原文（ADR 0010）。界面在左栏最后一行和阅读器里。
+代码里：notes、`notes.py`、`notes.json`（放在来源自己的目录里）、unit（块）、`study._notes_plan`。
+_Avoid_：摘要（单说指转写页的 summary）、证据卡（博主分析抽出来的观点卡，更重更贵）
+
 **来源概述**：
 阅读器顶上「这份讲什么 + 几个主题」那块（照 NotebookLM 的 Source guide）。转写用转写完就有的摘要；文档第一次打开时写一份，按界面语言存。
 代码里：guide、`sources.write_doc_guide`、`results/_docs/<doc_id>/guide.json`、`/api/sources/guide`。

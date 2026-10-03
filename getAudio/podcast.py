@@ -717,7 +717,7 @@ def start(cdir, chain_id, fmt='deep_dive', length='default', focus='', scope=Non
         lng = study._lang(corpus, lang, focus)
         hosts = HOSTS['zh' if lng.startswith('Chinese') else 'en']
         pinfo = {}
-        cards, thinned = study._pick(corpus, pool, focus, what='podcast episode', info=pinfo)
+        cards, thinned = study._pick(corpus, pool, focus, what='podcast episode', info=pinfo, lang=lng)
         cites = citations.Citations().add(corpus, cards)
         import tempfile
         with tempfile.TemporaryDirectory(prefix='podcast_') as work_dir:
@@ -751,6 +751,7 @@ def start(cdir, chain_id, fmt='deep_dive', length='default', focus='', scope=Non
                    citations=cites.used, dropped_citations=cites.dropped,
                    coverage={'passages_used': len(cards), 'passages_total': len(pool), 'thinned': thinned,
                              'sources': len({c['ep'] for c in pool}), 'themes': pinfo.get('themes') or [],
+                             'plan': pinfo.get('plan') or '',
                              'sources_used': len({c['ep'] for c in cards})})
 
     (run or (lambda f: threading.Thread(target=f, daemon=True).start()))(job)

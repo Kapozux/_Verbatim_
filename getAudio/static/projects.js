@@ -120,6 +120,7 @@ async function srcLoad() {
     srcRender();
     srcSyncCount();
     if (typeof vcLoad === 'function' && vcState.id !== id) vcLoad();        // 说话人那一行（换了项目才重新拉）
+    if (typeof ntLoad === 'function') ntLoad();                              // 读书笔记那一行
     // 来源数跟档案头对不上（刚加 / 刚删）：刷新档案头——「问」能不能用也是按它算的
     const ch = cx.chain || {};
     const n = srcAllIds(d).length;
@@ -237,12 +238,13 @@ function srcRender() {
         ${d.indexing ? `<p class="src-note cx-thinking">${T('src.indexing')}</p>` : ''}
         ${rows.length ? `<label class="sr-all"><span>${T('src.selectAll')}</span>
             <input type="checkbox" id="sr-all" ${allOn ? 'checked' : ''} ${all.length ? '' : 'disabled'}></label>
-            <div class="sr-list">${rows.join('')}${typeof vcSrcRowHtml === 'function' ? vcSrcRowHtml() : ''}</div>`
+            <div class="sr-list">${rows.join('')}${typeof vcSrcRowHtml === 'function' ? vcSrcRowHtml() : ''}${typeof ntSrcRowHtml === 'function' ? ntSrcRowHtml() : ''}</div>`
             : `<div class="sr-empty"><div class="sr-empty-ic">${srcSvg('doc')}</div><b>${T('nb.srcEmptyT')}</b>
                 <span>${T('nb.srcEmptyD')}</span></div>`}`;
     srcApplyFolders(box, ro);
     srcWire(box);
     if (typeof vcWireSrc === 'function') vcWireSrc(box);
+    if (typeof ntWireSrc === 'function') ntWireSrc(box);
     srcRenderRail(d, ro);
     srcRenderCta();
 }
@@ -304,7 +306,7 @@ function srcSetSel(ids, on) {
 function srcWire(box) {
     const allBox = box.querySelector('#sr-all');
     if (allBox) allBox.addEventListener('change', () => srcSetSel(srcAllIds(srcState.data), allBox.checked));
-    box.querySelectorAll('.sr-row:not(.vc-src)').forEach(row => {          // 「说话人」那一行自己接线（voices.js）
+    box.querySelectorAll('.sr-row:not(.vc-src):not(.nt-src)').forEach(row => {  // 「说话人」「读书笔记」那两行自己接线（voices.js / notes.js）
         const kind = row.dataset.kind;
         const sid = row.dataset.sid;
         const chk = row.querySelector('.sr-check');
@@ -692,8 +694,10 @@ function readerOpen(title, sub, origHref) {
     if (box.classList.contains('hidden')) {
         readerFrom = { pane: ex && ex.dataset.nbActive, top: pane ? pane.scrollTop : 0, winY: window.scrollY };
     }
-    const guide = document.getElementById('src-reader-guide');
-    if (guide) { guide.innerHTML = ''; guide.classList.add('hidden'); }
+    ['src-reader-guide', 'src-reader-notes'].forEach(gid => {          // 换一份原文：上一份的概述、笔记先清掉
+        const g = document.getElementById(gid);
+        if (g) { g.innerHTML = ''; g.classList.add('hidden'); g.dataset.key = ''; }
+    });
     box.querySelector('#src-reader-name').textContent = title || '';
     box.querySelector('#src-reader-sub').textContent = sub ? ' · ' + sub : '';
     const orig = box.querySelector('#src-reader-orig');
@@ -774,6 +778,7 @@ async function openSourceReader(docId, passageIndex) {
     }).join('') || `<div class="md-body">${renderMarkdown(d.markdown || '')}</div>`;
     readerFocus(body, passageIndex != null ? `.rd-par[data-pi="${passageIndex}"]` : null);
     readerGuide('doc', docId);
+    if (typeof readerNotes === 'function') readerNotes('doc', docId);
 }
 
 async function openTranscriptViewer(taskId, sec) {
@@ -793,6 +798,7 @@ async function openTranscriptViewer(taskId, sec) {
     readerFocus(body, hit != null ? `.rd-seg[data-si="${hit}"]` : null);
     if (typeof vcDecorateTranscript === 'function') vcDecorateTranscript(body, taskId, segs);   // 每句是谁说的、▶ 听
     readerGuide('task', taskId);
+    if (typeof readerNotes === 'function') readerNotes('task', taskId);
 }
 
 function closeSourceReader() {

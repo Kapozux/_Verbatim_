@@ -1201,7 +1201,7 @@ def _static_version():
     文件一变这串数字就变，浏览器才会当成新资源重新拉取。
     """
     try:
-        paths = [os.path.join(app.static_folder, name) for name in ('app.js', 'style.css', 'i18n.js', 'explore.js', 'tools.js', 'projects.js', 'study.js', 'voices.js', 'visual.js', 'podcast.js', 'repos.js', 'slides.js')]
+        paths = [os.path.join(app.static_folder, name) for name in ('app.js', 'style.css', 'i18n.js', 'explore.js', 'tools.js', 'projects.js', 'study.js', 'voices.js', 'visual.js', 'podcast.js', 'repos.js', 'slides.js', 'notes.js')]
         return str(int(max(os.path.getmtime(p) for p in paths if os.path.isfile(p))))
     except (ValueError, OSError):
         return '0'
@@ -4648,6 +4648,16 @@ def api_notes_status(chain_id):
             _notes_est_cache[sig] = round(usd, 3)
         out['estimate_usd'] = _notes_est_cache[sig]
     return jsonify(out)
+
+
+@app.route('/api/sources/notes')
+def api_source_notes():
+    """一份来源的读书笔记（阅读器里看）：?kind=doc|task|repo&id=…；没读过 notes: null。只读。"""
+    import notes
+    kind, sid = request.args.get('kind') or '', request.args.get('id') or ''
+    if not notes.valid(kind, sid):
+        return jsonify({'error': 'Not found'}), 404
+    return jsonify({'notes': notes.load(kind, sid)})
 
 
 @app.route('/api/chain/<chain_id>/notes/read', methods=['POST'])

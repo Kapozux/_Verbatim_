@@ -192,7 +192,7 @@ def _doc_units(sid, img_dir):
         if pages:
             return f'p.{min(pages)}' + (f'–{max(pages)}' if max(pages) != min(pages) else '')
         head = next((by_i[i].get('heading') for i in ids if by_i[i].get('heading')), '')
-        return head or f'§{ids[0] + 1}–{ids[-1] + 1}'
+        return re.sub(r'\\([_*#`\[\]])', r'\1', head) or f'§{ids[0] + 1}–{ids[-1] + 1}'   # 标题里 Markdown 的转义去掉
 
     def brk(a, b):
         return (by_i[a].get('page'), by_i[a].get('heading')) != (by_i[b].get('page'), by_i[b].get('heading'))

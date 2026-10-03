@@ -2897,3 +2897,14 @@ pre.cc-quote.repo-quote { font-family: var(--mono); font-size: 13px; line-height
 .st-fit { font-size: 13.5px; line-height: 1.5; margin: -4px 0 10px; }
 .pod-f textarea, textarea.st-focus { resize: vertical; min-height: 54px; line-height: 1.5; font: inherit; font-size: 15px; }
 .st-field textarea.st-focus { height: auto; min-height: 58px; padding-top: 8px; padding-bottom: 8px; white-space: pre-wrap; }
+/* 读书笔记：左栏最后一行（「读剩下的 N 份（约 $x）」在行尾）、阅读器里的笔记 */
+.sr-row.nt-src { grid-template-columns: 22px minmax(0, 1fr) auto; }
+.nt-src .nt-t { cursor: default; }
+.nt-src .nt-go-wrap { grid-column: 2 / -1; }
+.nt-go { font-size: 13.5px; }
+.nt-src .sr-svg { color: var(--ink-soft); }
+.nt-reader .nt-unit { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--line-2); }
+.nt-reader .nt-unit:first-of-type { border-top: none; }
+.nt-where { font-size: 12.5px; font-weight: 700; letter-spacing: .04em; color: var(--faint); }
+.nt-reader ul { margin: 6px 0 0; padding-left: 18px; font-size: 14px; line-height: 1.6; color: var(--ink-soft); }
+.nt-skip { font-size: 13px; color: var(--muted); }

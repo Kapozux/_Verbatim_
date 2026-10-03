@@ -732,7 +732,7 @@ def _setup(cdir, scope, focus, lang):
     if not pool:
         raise RuntimeError('Nothing to work from in the selected sources')
     lng = study._lang(corpus, lang, focus)
-    cards, thinned = study._pick(corpus, pool, focus, what='slide deck')
+    cards, thinned = study._pick(corpus, pool, focus, what='slide deck', lang=lng)
     return corpus, pool, cards, thinned, lng
 
 

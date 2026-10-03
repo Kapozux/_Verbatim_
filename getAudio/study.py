@@ -280,7 +280,7 @@ def _themes(corpus, pool, what, request=''):
 
 PLAN_PROMPT = """You are planning a {what} built from the sources of the project "{name}". The sources are too long to read in full, but every one of them has already been read and summarized part by part (below).
 Request: "{request}"
-Plan {k_min}-{k_max} segments that serve the request. For each segment decide whether it gives an overview (a broad picture across several sources) or goes into detail (one specific idea, case, example or passage explained closely); a good {what} mixes both. List the parts each segment draws on, by their labels (like S3.2). Overall, draw on parts from several different sources, and prefer concrete parts over vague ones. If the request names a subject, every segment must be about that subject; if it is only about language, format or tone, ignore it for choosing content.
+Plan {k_min}-{k_max} segments that serve the request. Write the title, segment titles and angles in {lang}. For each segment decide whether it gives an overview (a broad picture across several sources) or goes into detail (one specific idea, case, example or passage explained closely); a good {what} mixes both. List the parts each segment draws on, by their labels (like S3.2). Overall, draw on parts from several different sources, and prefer concrete parts over vague ones. If the request names a subject, every segment must be about that subject; if it is only about language, format or tone, ignore it for choosing content.
 Return JSON only: {{"title": "...", "segments": [{{"title": "...", "mode": "overview or detail", "angle": "one sentence: what this segment will say", "parts": ["S3.2", "S7.1"]}}]}}
 
 Sources and their parts (label [where] summary | topics){sampled}:
@@ -320,7 +320,7 @@ def _listing(corpus, have, short=False):
     return '\n'.join(lines)
 
 
-def _notes_plan(corpus, pool, request, what, budget):
+def _notes_plan(corpus, pool, request, what, budget, lang='English'):
     """按读书笔记定计划，再按计划取原文（ADR 0010）。→ (卡片, 计划 dict) 或 None（笔记不够 / 模型没给出能用的计划）。
     概括的段只取笔记要点引的那几段；细讲的段取那几块的原文（先取引到的、再按顺序补），预算按段平分。"""
     have, missing = _notes_for(corpus, pool)
@@ -339,7 +339,7 @@ def _notes_plan(corpus, pool, request, what, budget):
         have_lbl = {k: x for k, x in enumerate(have, 1)}
     try:
         raw = ask._llm(PLAN_PROMPT.format(what=what, name=corpus['author'] or 'this project', request=request.replace('"', "'"),
-                                          k_min=3, k_max=6, listing=listing, sampled=sampled), purpose='study')
+                                          k_min=3, k_max=6, listing=listing, sampled=sampled, lang=lang), purpose='study')
         plan = ask._json_from(raw) or {}
     except Exception as e:  # noqa: BLE001
         print(f'[study] notes plan: {e}')
@@ -405,14 +405,14 @@ def _plan_text(plan, corpus):
     return '\n'.join(out)[:40_000] + '\n'
 
 
-def _pick(corpus, pool, focus, budget=None, what='study material', info=None):
+def _pick(corpus, pool, focus, budget=None, what='study material', info=None, lang=None):
     """全部放得下就全给（有重点时让模型自己挑）；放不下：按「重点」里的要求（没写就用默认要求 DEFAULT_LARGE）
     先挑几个主题，每个主题检索一批（预算平分）——要求原文不直接当检索词（「给我个中文的」检索不出东西）。
     挑不出主题：有重点按重点检索，没有就均匀抽。info（dict）：挑了哪些主题写进 info['themes']。"""
     budget = budget or BUDGET_TOKENS
     if _size(corpus, pool) <= budget:
         return _ordered(corpus, pool), False
-    got = _notes_plan(corpus, pool, focus or DEFAULT_LARGE['en'], what, budget)
+    got = _notes_plan(corpus, pool, focus or DEFAULT_LARGE['en'], what, budget, lang or _lang(corpus, None, focus))
     if got:
         cards, plan = got
         corpus['_plan'] = _plan_text(plan, corpus)
@@ -729,7 +729,7 @@ def start(cdir, chain_id, kind, focus='', n=None, scope=None, outline=None, lang
                 result, cites, used, thinned = _outline(corpus, pool, lng, focus, outline)
             else:
                 cards, thinned = _pick(corpus, pool, focus, what={'report': 'report', 'flashcards': 'set of flashcards',
-                                                                  'quiz': 'quiz'}.get(kind, 'study material'), info=pinfo)
+                                                                  'quiz': 'quiz'}.get(kind, 'study material'), info=pinfo, lang=lng)
                 if kind == 'report':
                     result, cites = _report(corpus, cards, lng, focus, n, oid, fmt, prompt)
                 else:
@@ -738,7 +738,8 @@ def start(cdir, chain_id, kind, focus='', n=None, scope=None, outline=None, lang
             out.update(status='done', result=result, citations=cites.used, dropped_citations=cites.dropped,
                        lang='zh' if lng.startswith('Chinese') else 'en', finished_at=_now(),
                        coverage={'passages_used': used, 'passages_total': len(pool), 'thinned': thinned,
-                                 'sources': len({c['ep'] for c in pool}), 'themes': pinfo.get('themes') or []})
+                                 'sources': len({c['ep'] for c in pool}), 'themes': pinfo.get('themes') or [],
+                                 'plan': pinfo.get('plan') or ''})
         except Exception as e:  # noqa: BLE001
             out.update(status='failed', error=str(e)[:300], finished_at=_now())
 

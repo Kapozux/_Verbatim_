@@ -263,7 +263,8 @@ async function stFitHint(ov, inputSel) {
     }
     const p = document.createElement('p');
     p.className = 'st-fit cx-muted';
-    p.textContent = T('st.tooBig', { n: r.sources, p: r.passages });
+    p.textContent = T('st.tooBig', { n: r.sources, p: r.passages })
+        + (r.notes_missing ? ' ' + T('st.notesMissing', { n: r.notes_missing }) : r.notes_read ? ' ' + T('st.notesUsed') : '');
     label.after(p);
 }
 
@@ -348,7 +349,9 @@ function stCoverage(o) {
     if (o.kind === 'visual') return o.cost_usd ? fmtUsd(o.cost_usd) : '';
     if (!c) return '';
     const bits = [T('st.covSources', { n: c.sources })];
-    if (c.thinned && (c.themes || []).length) {          // 材料太多、没写重点：先挑了几个主题
+    if (c.thinned && c.plan === 'notes' && (c.themes || []).length) {       // 按读书笔记定的计划
+        bits.push(T('st.covPlan', { n: c.passages_used, m: c.passages_total, t: c.themes.join('、') }));
+    } else if (c.thinned && (c.themes || []).length) {          // 材料太多、没写重点：先挑了几个主题
         bits.push(T('st.covThemes', { n: c.passages_used, m: c.passages_total, t: c.themes.join('、') }));
     } else if (c.thinned) bits.push(T(o.focus ? 'st.covFocus' : 'st.covThinned', { n: c.passages_used, m: c.passages_total }));
     if (o.cost_usd) bits.push(fmtUsd(o.cost_usd));
