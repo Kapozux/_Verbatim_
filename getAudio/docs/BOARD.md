@@ -15,7 +15,7 @@
 
 | 事 | 为什么要拍板 | 建议 |
 |---|---|---|
-| 推送远端 | main 有 11 个本地提交没推到 GitHub Kapozux（`kapozux/main` 之后），GitLab 落后 25 个；Daemon 原版（`~/Documents/Code_no_big_AI`）3 个本地提交没推 | 一次只推一个远端、推前 fetch，按 CLAUDE.md 红线来；GitHub 新账号一天最多推一次 |
+| 推送远端 | GitHub Kapozux 10-03 已推到 `38cd934`；GitLab 落后 29 个；Daemon 原版（`~/Documents/Code_no_big_AI`）3 个本地提交没推；`refactor/deep-modules` 等分支只在本地 | 一次只推一个远端、推前 fetch，按 CLAUDE.md 红线来；GitHub 新账号一天最多推一次 |
 | 画面证据卡质量评测 | 8 期覆盖幻灯片 / 录屏 / 白板 / 真人出镜等，人工标答案，量漏帧、重复、抄错、编造，约 $0.2 | 跑，再按结果调挑帧和去重 |
 | All-In 预测对账发布 | 51 条已核完，标了「需人工复核」的几条要人看；发布形式（X 串推 / Show HN / 公开页面）没定 | 见 `~/verbatim_outreach/HANDOFF.md` 第 6 节 |
 | 转写音频的单价 | Gemini 3.5 Transcribe（约 377 小时）和阿里云 Qwen-Audio（约 422 小时）没有单价，费用页里这部分是 0 | 用户从控制台抄单价，写进 `prices.json` |
