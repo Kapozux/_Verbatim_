@@ -2,19 +2,34 @@
 
 ## 速览
 
-- **现状**：v15 是可发版，61.5 秒，第一帧就是 Verbatim 首页（朋友圈封面），配乐用 Artlist 授权曲。10-04 暂停：朋友看了 Canvas 配乐版说「看不懂」，用户在怀疑需求本身是不是弄错了（见文末「没解决的问题」）。
-- **怎么跑**：源码在仓库外：`~/verbatim_outreach/promo/v2_src`（Remotion 4，主文件 `src/Promo8.tsx`，合成在 `src/Root.tsx`）。`npx remotion render src/index.ts PromoV15 out/v15.mp4`，再用 ffmpeg 转成 30fps 的 H.264（命令见下）。
-- **已知问题**：片尾行动号召还是占位文案「Mac 本机运行 · 要安装包看评论区」；片尾出处那行字只有 18px，手机上看不清；开头那句「妈妈再也不用担心我拖进度条了」有人看不懂。
-- **下一步**：先弄清楚看不懂的是梗还是产品。备选改法：开头换成大白话，梗挪到片尾当收尾；拿两版给几个人看前 15 秒，问一句「这是干嘛的」。
+- **现状**（10-05 暂停）：可发的仍是 v15（Artlist 授权配乐 Incredible）。之后按 NotebookLM 的结构做了 v16、v17（Canvas 配乐，只能内部测试），用户都说「粗糙」。v18「逐镜头复刻 Canvas」的镜头表已经出来、**还没开始做**，用户叫停先写交接。
+- **怎么跑**：源码在仓库外 `~/verbatim_outreach/promo/v2_src`（Remotion 4，`src/Promo8.tsx` 里有 PromoV14–V17，`src/Root.tsx` 注册）。`npx remotion render src/index.ts PromoV17 out/v17.mp4`，再用 ffmpeg 转 30fps H.264（命令见下文「做法和工具」）。抽帧检查用 `npx remotion still ... --frame=N` 再拼接触表。
+- **已知问题**：v16/v17 的界面是在 Remotion 里「画」的仿制品，字小、元素多、全景镜头多，所以显得粗糙；片尾行动号召是占位文案；卷子、课堂录音、PPT 是示意不是真资料。
+- **下一步**：照 `~/verbatim_outreach/promo/v18_逐镜头复刻Canvas_镜头表.md` 一个镜头一个镜头做（规则：每镜最多 2 个元素、80–96px 大字、进场 cubic-bezier(0.16,1,0.3,1)、全片不用叠化、动作卡 120 BPM 拍点），每段做完跟 Canvas 对应帧并排比对。开工前要补：深色真首页截图、在 CS50 笔记本里真问一次「指针到底是什么」（约 $0.001）。
 
 成片在 `~/verbatim_outreach/promo/`：
-- `朋友圈_Verbatim_v15_首页封面_Incredible配乐.mp4`：可发
-- `v15_封面.jpg`：封面图
-- `仅内部测试_勿发_Canvas配乐_v14_60秒.mp4`：用的是 Google 的配乐，**不能发**
+- `朋友圈_Verbatim_v15_首页封面_Incredible配乐.mp4`：**唯一可发的**；封面 `v15_封面.jpg`
+- `仅内部测试_勿发_Canvas配乐_v14_60秒.mp4`：用户说「无敌」的那版（含小Lin说 / 107）
+- `仅内部测试_勿发_v16_NotebookLM结构_Canvas配乐.mp4`、`仅内部测试_勿发_v17_CS50真截图_Canvas配乐.mp4`：用户评价「潦草」「粗糙」
+- 方案文档：`v14_方案_终审.md`、`v17_方案_终审.md`（v16 为什么潦草）、`v18_逐镜头复刻Canvas_镜头表.md`；Canvas 逐镜头实测数据 `canvas_逐镜头规格.json`
 
 更早的版本说明在 `~/verbatim_outreach/HANDOFF.md`。
 
 ---
+
+## 10-04 – 10-05：v16 → v17 → v18 发生了什么
+
+1. **用户自己重看 v15 说「有点蒙，不知道干嘛」**，要求宣传语和场景照抄 NotebookLM（来源 → 带出处的问答 → 工作室一键生成），口号定「**看懂任何资料**」（「任何视频」太窄），节奏继续学 Canvas，配乐换回 Canvas 原曲（「新的不行」，指 Incredible）。
+2. **v16**（我直接写的，没走诊断）→ 用户：「越做越潦草了，没那么高级了」。workflow 诊断的根本原因：真画面（原片、缩略图墙、真截图）被换成画出来的示意卡；一个正对镜头的三栏窗口里塞满东西，49% 的帧静止；最响的音乐配最静的画面；CS50 原声在半句被切断；口号出现 5 次。
+3. **v17**：按诊断改——CS50 原声说完、窗口带 3D 倾斜漂移、单侧边缘光、线条图标、卷子从出处「长」出来、口号只出现 2 次；5 种产出用**真 Verbatim 给 CS50 笔记本生成后截图**（花了 $0.20，播客 TTS 占 $0.15）。用户选了「全片只讲 CS50」（不再用小Lin说），结尾不用梗（「哪里不会点哪里」也是步步高广告语，跟「妈妈」同样风险）。→ 用户：「感觉太粗糙了」，粗糙的四种都有（界面假、字小太挤、动作生硬、截图廉价），要求「Canvas 咋做的就咋做」。
+4. **结论**：问题不在细节，在做法——我们一直在一个大窗口里塞满东西；Canvas 是**简化重画的大号界面**、一镜一个动作、多用特写、大字大留白、动作极顺、全片无叠化。v18 镜头表就是照这个逐镜头复刻。
+
+### 真产出截图怎么来的（以后还要用）
+- 在复制出来的数据上另开实例：`GETAUDIO_DATA_DIR=~/Documents/CODEelse/.claude/scratch-data/cs50-nb/data BACKUP_DIR=... PORT=5096 WORDTIME_WHISPER=0 python app.py`（只放了 CS50 Week 4 那一期转写 7433b7b8），笔记本 id 在 `.claude/scratch-data/cs50-nb/cid`。
+- 生成：`POST /api/projects` → `POST /api/chain/<id>/sources/transcripts {task_ids}` → `POST /api/chain/<id>/studio {kind: report|flashcards|quiz}`、`/studio/podcast`、`/studio/slides`；先调 `/studio/podcast/estimate`、`/studio/slides/estimate` 看价。
+- 截图：用 Remotion 自带的 headless Chrome + puppeteer-core（`node_modules/.remotion/chrome-headless-shell/...`），`evaluateOnNewDocument` 里设 `localStorage.theme='dark'`、`getaudio_ui_lang='zh'`，viewport 1920×1080、deviceScaleFactor 2，点 `.st-item[data-id] .st-open` 打开每份产出；闪卡点 `.fc-card` 翻面、自测题点 `.qz-opt`。脚本在 `/tmp/shot2.cjs`（临时，要重写时照这个思路）。幻灯片 PNG 直接取 `/api/chain/<id>/studio/<oid>/slide/<n>`。
+- pip 装 playwright 在这台机器上会卡死（网络），别再试。
+- YouTube 命令行下载这台机器现在会弹「确认你不是机器人」，参考片只能用已经下载好的 `promo/ref/*.mp4`。
 
 ## 用户认可的结构（v14 / v15，用户原话「无敌」）
 
