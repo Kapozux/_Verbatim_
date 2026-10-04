@@ -18,7 +18,7 @@ BASE_URL = 'https://dashscope.aliyuncs.com/api/v1'
 
 
 def transcribe_audio(filepath, progress_callback=None, diarization=False,
-                     speaker_count=None, model=None):
+                     speaker_count=None, model=None, words_out=None):
     """
     Transcribe audio using DashScope ASR (Qwen-Audio-3.1 by default) via REST API.
 
@@ -26,6 +26,7 @@ def transcribe_audio(filepath, progress_callback=None, diarization=False,
         diarization: 开启说话人分离（声纹），返回的每段会带 'speaker' 字段。
         speaker_count: 已知说话人数量时传入作为提示，能显著改善聚类；
             不填（None）则让阿里云自动判断人数。
+        words_out: 传一个列表进来，逐词时间 [(秒, 词)] 会放进去（给 wordtime 存 words.json，出处跳到原话那一秒）。
         model: 覆盖默认 ASR 模型（如 qwen-audio-3.0-asr-flash-filetrans）。
             两代模型的请求/返回结构一致，所以共用这一条链路。
 
@@ -59,7 +60,7 @@ def transcribe_audio(filepath, progress_callback=None, diarization=False,
     if progress_callback:
         progress_callback(90)
 
-    segments = _parse_result(result)
+    segments = _parse_result(result, words_out=words_out)
 
     if progress_callback:
         progress_callback(100)
@@ -112,6 +113,8 @@ def _submit_task(file_url, api_key, diarization=False, speaker_count=None,
     """Submit a transcription task via REST API and return task_id."""
     parameters = {
         'language_hints': ['zh', 'en'],
+        # 逐词时间（出处跳到原话那一秒，ADR 0012）：不另收费；10-04 实测跟 YouTube 字幕差 0.04 秒（中位数）
+        'enable_words': True,
     }
     if diarization:
         # 声纹说话人分离（paraformer-v2 与 qwen-audio-3.0 同名参数）
@@ -228,8 +231,8 @@ def _poll_task(task_id, api_key, progress_callback=None):
         waited_seconds += POLL_INTERVAL_SECONDS
 
 
-def _parse_result(data):
-    """Parse DashScope transcription result into segment list."""
+def _parse_result(data, words_out=None):
+    """Parse DashScope transcription result into segment list. words_out 给了就顺带收逐词时间。"""
     segments = []
 
     results_list = data.get('output', {}).get('results', [])
@@ -253,6 +256,10 @@ def _parse_result(data):
     transcripts = result_data.get('transcripts', [])
     for transcript in transcripts:
         sentences = transcript.get('sentences', [])
+        if words_out is not None:
+            import wordtime
+            for sent in sentences:
+                words_out.extend(wordtime.merge_pieces(sent.get('words')))
         for sent in sentences:
             # begin_time 键可能存在但值为 null → int(... or 0) 兜住，别让 None//1000 崩
             begin_ms = int(sent.get('begin_time') or 0)

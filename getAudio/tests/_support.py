@@ -58,6 +58,8 @@ def isolate(prefix, cheap_route=False):
     os.environ['GETAUDIO_DATA_DIR'] = tmp
     os.environ['GEMINI_API_KEY'] = 'test-not-a-real-key'
     os.environ['DASHSCOPE_API_KEY'] = 'test-key' if cheap_route else ''
+    os.environ['WORDTIME_AUTO'] = '0'      # 逐词字幕要跑 yt-dlp（外部程序，上面的禁外网拦不住）
+    os.environ['WORDTIME_WHISPER'] = '0'   # 本机 Whisper 补时间轴：测试里不跑模型
     os.environ['OPENROUTER_API_KEY'] = ''
     os.environ['CHEAP_TEXT_ROUTE'] = 'on' if cheap_route else 'off'
     os.makedirs(os.path.join(tmp, 'results', '_chains'))

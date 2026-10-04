@@ -800,6 +800,7 @@ function nbShowPane(p) {
 let readerFrom = null;
 
 function readerOpen(title, sub, origHref) {
+    if (typeof stopReaderMedia === 'function') stopReaderMedia();   // 换一份原文：上一期的视频 / 音频先停
     const box = document.getElementById('src-reader');
     const ex = document.getElementById('chain-explore');
     const pane = document.querySelector('#chain-explore .nb-src');
@@ -893,29 +894,240 @@ async function openSourceReader(docId, passageIndex) {
     if (typeof readerNotes === 'function') readerNotes('doc', docId);
 }
 
-async function openTranscriptViewer(taskId, sec) {
+// ---- 出处就地看原视频 / 听原音（2026-10-04）----
+// 「点出处 → 跳到原话那一秒」是 Verbatim 的卖点：YouTube、B 站嵌官方播放器从那一秒开始播；本机存了音频的用音频播放器。
+// 以前转写来源只滚到那一句文字，YouTube 字幕直取的连声音都没有——Google 的 NotebookLM 在 YouTube 上已经能跳到那一刻。
+let readerMedia = null;      // {taskId, kind, el, segSecs}：同一期再点出处只跳时间，不重新加载播放器
+
+function mediaSourceOf(d) {
+    const url = String(d.source_url || '');
+    const yt = url.match(/(?:youtube\.com\/(?:watch\?(?:[^#]*&)?v=|shorts\/|live\/|embed\/)|youtu\.be\/)([\w-]{11})/);
+    if (yt) return { kind: 'yt', id: yt[1] };
+    if (!url && /^[\w-]{11}$/.test(d.video_id || '')) return { kind: 'yt', id: d.video_id };
+    const bv = (url.match(/BV[0-9A-Za-z]{10}/) || String(d.video_id || '').match(/^BV[0-9A-Za-z]{10}$/) || [])[0];
+    if (bv && (!url || /bilibili\.com|b23\.tv/.test(url))) return { kind: 'bili', id: bv, p: +((url.match(/[?&]p=(\d+)/) || [])[1]) || 1 };
+    if (d.has_audio) return { kind: 'audio', src: `/api/history/${encodeURIComponent(d.id)}/audio` };
+    return null;
+}
+
+function mediaClock(s) {
+    s = Math.max(0, Math.floor(s));
+    const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), ss = String(s % 60).padStart(2, '0');
+    return h ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`;
+}
+
+function mediaLink(m, t) {
+    return m.kind === 'yt' ? `https://www.youtube.com/watch?v=${m.id}&t=${t}s`
+        : `https://www.bilibili.com/video/${m.id}?p=${m.p}&t=${t}`;
+}
+
+function mediaSrc(m, t) {
+    if (m.kind === 'yt') {
+        // youtube.com 而不是 youtube-nocookie.com：后者不带用户的登录，IP 被 YouTube 盯上时（比如拉字幕多了）匿名嵌入
+        // 一律弹「Sign in to confirm you're not a bot」，放不了
+        return `https://www.youtube.com/embed/${m.id}?start=${t}&autoplay=1&enablejsapi=1&rel=0&playsinline=1`
+            + `&origin=${encodeURIComponent(location.origin)}`;
+    }
+    return `https://player.bilibili.com/player.html?bvid=${m.id}&p=${m.p}&t=${t}&autoplay=1&high_quality=1&danmaku=0`;
+}
+
+// 出处卡片的缩略图：YouTube 有官方缩略图；B 站要另请求接口才拿得到，不放图（只放 ▶）
+function mediaThumb(m) {
+    return m && m.kind === 'yt' ? `https://i.ytimg.com/vi/${m.id}/mqdefault.jpg` : '';
+}
+
+// 栏头 + 标题 + 播放器一起贴在顶上，出处那一句要滚到它们下面
+function readerStickyBottom() {
+    const head = document.querySelector('#src-reader .src-reader-head');
+    const title = document.querySelector('#src-reader .src-reader-title');
+    let h = head ? head.offsetHeight + (parseFloat(getComputedStyle(head).top) || 0) : 0;
+    if (readerMedia && readerMedia.el.isConnected) h += (title ? title.offsetHeight : 0) + readerMedia.el.offsetHeight;
+    return h;
+}
+
+// 播放器放在文字稿上面、跟标题一起贴在栏头下面：往下读文字稿时一直看得见是哪一期、视频在放
+function mountReaderMedia(body, taskId, m, sec) {
+    if (typeof stopCiteCards === 'function') stopCiteCards();   // 回答下面出处卡片里在放的先停
+    const t = Math.floor(sec || 0);
+    const box = document.createElement('div');
+    box.className = 'rd-media';
+    if (m.kind === 'audio') {
+        box.innerHTML = `<audio controls preload="metadata" src="${escapeHtml(m.src)}"></audio>`;
+        const a = box.querySelector('audio');
+        const go = () => { a.currentTime = t; a.play().catch(() => {}); };
+        if (a.readyState >= 1) go(); else a.addEventListener('loadedmetadata', go, { once: true });
+    } else {
+        const site = m.kind === 'yt' ? 'YouTube' : 'Bilibili';
+        box.innerHTML = `<div class="rd-video"><iframe src="${escapeHtml(mediaSrc(m, t))}" title="${site}"
+            allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
+            referrerpolicy="strict-origin-when-cross-origin"></iframe></div>
+            <a class="rd-media-link" target="_blank" rel="noopener" href="${escapeHtml(mediaLink(m, t))}">${escapeHtml(T('reader.openOn', { site, t: mediaClock(t) }))}</a>`;
+    }
+    body.prepend(box);
+    const reader = document.getElementById('src-reader');
+    const head = reader.querySelector('.src-reader-head');
+    const title = reader.querySelector('.src-reader-title');
+    reader.classList.add('rd-has-media');
+    const headBottom = head ? head.offsetHeight + (parseFloat(getComputedStyle(head).top) || 0) : 0;
+    if (title) title.style.top = headBottom + 'px';
+    box.style.top = (headBottom + (title ? title.offsetHeight : 0)) + 'px';
+    readerMedia = { taskId, m, el: box };
+}
+
+function seekReaderMedia(sec) {
+    if (!readerMedia || !readerMedia.el.isConnected) return;
+    const { m, el } = readerMedia;
+    const t = Math.floor(sec || 0);
+    if (m.kind === 'audio') {
+        const a = el.querySelector('audio');
+        a.currentTime = t;
+        a.play().catch(() => {});
+        return;
+    }
+    if (typeof stopCiteCards === 'function') stopCiteCards();
+    const f = el.querySelector('iframe');
+    if (m.kind === 'yt' && f && f.contentWindow) {        // YouTube 播放器收得到命令：不重新加载
+        f.contentWindow.postMessage(JSON.stringify({ event: 'command', func: 'seekTo', args: [t, true] }), '*');
+        f.contentWindow.postMessage(JSON.stringify({ event: 'command', func: 'playVideo', args: [] }), '*');
+    } else if (f) {
+        f.src = mediaSrc(m, t);                           // B 站播放器没有跳转命令：换个起点重新加载
+    }
+    const link = el.querySelector('.rd-media-link');
+    if (link) {
+        link.href = mediaLink(m, t);
+        link.textContent = T('reader.openOn', { site: m.kind === 'yt' ? 'YouTube' : 'Bilibili', t: mediaClock(t) });
+    }
+}
+
+// 出处那一句滚到播放器正下方（readerFocus 滚到正中，播放器贴在上面时会挡住它）
+function revealBelowMedia(row) {
+    if (!row || !readerMedia || !readerMedia.el.isConnected) return;
+    row.style.scrollMarginTop = (readerStickyBottom() + 4) + 'px';
+    row.scrollIntoView({ block: 'start' });
+}
+
+// 回答下面的出处卡片开始放时：左栏的播放器只暂停，不拿掉（点字稿里的句子还能接着放）
+function pauseReaderMedia() {
+    if (!readerMedia || !readerMedia.el.isConnected) return;
+    const a = readerMedia.el.querySelector('audio');
+    if (a) a.pause();
+    const f = readerMedia.el.querySelector('iframe');
+    if (f && f.contentWindow && readerMedia.m.kind === 'yt') {
+        f.contentWindow.postMessage(JSON.stringify({ event: 'command', func: 'pauseVideo', args: [] }), '*');
+    } else if (f) {
+        f.src = 'about:blank';                     // B 站播放器收不到暂停命令；点句子时 seekReaderMedia 会重新加载
+    }
+}
+
+function stopReaderMedia() {
+    if (!readerMedia) return;
+    const { el } = readerMedia;
+    const a = el.querySelector('audio');
+    if (a) a.pause();
+    const f = el.querySelector('iframe');
+    if (f) f.remove();                // 隐藏起来的 iframe 还会接着放，直接拿掉
+    readerMedia = null;
+    const reader = document.getElementById('src-reader');
+    if (reader) {
+        reader.classList.remove('rd-has-media');
+        const title = reader.querySelector('.src-reader-title');
+        if (title) title.style.top = '';
+    }
+}
+
+// 出处没对准到那一秒（exact 不是 true：这一期还没有逐词时间轴）→ 问后端现场对齐（ADR 0012）。
+// 同一条出处只问一次；对上了改写 c 本身（sec / ts / exact），后面再点直接准
+function alignCite(c) {
+    if (!c || c.exact === true || !c.task_id || c.sec == null || !c.quote) return Promise.resolve(null);
+    if (!c._align) {
+        c._align = fetch('/api/cite/align', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ task_id: c.task_id, sec: c.sec, quote: c.quote }) })
+            .then(r => (r.ok ? r.json() : null))
+            .then(j => {
+                if (!j || j.sec == null) return null;
+                c.sec = j.sec; c.ts = mediaClock(j.sec); c.exact = true;
+                return j.sec;
+            })
+            .catch(() => null);
+    }
+    return c._align;
+}
+
+// 文字稿里高亮秒数落在的那一句，滚到播放器下面
+function readerHighlightAt(body, sec) {
+    body.querySelectorAll('.rd-seg.hl').forEach(x => x.classList.remove('hl'));
+    const row = [...body.querySelectorAll('.rd-seg')].filter(r => +r.dataset.sec <= sec + 0.5).pop();
+    if (!row) return;
+    readerFocus(body, `.rd-seg[data-si="${row.dataset.si}"]`);
+    setTimeout(() => revealBelowMedia(row), 60);
+}
+
+// 左栏打开了一个没对准的出处：播放器下面那行先写「正在对准」，对上了播放器跳过去、高亮换到那一句
+function readerAlign(taskId, cite) {
+    if (!cite || cite.exact === true) return;
+    const link = readerMedia && readerMedia.taskId === taskId && readerMedia.el.querySelector('.rd-media-link');
+    const was = link ? link.textContent : '';
+    if (link) link.textContent = T('reader.aligning');
+    alignCite(cite).then(s => {
+        if (link && link.isConnected) link.textContent = was;
+        const body = document.querySelector('#src-reader:not(.hidden) #src-reader-body');
+        if (s == null || !body || !readerMedia || readerMedia.taskId !== taskId) return;
+        seekReaderMedia(s);
+        readerHighlightAt(body, s);
+    });
+}
+
+async function openTranscriptViewer(taskId, sec, cite) {
+    const box = document.getElementById('src-reader');
+    const curBody = box && !box.classList.contains('hidden') && box.querySelector('#src-reader-body');
+    if (readerMedia && readerMedia.taskId === taskId && curBody && readerMedia.el.isConnected) {
+        // 同一期再点一个出处：播放器跳过去、文字稿换一句高亮，不重新加载
+        if (sec != null) {
+            seekReaderMedia(sec);
+            readerHighlightAt(curBody, sec);
+        }
+        readerAlign(taskId, cite);
+        return;
+    }
     let d;
     try { d = await (await fetch(`/api/history/${taskId}`)).json(); } catch { return; }
     if (!d || d.error) { showToast((d && d.error) || T('common.couldNotLoad')); return; }
+    stopReaderMedia();
     const segs = d.segments || [];
+    const segSecs = segs.map(s => parseTimestampToSeconds(s.timestamp || '0:00'));
     const body = readerOpen(d.ai_title || d.filename || '', d.duration_seconds ? formatDuration(d.duration_seconds) : '', '');
     let hit = null;
     if (sec != null) {
-        segs.forEach((s, i) => { if (parseTimestampToSeconds(s.timestamp || '0:00') <= sec + 0.5) hit = i; });
+        segSecs.forEach((x, i) => { if (x <= sec + 0.5) hit = i; });
     }
     body.innerHTML = `<button type="button" class="cx-link rd-open" data-go="detail/${escapeHtml(taskId)}${sec != null ? '/t/' + sec : ''}">${T('nb.openFull')}</button>`
-        + segs.map((s, i) => `<div class="rd-seg" data-si="${i}"><span class="rd-ts">${escapeHtml(s.timestamp || '')}</span>
+        + segs.map((s, i) => `<div class="rd-seg" data-si="${i}" data-sec="${segSecs[i]}"><span class="rd-ts">${escapeHtml(s.timestamp || '')}</span>
             <span>${escapeHtml(s.text || '')}</span></div>`).join('');
     body.querySelector('.rd-open').addEventListener('click', e => navigate(e.target.dataset.go));
+    const media = mediaSourceOf({ ...d, id: d.id || taskId });
+    if (media) {
+        mountReaderMedia(body, taskId, media, sec != null ? sec : (hit != null ? segSecs[hit] : 0));
+        body.classList.add('rd-playable');
+        body.addEventListener('click', e => {            // 点文字稿里的一句：播放器跳到这一句
+            const row = e.target.closest('.rd-seg');
+            if (!row || e.target.closest('button, a') || !readerMedia || readerMedia.taskId !== taskId) return;
+            seekReaderMedia(+row.dataset.sec || 0);
+            body.querySelectorAll('.rd-seg.hl').forEach(x => x.classList.remove('hl'));
+            row.classList.add('hl');
+        });
+    }
     readerFocus(body, hit != null ? `.rd-seg[data-si="${hit}"]` : null);
+    if (media && hit != null) setTimeout(() => revealBelowMedia(body.querySelector(`.rd-seg[data-si="${hit}"]`)), 60);
     if (typeof vcDecorateTranscript === 'function') vcDecorateTranscript(body, taskId, segs);   // 每句是谁说的、▶ 听
     readerGuide('task', taskId);
     if (typeof readerNotes === 'function') readerNotes('task', taskId);
+    readerAlign(taskId, cite);
 }
 
 function closeSourceReader() {
     const box = document.getElementById('src-reader');
     if (!box) return;
+    stopReaderMedia();
     box.classList.add('hidden');
     document.getElementById('cx-sources').classList.remove('hidden');
     const pane = document.querySelector('#chain-explore .nb-src');

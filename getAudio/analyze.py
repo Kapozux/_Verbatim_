@@ -99,6 +99,8 @@ def review_transcript(segments, preset=None, window=180):
     if not segments:
         return set()
     provider, extract_model, _ = resolve_analysis(preset)
+    provider, extract_model = _route_episode(provider, extract_model,
+                                             ' '.join(str(s.get('text') or '') for s in segments if isinstance(s, dict)))
     drop = set()
     for base in range(0, len(segments), window):
         chunk = segments[base:base + window]
@@ -250,7 +252,13 @@ _LANG_LINES = {
 }
 
 
-def _lang_line(lang):
+def _lang_line(lang, episodes=None):
+    """'auto' 时按证据卡里的原话判断中英，明确写进提示词——只写「跟随原文」时模型会跟着中文提示词写中文
+    （2026-10-03 All-In 英文笔记本的综述成了中文）。判断不了才退回「跟随原文」。"""
+    if (lang or 'auto') == 'auto' and episodes:
+        import textlang
+        quotes = ' '.join(str(c.get('quote') or '') for e in episodes for c in (e.get('cards') or [])[:40])
+        lang = textlang.detect(quotes) or 'auto'
     return _LANG_LINES.get(lang or 'auto', _LANG_LINES['auto'])
 
 
@@ -422,9 +430,32 @@ def _call_openai_compat(prompt, model, base_url, api_key, extra_payload=None,
     raise RuntimeError(f'{label}({model}) 调用失败: {last_err}')
 
 
+_CN_PROVIDERS = ('aliyun', 'deepseek', 'moonshot')
+
+
+def _route_episode(provider, extract_model, text):
+    """不再按整期预判（10-04 用户：不要预先判断，国内模型报错了再回 Gemini，见 _llm）。留着这个口子，调用处不用改。"""
+    return provider, extract_model
+
+
 def _llm(prompt, provider, model, grounded=False, purpose='analysis'):
     """按 provider 分发：gemini 走 google-genai，aliyun 走百炼，openrouter 走 OpenRouter。
-    purpose：记账用途标签（cards / synth / verify / lens / brief / review / xhs …）。"""
+    purpose：记账用途标签（cards / synth / verify / lens / brief / review / xhs …）。
+
+    国内模型（百炼 / 官方 DeepSeek / Kimi）先发、报错再回 Gemini（10-04 用户：不要预先判断）：审核拦截、超时、接口错
+    都是这一次改用 Gemini 同档模型（抽卡、体检用抽取档，其余用合成档），不整期改道。"""
+    if provider in _CN_PROVIDERS:
+        try:
+            return _llm_cn(prompt, provider, model, purpose)
+        except Exception as e:  # noqa: BLE001
+            _, g_extract, g_synth = resolve_analysis('gemini')
+            print(f'[分析] {provider} 报错（{str(e)[:120]}），这次改用 Gemini')
+            return _call_gemini(prompt, grounded=grounded, model=g_extract if purpose in ('cards', 'review') else g_synth,
+                                purpose=purpose)
+    return _llm_other(prompt, provider, model, grounded, purpose)
+
+
+def _llm_cn(prompt, provider, model, purpose):
     if provider == 'aliyun':
         key = config.dashscope_key()
         if not key:
@@ -441,6 +472,10 @@ def _llm(prompt, provider, model, grounded=False, purpose='analysis'):
         if not key:
             raise RuntimeError('MOONSHOT_API_KEY 未设置 — 在 Settings → Kimi 里填 key')
         return _call_openai_compat(prompt, model, config.MOONSHOT_COMPAT_BASE, key, label='Kimi', purpose=purpose)
+    raise RuntimeError(f'unknown provider {provider}')
+
+
+def _llm_other(prompt, provider, model, grounded, purpose):
     if provider == 'openrouter':
         key = os.environ.get('OPENROUTER_API_KEY', '')
         if not key:
@@ -554,6 +589,28 @@ def _extract_cards_chunked(title, chunks, author, provider, model):
     return data
 
 
+# 模型偶尔把 layer 写成英文（DeepSeek 关思考时约 3%）：代码只认三个中文取值，整理回来
+_LAYER_ALIASES = {
+    'his claim': '他的主张', 'his claims': '他的主张', 'her claim': '他的主张', 'their claim': '他的主张',
+    'claim': '他的主张', 'speaker claim': '他的主张',
+    'transcript evidence': '转写自证', 'self-evident': '转写自证', 'transcript': '转写自证', 'rhetoric': '转写自证',
+    'external verification': '外部核实', 'external check': '外部核实', 'verified': '外部核实',
+}
+
+
+def _cards_lang_rule(transcript_text):
+    """提示词里「语言跟随转写」那条，模型不思考时会被中文提示词带偏（2026-10-04 对比：Gemini 关思考、DeepSeek
+    都把英文节目的 obs 写成了中文）。判断好语言，写在转写后面——模型最看重最后读到的。layer 的取值是代码认的，原样保留。"""
+    import textlang
+    lang = textlang.detect(transcript_text)
+    if lang == 'en':
+        return ('\n\nWrite obs and topic in English — the transcript is in English. Keep quote verbatim, '
+                'and keep layer values exactly as listed (转写自证 / 他的主张 / 外部核实).')
+    if lang == 'zh':
+        return '\n\nobs、topic 用中文写（转写是中文）。quote 照抄原话，layer 只用列出的三个值。'
+    return ''
+
+
 def _extract_cards(title, transcript_text, author, provider, model):
     """逐期抽取证据卡。返回 {cards, metrics, asr_suspects} 或 None。
 
@@ -563,12 +620,16 @@ def _extract_cards(title, transcript_text, author, provider, model):
     prompt = CARDS_PROMPT.format(
         author=author, title=title, transcript=transcript_text,
         today=datetime.now().strftime('%Y-%m-%d'),
-    )
+    ) + _cards_lang_rule(transcript_text)
     data = agent(lambda p: _llm(p, provider, model, purpose='cards'),
                  prompt, schema=['cards'], retries=2, retry_on_error=False)
     if not isinstance(data, dict):
         return None
     data.setdefault('cards', [])
+    for c in data['cards'] if isinstance(data['cards'], list) else []:
+        if isinstance(c, dict):
+            c['layer'] = _LAYER_ALIASES.get(str(c.get('layer') or '').strip().lower(), c.get('layer'))
+            c['timestamp'] = str(c.get('timestamp') or '').strip().strip('[]').strip()
     data.setdefault('metrics', {})
     data.setdefault('asr_suspects', [])
     return data
@@ -626,6 +687,7 @@ def analyze_episode(title, transcript_text, author='该博主', verify=False, pr
         if not ok:
             return unusable_episode(title, reason)
     provider, extract_model, _ = resolve_analysis(preset)
+    provider, extract_model = _route_episode(provider, extract_model, transcript_text)
     chunks = _split_transcript(transcript_text)
     if len(chunks) > 1:
         data = _extract_cards_chunked(title, chunks, author, provider, extract_model)
@@ -843,7 +905,7 @@ def synthesize(episodes, author='该博主', critique_level='analytical',
     digest = _build_digest(good, author, provider, extract_model)
 
     portrait = _llm(PORTRAIT_PROMPT.format(
-        author=author, n=len(good), rules=_rules(), lang_line=_lang_line(lang),
+        author=author, n=len(good), rules=_rules(), lang_line=_lang_line(lang, good),
         level=level, tone=_TONE[level], impression=impression,
         digest=_metrics_block(agg, len(good)) + '\n\n' + digest,
     ), provider, synth_model, purpose='synth')
@@ -943,7 +1005,7 @@ def render_lens(episodes, lens, author='该博主', preset=None, lang='auto'):
     provider, extract_model, synth_model = resolve_analysis(preset)
     agg = _agg_metrics(episodes)
     digest = _build_digest(episodes, author, provider, extract_model)
-    return _llm(_lang_line(lang) + '\n\n' + tpl.format(
+    return _llm(_lang_line(lang, episodes) + '\n\n' + tpl.format(
         author=author, n=len(episodes),
         digest=_metrics_block(agg, len(episodes)) + '\n\n' + digest,
     ), provider, synth_model, purpose='lens')
@@ -1144,7 +1206,7 @@ def synthesize_collection(episodes, name, kind='mixed', preset=None, lang='auto'
     digest = _build_digest(good, name, provider, extract_model)
     return _llm(COLLECTION_PROMPT.format(
         name=name, kind=KIND_LABEL.get(kind, kind), n=len(good), rules=_rules(),
-        lang_line=_lang_line(lang), digest=digest), provider, synth_model, purpose='synth')
+        lang_line=_lang_line(lang, good), digest=digest), provider, synth_model, purpose='synth')
 
 
 # ---- 定期同步：画像增量更新（在原画像上并入新几期，原有结论不动，除非被新证据推翻）----
@@ -1178,7 +1240,7 @@ def update_portrait(old_md, new_episodes, author, total, preset=None, lang='auto
         return old_md
     out = _llm(UPDATE_PORTRAIT_PROMPT.format(
         author=author, m=len(good), total=total, today=datetime.now().strftime('%Y-%m-%d'),
-        lang_line=_lang_line(lang), rules=_rules(), portrait=old_md[:60000],
+        lang_line=_lang_line(lang, good), rules=_rules(), portrait=old_md[:60000],
         digest=_digest(good, _digest_budget(provider))), provider, synth_model, purpose='synth')
     # 模型偶尔只回一小段：太短就当失败，交给调用方整份重写
     if not out or len(out) < len(old_md) * 0.5:

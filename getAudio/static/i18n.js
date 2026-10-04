@@ -435,6 +435,8 @@ const STRINGS = {
         "nb.needsRec": "These views are built from recordings. Documents are answered from directly in Chat.",
 
         "nb.openFull": "Open full transcript ↗",
+        "reader.openOn": "Open on {site} at {t}",
+        "reader.aligning": "Finding the exact moment…",
 
         "nb.tile.read": "Portrait and five lenses",
 
@@ -1337,6 +1339,7 @@ const STRINGS = {
         "cx.aiNote": "AI note:",
         "cx.openTranscript": "Open transcript at {ts}",
         "cx.watch": "Watch at {ts}",
+        "cx.playAt": "Play from {ts}",
         "stance.pro": "For / bullish",
         "stance.con": "Against / bearish",
         "stance.mixed": "Mixed",
@@ -1938,6 +1941,8 @@ const STRINGS = {
         "nb.needsRec": "这几栏是从录音里抽出来的；文档直接在对话里问就行。",
 
         "nb.openFull": "打开完整转写 ↗",
+        "reader.openOn": "在 {site} 打开（{t}）",
+        "reader.aligning": "正在对准原话那一秒……",
 
         "nb.tile.read": "人物画像和五个镜头",
 
@@ -2830,6 +2835,7 @@ const STRINGS = {
         "cx.aiNote": "AI 转述：",
         "cx.openTranscript": "打开转写，跳到 {ts}",
         "cx.watch": "看原视频 {ts}",
+        "cx.playAt": "从 {ts} 开始播放",
         "stance.pro": "看好 / 支持",
         "stance.con": "看空 / 反对",
         "stance.mixed": "两面都说",

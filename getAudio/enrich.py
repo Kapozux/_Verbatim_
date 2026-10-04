@@ -32,7 +32,7 @@ filename_meaningful 的判断标准：上面的文件名（去掉后缀和 [视�
 像"恋爱经验少于3次、出现情感问题是必然的"这种是 true；像"录音 3""New Recording 12""2026-07-08 14.22.15"
 "IMG_0001""audio_1234""output""下载""a1b2c3d4"这种日期、序号、设备默认名、随机串是 false。
 
-要求：title / one_line / tags 用与内容相同的语言输出（内容是英文就用英文，是中文就用中文）；
+要求：{lang_rule}
 标题要具体（宁可写"杜甫生平纪录片解说"也不要写"历史内容"）；
 若内容明显是废稿/空白/无意义，title 写"（内容为空或无效）"。"""
 
@@ -59,8 +59,9 @@ def _enrich_text(prompt):
         return None
 
 
-def generate_card_meta(filename, content):
-    """生成 {title, one_line, tags}；失败返回 None（调用方自行兜底）。"""
+def generate_card_meta(filename, content, lang_text=None):
+    """生成 {title, one_line, tags}；失败返回 None（调用方自行兜底）。
+    lang_text：按它判断输出语言（传转写原文；不传就看 content）——摘要可能是旧的、语言不对。"""
     api_key = config.gemini_key()
     if not api_key or not content or len(content.strip()) < 10:
         return None
@@ -68,7 +69,11 @@ def generate_card_meta(filename, content):
     # 控制输入长度：overview 本来就短；退回正文时只取开头
     content = content.strip()[:3000]
 
-    raw = _enrich_text(ENRICH_PROMPT.format(filename=filename, content=content))
+    import textlang
+    rule = textlang.rule(lang_text or content, 'title / one_line / tags')
+    if textlang.detect(lang_text or content) == 'en':   # 上面的标签例子是中文的，模型会照着例子写中文标签
+        rule += ' Tags in English too, e.g. "interview", "lecture", "podcast", "news commentary", "meeting".'
+    raw = _enrich_text(ENRICH_PROMPT.format(filename=filename, content=content, lang_rule=rule) + '\n\n' + rule)
     if not raw:
         return None
 
@@ -182,6 +187,16 @@ def _parse_json(raw):
     }
 
 
+def _transcript_text(task_dir, limit=20000):
+    """转写正文的开头（判断语言用）；读不了返回 ''。"""
+    try:
+        with open(os.path.join(task_dir, 'transcript.json'), 'r', encoding='utf-8') as f:
+            segs = json.load(f)
+        return ' '.join(str(s.get('text') or '') for s in segs if isinstance(s, dict))[:limit]
+    except Exception:  # noqa: BLE001
+        return ''
+
+
 def enrich_content_for(task_dir):
     """给某条结果挑选 enrich 输入：优先 summary overview，退回 transcript 开头。"""
     summary_path = os.path.join(task_dir, 'summary.json')
@@ -223,7 +238,7 @@ def enrich_task(task_dir):
     content = enrich_content_for(task_dir)
     # 记账归属：批量补全（enrich_all）时没有外层 scope，按目录名归到这条转写
     with usage.scope(ref=os.path.basename(os.path.normpath(task_dir))):
-        card = generate_card_meta(meta.get('filename', ''), content)
+        card = generate_card_meta(meta.get('filename', ''), content, lang_text=_transcript_text(task_dir))
     if not card:
         return False
 

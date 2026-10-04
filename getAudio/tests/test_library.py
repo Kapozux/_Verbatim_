@@ -23,7 +23,7 @@ import library  # noqa: E402
 t = Checks()
 R = A.config.RESULTS_FOLDER
 c = A.app.test_client()
-enrich.generate_card_meta = lambda filename, content: {'title': '补出来的标题', 'one_line': '一句话', 'tags': ['新标签'],
+enrich.generate_card_meta = lambda filename, content, **k: {'title': '补出来的标题', 'one_line': '一句话', 'tags': ['新标签'],
                                                        'filename_meaningful': False}
 A.probe_audio_duration_seconds = lambda p: 9.0
 A._keep_audio = lambda: False

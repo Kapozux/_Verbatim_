@@ -91,8 +91,10 @@ def enabled():
 
 
 def use_cheap(prompt, purpose):
-    """这一次能不能走 DeepSeek。"""
-    return purpose in PURPOSES and enabled() and china_related(prompt) is None
+    """这一次能不能走 DeepSeek。不按内容预判（10-04 用户：直接丢给 DeepSeek，报错了再回 Gemini）——
+    词表里「央行 / 政府 / 国家」这类泛词让财经节目几乎期期被判成「跟中国相关」。审核拦截时 text / stream 返回 None，
+    调用方接着用 Gemini。china_related 还留着给别处看，不再拿来分流。"""
+    return purpose in PURPOSES and enabled()
 
 
 def _pause(err, route=None):
