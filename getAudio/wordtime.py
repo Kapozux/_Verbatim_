@@ -320,6 +320,8 @@ def _run_whisper_queue():
                 words = whisper_words(p)
                 if words:
                     save(tid, [(s + off, w) for s, w in words], source='whisper')
+                    if _engine(tid) == 'gemini35':      # 它的段落时间不可信：按时间轴改
+                        apply_retime(tid)
         except Exception:
             pass
         finally:
@@ -327,3 +329,106 @@ def _run_whisper_queue():
                 os.remove(p)
             except OSError:
                 pass
+
+
+# ================= 段落时间按逐词时间轴改（gemini35 的段落时间不可信，10-04 查实）=================
+# 资料库 920 期 gemini35 短文件「最后一段时间 ÷ 时长」中位数 0.337，转成 16k 单声道再送一遍还是 0.337；
+# 看着正常的几期也前后乱跳。所以有了逐词时间轴后，拿每段开头的话按顺序去时间轴里找，把段落时间换成真的。
+
+_SPK_RE = re.compile(r'^\s*说话人[\d?？]+\s*[:：]\s*')
+
+
+def _find_from(toks, pos, q, cursor, min_cover):
+    """从 cursor 往后找 q（比对用的词）最近的一处；→ (位置, 秒) 或 None。"""
+    head = list(dict.fromkeys(q[:8]))
+    rare = sorted((w for w in head if w in pos), key=lambda w: len(pos[w]))[:3]
+    starts = set()
+    for w in rare:
+        j = q.index(w)
+        for p in pos[w]:
+            if p - j >= cursor:
+                starts.add(max(0, p - j))
+    for i in sorted(starts):
+        win = [x[1] for x in toks[i:i + len(q) + 3]]
+        sm = difflib.SequenceMatcher(None, q, win, autojunk=False)
+        blocks = sm.get_matching_blocks()
+        if sum(b.size for b in blocks) / len(q) >= min_cover:
+            blk = next(b for b in blocks if b.size)
+            return i, round(max(0.0, toks[i + blk.b][0] - 0.3 * blk.a), 1)
+    return None
+
+
+def retime_segments(segments, raw_words, min_cover=0.6):
+    """[{timestamp, text}] + 逐词时间轴 [(秒, 词)] → (新段落列表, 找到的段数)。
+    按顺序找（同一句话出现两次时后面的段落落在后一次）；原来的时间留在 model_timestamp；
+    找不到的段落夹在前后找到的两段之间、标 approx。一段都找不到就原样返回。传进来的列表不改。"""
+    import timecode
+    toks, pos = _index(raw_words or [])
+    if not toks:
+        return list(segments or []), 0
+    found, cursor = [], 0
+    for seg in segments or []:
+        q = tokens(_SPK_RE.sub('', str(seg.get('text') or '')))[:12]
+        hit = _find_from(toks, pos, q, cursor, min_cover) if len(q) >= 3 else None
+        if hit:
+            cursor = hit[0] + 1
+        found.append(hit[1] if hit else None)
+    n = sum(x is not None for x in found)
+    if not n:
+        return list(segments or []), 0
+    out = []
+    for k, seg in enumerate(segments):
+        s = dict(seg)
+        s.setdefault('model_timestamp', seg.get('timestamp'))
+        sec = found[k]
+        if sec is None:
+            prev = next(((j, found[j]) for j in range(k - 1, -1, -1) if found[j] is not None), None)
+            nxt = next(((j, found[j]) for j in range(k + 1, len(found)) if found[j] is not None), None)
+            if prev and nxt:
+                sec = prev[1] + (nxt[1] - prev[1]) * (k - prev[0]) / (nxt[0] - prev[0])
+            else:
+                sec = (prev or nxt)[1]
+            s['approx'] = True
+        else:
+            s.pop('approx', None)
+        s['timestamp'] = timecode.hms(sec)
+        out.append(s)
+    return out, n
+
+
+def _engine(task_id):
+    try:
+        with open(os.path.join(config.RESULTS_FOLDER, task_id, 'meta.json'), encoding='utf-8') as f:
+            return json.load(f).get('engine') or ''
+    except (OSError, ValueError):
+        return ''
+
+
+def apply_retime(task_id):
+    """有 words.json 时把这一期 transcript.json 的段落时间按时间轴改好（原时间留在 model_timestamp）；→ 找到的段数。"""
+    if not has(task_id):
+        return 0
+    tpath = os.path.join(config.RESULTS_FOLDER, task_id, 'transcript.json')
+    try:
+        with open(tpath, encoding='utf-8') as f:
+            segs = json.load(f)
+        with open(_path(task_id), encoding='utf-8') as f:
+            raw = json.load(f).get('words') or []
+    except (OSError, ValueError):
+        return 0
+    if not isinstance(segs, list) or not segs:
+        return 0
+    base = [dict(s, timestamp=s.get('model_timestamp') or s.get('timestamp')) for s in segs]
+    out, n = retime_segments(base, raw)
+    if not n:
+        return 0
+    tmp = tpath + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(out, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, tpath)
+    try:
+        import library
+        library.changed(task_id)
+    except Exception:  # noqa: BLE001  索引晚一点更新不要紧（最多 60 秒）
+        pass
+    return n
