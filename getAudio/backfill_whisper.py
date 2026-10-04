@@ -11,9 +11,11 @@ import argparse
 import glob
 import json
 import os
+import queue
 import random
 import shutil
 import tempfile
+import threading
 import time
 
 import config
@@ -58,19 +60,21 @@ def main():
         rows = rows[:a.limit]
     print(f'数据目录 {config.DATA_DIR}；要处理 {len(rows)} 期', flush=True)
     work = tempfile.mkdtemp(prefix='backfill_whisper_')
-    ok = skipped = failed = strikes = rests = 0
-    try:
-        for k, (_, tid, url, vid, title) in enumerate(rows, 1):
-            tag = f'[{k}/{len(rows)}] {title}'
-            t0 = time.time()
-            if not wordtime.has(tid) and url and wordtime.is_youtube(url):
-                n, why = wordtime.fetch_youtube(tid, url)
-                if n:
-                    print(f'{tag}  YouTube 字幕 {n} 词', flush=True)
-            if not wordtime.has(tid):
-                if not url:
-                    skipped += 1
-                    print(f'{tag}  跳过：本地上传，没有链接', flush=True)
+    ready = queue.Queue(maxsize=1)          # 边转边下：Whisper 转这一期时，下一期已经在下载
+    stats = {'ok': 0, 'skipped': 0, 'failed': 0}
+
+    def fetch():
+        """下载线程：拿 YouTube 字幕或下载音频，放进 ready；Whisper 那边转完一期才会腾出位置。"""
+        strikes = rests = 0
+        try:
+            for k, (_, tid, url, vid, title) in enumerate(rows, 1):
+                tag = f'[{k}/{len(rows)}] {title}'
+                if not wordtime.has(tid) and url and wordtime.is_youtube(url):
+                    n, _why = wordtime.fetch_youtube(tid, url)
+                    if n:
+                        print(f'{tag}  YouTube 字幕 {n} 词', flush=True)
+                if wordtime.has(tid):
+                    ready.put((tag, tid, None))
                     continue
                 time.sleep(a.gap + random.uniform(0, a.gap))
                 d = os.path.join(work, tid)
@@ -80,7 +84,7 @@ def main():
                 except Exception as e:  # noqa: BLE001
                     print(f'{tag}  下载出错：{str(e)[:120]}', flush=True)
                 if not info or not os.path.isfile(info.get('path') or ''):
-                    failed += 1
+                    stats['failed'] += 1
                     strikes += 1
                     shutil.rmtree(d, ignore_errors=True)
                     print(f'{tag}  下载失败（连续 {strikes} 次）', flush=True)
@@ -94,22 +98,37 @@ def main():
                         strikes = 0
                     continue
                 strikes = 0
+                ready.put((tag, tid, info['path']))
+        finally:
+            ready.put(None)
+
+    threading.Thread(target=fetch, name='backfill-fetch', daemon=True).start()
+    try:
+        while True:
+            item = ready.get()
+            if item is None:
+                break
+            tag, tid, path = item
+            t0 = time.time()
+            if path:
                 try:
-                    words = wordtime.whisper_words(info['path'])
+                    words = wordtime.whisper_words(path)
                     if words:
                         wordtime.save(tid, words, source='whisper')
+                except Exception as e:  # noqa: BLE001
+                    print(f'{tag}  Whisper 出错：{str(e)[:120]}', flush=True)
                 finally:
-                    shutil.rmtree(d, ignore_errors=True)
+                    shutil.rmtree(os.path.dirname(path), ignore_errors=True)
             n = wordtime.apply_retime(tid)
             if n:
-                ok += 1
+                stats['ok'] += 1
                 print(f'{tag}  改好 {n} 段（{time.time() - t0:.0f} 秒）', flush=True)
             else:
-                failed += 1
+                stats['failed'] += 1
                 print(f'{tag}  时间轴里一段都没对上，没改', flush=True)
     finally:
         shutil.rmtree(work, ignore_errors=True)
-    print(f'完成：改好 {ok} 期，跳过 {skipped} 期，失败 {failed} 期', flush=True)
+    print(f"完成：改好 {stats['ok']} 期，失败 {stats['failed']} 期", flush=True)
 
 
 if __name__ == '__main__':
