@@ -1899,6 +1899,16 @@ body.demo .creator-hide { display: none; }
 .rd-media audio { width: 100%; display: block; }
 .rd-media-link { display: inline-block; margin-top: 6px; font-size: 13.5px; color: var(--muted); }
 .rd-media-link:hover { color: var(--coral-deep); }
+/* 有视频时标题也贴在栏头下面（top 由 JS 设）：滚到出处那一句时还看得见是哪一期 */
+.rd-has-media .src-reader-title { position: sticky; z-index: 2; background: var(--card); margin-bottom: 0; padding-bottom: 8px; }
+/* 回答下面出处卡片里的视频：先是缩略图 + ▶，点了换成播放器 */
+.cx-src-play { position: relative; display: block; width: min(100%, 320px); aspect-ratio: 16 / 9; margin: 8px 0 4px;
+  padding: 0; border: 0; border-radius: var(--r-md); overflow: hidden; background: #111; cursor: pointer; }
+.cx-src-play img { width: 100%; height: 100%; object-fit: cover; display: block; transition: opacity .15s; }
+.cx-src-play:hover img { opacity: .85; }
+.cx-play-ic { position: absolute; left: 10px; bottom: 10px; display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 10px; border-radius: 999px; background: rgba(0, 0, 0, .72); color: #fff; font: 600 13px/1 var(--mono); }
+.cx-src-video { width: min(100%, 480px); margin: 8px 0 4px; }
 .rd-playable .rd-seg { cursor: pointer; }
 .rd-playable .rd-seg:hover:not(.hl) { background: var(--paper); }
 
@@ -2382,6 +2392,8 @@ body.demo .creator-hide { display: none; }
 #chain-detail-view .pj-emoji.cp-face { font-size: 26px; }
 
 #chain-detail-view .nb-src, #chain-detail-view .nb-studio { border-color: var(--pane-line); border-radius: 24px; padding: 16px; }
+/* 栏的内边距这里是 16px：返回键那一栏跟着往上提 16px，不然顶上露出一条滚上去的字 */
+@media (min-width: 1080px) { #chain-detail-view .src-reader-head { top: -16px; margin-top: -16px; padding-top: 16px; } }
 #chain-detail-view .nb-main { background: none; border: none; box-shadow: none; padding: 4px clamp(8px, 2vw, 32px) 10px; }
 #chain-detail-view .cx-chat { width: 100%; max-width: 900px; margin: 0 auto; }
 

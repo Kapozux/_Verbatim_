@@ -2,10 +2,10 @@
 
 ## 速览
 
-- **现状**：分支 `feature/cite-video`（worktree `.claude/worktrees/cite-video`），10-04 本地提交，还没合进 main / 5001。
+- **现状**：10-04 已在 main、5001 在跑。第二轮（`feature/cite-cards`）：左栏标题跟视频一起固定；回答下面的出处卡片里缩略图 + ▶ 就地播放。
 - **怎么跑**：YC 副本开在 5071：`GETAUDIO_DATA_DIR=CODEelse/.claude/scratch-data/yc-dev PORT=5071 bash run.sh`，打开 Y Combinator 笔记本，在回答里点一个出处。测试 `./run_tests.sh cite_media`。
 - **已知问题**：B 站播放器没有跳转命令，换时间只能重新加载 iframe；关了嵌入的 YouTube 视频只能点下面的外链；出处准不准取决于转写时间点（YC 的 DeepSeek 卡 94% 在 ±30 秒内）。
-- **下一步**：合进 main（先问其他窗口、确认 5001 空闲）；用它录 README 第一屏 GIF。
+- **下一步**：README 第一屏放 `docs/media/verbatim-cite.gif`（在 `feature/demo-yc`，没合）；B 站缩略图要另调接口，现在只放 ▶。
 
 ## 做了什么
 
@@ -20,6 +20,12 @@
 - 高亮那一句滚到播放器正下方（`revealBelowMedia`）。点文字稿里任一句，播放器跳到那一句。
 - 换一期、关阅读器时 `stopReaderMedia` 拿掉 iframe（藏起来的 iframe 会接着放）。
 - 顺手修的两处：回答里的编号列表每项之间空一行时，原来每项都显示成「1.」（`renderMarkdown` 现在照原编号写 `<ol start>`）；阅读器打开时工作台只剩约 210px，两列格子把 Predictions 这类英文名截断了，改成一列横排。
+
+## 第二轮（10-04）：出处卡片就地播放、标题固定
+
+- `explore.js` `sourceItemHtml`：转写出处有 YouTube / B 站链接时，原话下面放缩略图（`mediaThumb`，YouTube 的 `i.ytimg.com/vi/<id>/mqdefault.jpg`）+ ▶ 时间；点了 `playCiteCard` 换成 iframe，`stopCiteCards` 把别的换回缩略图，`pauseReaderMedia` 让左栏暂停（不拿掉，点字稿还能接着放）。左栏开始放时反过来停卡片。
+- 左栏有视频时 `#src-reader.rd-has-media`：标题 sticky（`top` 由 JS 按栏头高度设），视频贴在标题下面；`readerStickyBottom` 算出处那一句该滚到哪。
+- 顺手：笔记本页左栏内边距是 16px，返回键那一栏原来按 14px 往上提，顶上露出 2px 滚上去的字，宽屏补了一条规则。
 
 ## 验证
 

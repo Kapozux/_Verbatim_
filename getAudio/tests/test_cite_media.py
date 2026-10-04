@@ -77,6 +77,21 @@ console.log(JSON.stringify(out));
             and 'bvid=BV1xx411c7mD&p=3&t=75' in r.get('bvSrc', ''))
     t.check('时间写法：0:05 / 34:00 / 1:02:05', r.get('clock') == ['0:05', '34:00', '1:02:05'], str(r.get('clock')))
 
+    # ---- 回答下面的出处卡片：YouTube 先放缩略图 + ▶，点了就地换成播放器 ----
+    thumb = grab('projects.js', 'mediaThumb')
+    so, se = node(thumb + "\nconsole.log(JSON.stringify([mediaThumb({kind:'yt', id:'dQw4w9WgXcQ'}),"
+                  " mediaThumb({kind:'bili', id:'BV1xx411c7mD', p:1}), mediaThumb({kind:'audio', src:'/a'})]))") \
+        if thumb else ('', 'missing')
+    t.check('出处卡片的缩略图：YouTube 用官方缩略图，B 站 / 音频没有就不放图',
+            so == '["https://i.ytimg.com/vi/dQw4w9WgXcQ/mqdefault.jpg","",""]', se or so)
+    ex = open(os.path.join(STATIC, 'explore.js'), encoding='utf-8').read()
+    item = grab('explore.js', 'sourceItemHtml')
+    t.check('出处卡片带 ▶ 播放（data-play），点了只开这一张（其余的停）',
+            'data-play=' in item and 'playCiteCard' in ex and 'stopCiteCards' in ex)
+    css = open(os.path.join(STATIC, 'style.css'), encoding='utf-8').read()
+    t.check('左栏有视频时标题也固定在栏头下面（字幕在下面滚）', '.rd-has-media .src-reader-title' in css
+            and 'rd-has-media' in grab('projects.js', 'mountReaderMedia'))
+
     # ---- 回答里的编号列表：每项之间空一行时，别全显示成 1. ----
     md = [grab('app.js', n) for n in ('escapeHtml', 'renderInline', 'renderMarkdown')]
     so, se = node('\n'.join(md) + "\nconsole.log(renderMarkdown('1. a\\n\\n2. b\\n\\n3. c'));") if all(md) else ('', '')

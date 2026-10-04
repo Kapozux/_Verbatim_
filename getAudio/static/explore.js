@@ -693,9 +693,17 @@ function sourceItemHtml(cid, c, n) {
     const watch = c.video_url
         ? `<a class="cx-link" href="${safeUrl(c.video_url)}" target="_blank" rel="noopener">${T('cx.watch', { ts: c.ts || '' })}</a>` : '';
     const stance = c.stance && c.stance !== 'none' ? `<span class="cx-stance st-${c.stance}">${T('stance.' + c.stance)}</span>` : '';
+    // YouTube / B 站：缩略图 + ▶，点了就地换成播放器从这一秒放（先不加载 iframe，一屏七八张卡也不卡）
+    const media = c.video_url && typeof mediaSourceOf === 'function' ? mediaSourceOf({ source_url: c.video_url }) : null;
+    const thumb = media && media.kind !== 'audio' ? mediaThumb(media) : '';
+    const play = media && media.kind !== 'audio'
+        ? `<button type="button" class="cx-src-play" data-play="${escapeHtml(cid)}" aria-label="${escapeHtml(T('cx.playAt', { ts: c.ts || '' }))}">
+            ${thumb ? `<img src="${escapeHtml(thumb)}" alt="" loading="lazy">` : ''}
+            <span class="cx-play-ic"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M7 4.5v15l13-7.5z" fill="currentColor"/></svg>${escapeHtml(c.ts || '')}</span></button>` : '';
     return `<div class="cx-src" data-cid="${escapeHtml(cid)}" data-st="${escapeHtml(c.stance || 'none')}">${num}
         <blockquote class="cc-quote">${escapeHtml(c.quote || c.obs)}</blockquote>
         ${c.quote && c.obs ? `<div class="cc-obs"><span class="cx-ai-tag">${T('cx.aiNote')}</span> ${escapeHtml(c.obs)}</div>` : ''}
+        ${play}
         <div class="cx-src-foot">
             ${c.creator ? `<b>${escapeHtml(c.creator)}</b>` : ''}
             ${c.speaker ? `<span class="cx-who">🎙 ${escapeHtml(c.speaker)}</span>` : ''}
@@ -739,6 +747,10 @@ function wireCitations(root, citations) {
         }
     }));
     root.querySelectorAll('[data-go]').forEach(b => b.addEventListener('click', () => navigate(b.dataset.go)));
+    root.querySelectorAll('[data-play]').forEach(b => b.addEventListener('click', () => {
+        const c = (citations && citations[b.dataset.play]) || cxCiteCache[b.dataset.play];
+        if (c) playCiteCard(b, c);
+    }));
     root.querySelectorAll('[data-doc]').forEach(b => b.addEventListener('click', () => {
         if (typeof openSourceReader === 'function') openSourceReader(b.dataset.doc, b.dataset.pi === 'null' ? null : +b.dataset.pi);
     }));
@@ -749,6 +761,25 @@ function wireCitations(root, citations) {
         const c = (citations && citations[b.dataset.share]) || cxCiteCache[b.dataset.share];
         if (c) openShareCard({ ...c, author: c.creator || (cx.cards && cx.cards.author) || '' });
     }));
+}
+
+// 出处卡片就地放视频：同一时间只放一个（别的卡片换回缩略图，左栏的播放器暂停）
+function playCiteCard(btn, c) {
+    const m = typeof mediaSourceOf === 'function' ? mediaSourceOf({ source_url: c.video_url }) : null;
+    if (!m || m.kind === 'audio') return;
+    stopCiteCards();
+    if (typeof pauseReaderMedia === 'function') pauseReaderMedia();
+    const site = m.kind === 'yt' ? 'YouTube' : 'Bilibili';
+    const box = document.createElement('div');
+    box.className = 'rd-video cx-src-video';
+    box.innerHTML = `<iframe src="${escapeHtml(mediaSrc(m, Math.floor(c.sec || 0)))}" title="${site}"
+        allow="autoplay; encrypted-media; picture-in-picture; fullscreen" referrerpolicy="strict-origin-when-cross-origin"></iframe>`;
+    box._thumb = btn;
+    btn.replaceWith(box);
+}
+
+function stopCiteCards() {
+    document.querySelectorAll('.cx-src-video').forEach(box => box._thumb ? box.replaceWith(box._thumb) : box.remove());
 }
 
 // 所有渲染过的出处都记一份，分享按钮用

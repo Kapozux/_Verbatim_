@@ -817,8 +817,23 @@ function mediaSrc(m, t) {
     return `https://player.bilibili.com/player.html?bvid=${m.id}&p=${m.p}&t=${t}&autoplay=1&high_quality=1&danmaku=0`;
 }
 
-// 播放器放在文字稿上面、贴在栏头下面：往下读文字稿时一直看得见
+// 出处卡片的缩略图：YouTube 有官方缩略图；B 站要另请求接口才拿得到，不放图（只放 ▶）
+function mediaThumb(m) {
+    return m && m.kind === 'yt' ? `https://i.ytimg.com/vi/${m.id}/mqdefault.jpg` : '';
+}
+
+// 栏头 + 标题 + 播放器一起贴在顶上，出处那一句要滚到它们下面
+function readerStickyBottom() {
+    const head = document.querySelector('#src-reader .src-reader-head');
+    const title = document.querySelector('#src-reader .src-reader-title');
+    let h = head ? head.offsetHeight + (parseFloat(getComputedStyle(head).top) || 0) : 0;
+    if (readerMedia && readerMedia.el.isConnected) h += (title ? title.offsetHeight : 0) + readerMedia.el.offsetHeight;
+    return h;
+}
+
+// 播放器放在文字稿上面、跟标题一起贴在栏头下面：往下读文字稿时一直看得见是哪一期、视频在放
 function mountReaderMedia(body, taskId, m, sec) {
+    if (typeof stopCiteCards === 'function') stopCiteCards();   // 回答下面出处卡片里在放的先停
     const t = Math.floor(sec || 0);
     const box = document.createElement('div');
     box.className = 'rd-media';
@@ -835,8 +850,13 @@ function mountReaderMedia(body, taskId, m, sec) {
             <a class="rd-media-link" target="_blank" rel="noopener" href="${escapeHtml(mediaLink(m, t))}">${escapeHtml(T('reader.openOn', { site, t: mediaClock(t) }))}</a>`;
     }
     body.prepend(box);
-    const head = document.querySelector('#src-reader .src-reader-head');
-    if (head) box.style.top = (head.offsetHeight + (parseFloat(getComputedStyle(head).top) || 0)) + 'px';
+    const reader = document.getElementById('src-reader');
+    const head = reader.querySelector('.src-reader-head');
+    const title = reader.querySelector('.src-reader-title');
+    reader.classList.add('rd-has-media');
+    const headBottom = head ? head.offsetHeight + (parseFloat(getComputedStyle(head).top) || 0) : 0;
+    if (title) title.style.top = headBottom + 'px';
+    box.style.top = (headBottom + (title ? title.offsetHeight : 0)) + 'px';
     readerMedia = { taskId, m, el: box };
 }
 
@@ -850,6 +870,7 @@ function seekReaderMedia(sec) {
         a.play().catch(() => {});
         return;
     }
+    if (typeof stopCiteCards === 'function') stopCiteCards();
     const f = el.querySelector('iframe');
     if (m.kind === 'yt' && f && f.contentWindow) {        // YouTube 播放器收得到命令：不重新加载
         f.contentWindow.postMessage(JSON.stringify({ event: 'command', func: 'seekTo', args: [t, true] }), '*');
@@ -867,9 +888,21 @@ function seekReaderMedia(sec) {
 // 出处那一句滚到播放器正下方（readerFocus 滚到正中，播放器贴在上面时会挡住它）
 function revealBelowMedia(row) {
     if (!row || !readerMedia || !readerMedia.el.isConnected) return;
-    const head = document.querySelector('#src-reader .src-reader-head');
-    row.style.scrollMarginTop = ((head ? head.offsetHeight : 0) + readerMedia.el.offsetHeight + 4) + 'px';
+    row.style.scrollMarginTop = (readerStickyBottom() + 4) + 'px';
     row.scrollIntoView({ block: 'start' });
+}
+
+// 回答下面的出处卡片开始放时：左栏的播放器只暂停，不拿掉（点字稿里的句子还能接着放）
+function pauseReaderMedia() {
+    if (!readerMedia || !readerMedia.el.isConnected) return;
+    const a = readerMedia.el.querySelector('audio');
+    if (a) a.pause();
+    const f = readerMedia.el.querySelector('iframe');
+    if (f && f.contentWindow && readerMedia.m.kind === 'yt') {
+        f.contentWindow.postMessage(JSON.stringify({ event: 'command', func: 'pauseVideo', args: [] }), '*');
+    } else if (f) {
+        f.src = 'about:blank';                     // B 站播放器收不到暂停命令；点句子时 seekReaderMedia 会重新加载
+    }
 }
 
 function stopReaderMedia() {
@@ -880,6 +913,12 @@ function stopReaderMedia() {
     const f = el.querySelector('iframe');
     if (f) f.remove();                // 隐藏起来的 iframe 还会接着放，直接拿掉
     readerMedia = null;
+    const reader = document.getElementById('src-reader');
+    if (reader) {
+        reader.classList.remove('rd-has-media');
+        const title = reader.querySelector('.src-reader-title');
+        if (title) title.style.top = '';
+    }
 }
 
 async function openTranscriptViewer(taskId, sec) {
