@@ -858,6 +858,45 @@ def fetch_subtitle(target, dest_dir, lang='auto'):
     return (path, kind, meta) if path else (None, None, meta)
 
 
+def fetch_word_captions(url, dest_dir, lang='auto'):
+    """逐词时间轴用（wordtime，ADR 0012）：下原语言字幕的 json3。返回 (路径, 'auto'|'manual', 语言) 或 (None, 原因, None)。
+
+    跟 fetch_subtitle 的取舍相反：自动字幕（-orig 语音识别轨）每个词都带毫秒偏移，人工字幕只到行，
+    所以先要自动的 -orig。两次请求（-J + 下这一条轨），被 429 时原因里带 '429'，调用方该停手。"""
+    os.makedirs(dest_dir, exist_ok=True)
+    binary = _resolve_ytdlp()
+    base = [binary, '--no-playlist', '--no-warnings', *_cookie_args(), *_ffmpeg_location_args()]
+    try:
+        r = subprocess.run([*base, '-J', '--skip-download', url], capture_output=True, text=True, timeout=_SUB_TIMEOUT)
+        info = (json.loads(r.stdout) if r.stdout.strip() else {}) or {}
+    except Exception as e:
+        return None, f'metadata: {e}', None
+    if not info:
+        return None, ('429' if '429' in (r.stderr or '') else 'metadata: ' + (r.stderr or '').strip()[-200:]), None
+    want = _detect_orig_lang(info) if (lang or 'auto') == 'auto' else str(lang).lower()
+    if not want:
+        return None, 'original language unknown', None
+    manual, autos = info.get('subtitles') or {}, info.get('automatic_captions') or {}
+    pick = next((('auto', c) for c in autos if str(c).endswith('-orig') and _lang_matches(c, want)), None) \
+        or next((('manual', c) for c in manual if _lang_matches(c, want)), None) \
+        or next((('auto', c) for c in autos if _lang_matches(c, want)), None)
+    if not pick:
+        return None, 'no captions in ' + want, None
+    kind, code = pick
+    vid = info.get('id') or 'video'
+    outtmpl = os.path.join(dest_dir, f'words_{vid}.%(ext)s')
+    try:
+        r = subprocess.run([*base, '--skip-download', '--write-subs' if kind == 'manual' else '--write-auto-subs',
+                            '--sub-langs', code, '--sub-format', 'json3', '-o', outtmpl, url],
+                           capture_output=True, text=True, timeout=_SUB_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return None, 'timeout', None
+    hits = [f for f in os.listdir(dest_dir) if f.startswith(f'words_{vid}.') and f.endswith('.json3')]
+    if not hits:
+        return None, ('429' if '429' in (r.stderr or '') else 'download: ' + (r.stderr or '').strip()[-200:]), None
+    return os.path.join(dest_dir, hits[0]), kind, want
+
+
 _SRT_TS = re.compile(
     r'(\d{2}):(\d{2}):(\d{2})[,.](\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2})[,.](\d{3})')
 

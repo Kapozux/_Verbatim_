@@ -29,6 +29,7 @@ from datetime import datetime
 import citations
 import config
 import timecode
+import wordtime
 import voices
 import usage
 
@@ -414,13 +415,44 @@ def rhetoric(corpus):
             'tradeoff_ratio': round(trade / tech, 2) if tech else None}
 
 
+def retime_citations(messages):
+    """聊天记录里存下的出处是当时的时间点（段首）：读的时候按逐词时间轴（wordtime）再对一遍，
+    旧回答点出处也跳到原话那一秒。只改返回给前端的，不改文件；对不上的原样。"""
+    for m in messages or []:
+        for c in (m.get('citations') or {}).values() if isinstance(m, dict) else []:
+            tid, quote = c.get('task_id'), c.get('quote')
+            if c.get('exact') or not tid or not quote or c.get('kind') in ('doc', 'repo') or not wordtime.has(tid):
+                continue
+            try:
+                hit = wordtime.locate(tid, quote, c.get('sec'))
+            except Exception:
+                hit = None
+            if hit is None:
+                continue
+            c['sec'], c['ts'], c['exact'] = int(hit), timecode.clock(int(hit)), True
+            if c.get('video_url'):
+                c['video_url'] = video_link(re.sub(r'([?&])t=\d+s?(&|$)', lambda x: x.group(1) if x.group(2) else '',
+                                                   c['video_url']).rstrip('?&'), int(hit))
+    return messages
+
+
 def card_view(card, corpus, prefix=''):
-    """给前端的出处：原话、观察、期名、时间点、跳转链接。"""
+    """给前端的出处：原话、观察、期名、时间点、跳转链接。
+    这一期有逐词时间轴（wordtime，ADR 0012）就跳到原话第一个词那一秒、标 exact；没有就用卡片记的段首（卡片本身不改）。"""
     ep = corpus['episodes'][card['ep']]
+    sec, exact = card['sec'], False
+    if ep.get('task_id') and card.get('quote') and wordtime.has(ep['task_id']):
+        try:
+            hit = wordtime.locate(ep['task_id'], card['quote'], card['sec'])
+        except Exception:
+            hit = None
+        if hit is not None:
+            sec, exact = int(hit), True
+    ts = timecode.clock(sec) if exact else card['ts']
     return {'id': prefix + card['id'], 'quote': card['quote'], 'obs': card['obs'],
-            'layer': card['layer'], 'ts': card['ts'], 'sec': card['sec'],
+            'layer': card['layer'], 'ts': ts, 'sec': sec, 'exact': exact,
             'episode': ep['title'], 'ep_no': card['ep'] + 1, 'date': ep['date'],
-            'task_id': ep['task_id'], 'video_url': video_link(ep['video_url'], card['sec']),
+            'task_id': ep['task_id'], 'video_url': video_link(ep['video_url'], sec),
             'topic': card.get('topic', ''), 'stance': card.get('stance', ''),
             'speaker': card.get('speaker', ''),
             # 显示用：EP3 / DOC1；kind 区分「抽出来的卡」和「原文段落」（文档 / 转写）

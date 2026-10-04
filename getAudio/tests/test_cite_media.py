@@ -88,6 +88,7 @@ console.log(JSON.stringify(out));
     item = grab('explore.js', 'sourceItemHtml')
     t.check('出处卡片带 ▶ 播放（data-play），点了只开这一张（其余的停）',
             'data-play=' in item and 'playCiteCard' in ex and 'stopCiteCards' in ex)
+    t.check('能内嵌播放的出处不再给「听这段」（那是从原视频下载截音频）', "play || typeof clipButtonHtml !== 'function' ? ''" in item)
     css = open(os.path.join(STATIC, 'style.css'), encoding='utf-8').read()
     t.check('左栏有视频时标题也固定在栏头下面（字幕在下面滚）', '.rd-has-media .src-reader-title' in css
             and 'rd-has-media' in grab('projects.js', 'mountReaderMedia'))

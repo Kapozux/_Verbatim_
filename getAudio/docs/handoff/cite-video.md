@@ -4,7 +4,7 @@
 
 - **现状**：10-04 已在 main、5001 在跑。第二轮（`feature/cite-cards`）：左栏标题跟视频一起固定；回答下面的出处卡片里缩略图 + ▶ 就地播放。
 - **怎么跑**：YC 副本开在 5071：`GETAUDIO_DATA_DIR=CODEelse/.claude/scratch-data/yc-dev PORT=5071 bash run.sh`，打开 Y Combinator 笔记本，在回答里点一个出处。测试 `./run_tests.sh cite_media`。
-- **已知问题**：B 站播放器没有跳转命令，换时间只能重新加载 iframe；关了嵌入的 YouTube 视频只能点下面的外链；出处准不准取决于转写时间点（YC 的 DeepSeek 卡 94% 在 ±30 秒内）。
+- **已知问题**：B 站播放器没有跳转命令，换时间只能重新加载 iframe；关了嵌入的 YouTube 视频只能点下面的外链；出处时间点走逐词时间轴（ADR 0012），目前只有 YouTube 字幕这一个来源，B 站 / 本机录音 / 无字幕的仍是段首（界面写「≈」）。
 - **下一步**：README 第一屏放 `docs/media/verbatim-cite.gif`（在 `feature/demo-yc`，没合）；B 站缩略图要另调接口，现在只放 ▶。
 
 ## 做了什么
@@ -26,6 +26,16 @@
 - `explore.js` `sourceItemHtml`：转写出处有 YouTube / B 站链接时，原话下面放缩略图（`mediaThumb`，YouTube 的 `i.ytimg.com/vi/<id>/mqdefault.jpg`）+ ▶ 时间；点了 `playCiteCard` 换成 iframe，`stopCiteCards` 把别的换回缩略图，`pauseReaderMedia` 让左栏暂停（不拿掉，点字稿还能接着放）。左栏开始放时反过来停卡片。
 - 左栏有视频时 `#src-reader.rd-has-media`：标题 sticky（`top` 由 JS 按栏头高度设），视频贴在标题下面；`readerStickyBottom` 算出处那一句该滚到哪。
 - 顺手：笔记本页左栏内边距是 16px，返回键那一栏原来按 14px 往上提，顶上露出 2px 滚上去的字，宽屏补了一条规则。
+
+## 第三轮（10-04）：出处准到原话那一秒（ADR 0012）
+
+- 问题：卡片时间点是段首，Gemini 一段 25–30 秒；「8% → 20%」出处 1:05，原话实际 1:19.4。
+- `wordtime.py`：`words.json` 逐词时间轴（YouTube json3）+ `locate`（模糊比对，锚点用少见词）+ `queue`（新转写后台补）。
+- `downloader.fetch_word_captions`：先要自动字幕 `-orig` 轨（词级时间），429 时原因里带 '429'。
+- `backfill_words.py <chain_id>`：给已有的期补，间隔 20 秒、连着两次 429 停手。
+- `ask.card_view` / `ask.retime_citations`：出口处换时间、标 `exact`；前端没 exact 的写「≈」；能内嵌播放的出处不再给「听这段 / 下载这段」。
+- 测试 `tests/test_wordtime.py`（16 条，用 1:00–1:35 实测字幕，听错的词原样保留）。
+- 下一步：Qwen 自带的句 / 词时间写进 words.json；Gemini 转写的本机 Whisper 对齐（新转写转完就对，旧期点出处时只下前后 40 秒现场对）。
 
 ## 验证
 

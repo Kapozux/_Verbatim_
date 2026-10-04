@@ -25,6 +25,7 @@ import config
 import library
 import taskdb
 import timecode
+import wordtime
 import usage
 
 
@@ -523,6 +524,8 @@ def _save_results(task_id, original_filename, engine, audio_source_path,
         with open(os.path.join(task_dir, 'summary.json'), 'w', encoding='utf-8') as f:
             json.dump(summary, f, ensure_ascii=False, indent=2)
     library.changed(task_id)
+    if not DEMO_MODE and (extra_meta or {}).get('source_url'):
+        wordtime.queue(task_id, extra_meta['source_url'])   # YouTube 的期后台补逐词时间轴（出处准到那一秒，ADR 0012）
 
 
 # 云引擎「内容拦截」标记：确定性拒绝（版权/安全/敏感），重试同一引擎毫无意义
@@ -5909,7 +5912,7 @@ def api_chain_ask_history(chain_id):
     if not _chain_ok(chain_id):
         return jsonify({'error': 'Not found'}), 404
     import ask
-    return Response(json.dumps({'messages': ask.load_history(_chain_dir(chain_id))},
+    return Response(json.dumps({'messages': ask.retime_citations(ask.load_history(_chain_dir(chain_id)))},
                                ensure_ascii=False), mimetype='application/json')
 
 

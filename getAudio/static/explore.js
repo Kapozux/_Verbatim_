@@ -688,18 +688,20 @@ function sourceItemHtml(cid, c, n) {
                 data-pi="${passageIndexOf(cid)}">${T('cx.openDoc')}</button></div>
         </div>`;
     }
+    // 有逐词时间轴的出处是原话那一秒（exact）；没有的只是那一段的开头，写「≈」不装准（ADR 0012）
+    const ts = c.ts ? (c.exact === false ? '≈' + c.ts : c.ts) : '';
     const transcript = c.task_id
-        ? `<button type="button" class="cx-link" data-go="detail/${escapeHtml(c.task_id)}${c.sec != null ? '/t/' + c.sec : ''}">${T('cx.openTranscript', { ts: c.ts || '00:00' })}</button>` : '';
+        ? `<button type="button" class="cx-link" data-go="detail/${escapeHtml(c.task_id)}${c.sec != null ? '/t/' + c.sec : ''}">${T('cx.openTranscript', { ts: ts || '00:00' })}</button>` : '';
     const watch = c.video_url
-        ? `<a class="cx-link" href="${safeUrl(c.video_url)}" target="_blank" rel="noopener">${T('cx.watch', { ts: c.ts || '' })}</a>` : '';
+        ? `<a class="cx-link" href="${safeUrl(c.video_url)}" target="_blank" rel="noopener">${T('cx.watch', { ts })}</a>` : '';
     const stance = c.stance && c.stance !== 'none' ? `<span class="cx-stance st-${c.stance}">${T('stance.' + c.stance)}</span>` : '';
     // YouTube / B 站：缩略图 + ▶，点了就地换成播放器从这一秒放（先不加载 iframe，一屏七八张卡也不卡）
     const media = c.video_url && typeof mediaSourceOf === 'function' ? mediaSourceOf({ source_url: c.video_url }) : null;
     const thumb = media && media.kind !== 'audio' ? mediaThumb(media) : '';
     const play = media && media.kind !== 'audio'
-        ? `<button type="button" class="cx-src-play" data-play="${escapeHtml(cid)}" aria-label="${escapeHtml(T('cx.playAt', { ts: c.ts || '' }))}">
+        ? `<button type="button" class="cx-src-play" data-play="${escapeHtml(cid)}" aria-label="${escapeHtml(T('cx.playAt', { ts }))}">
             ${thumb ? `<img src="${escapeHtml(thumb)}" alt="" loading="lazy">` : ''}
-            <span class="cx-play-ic"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M7 4.5v15l13-7.5z" fill="currentColor"/></svg>${escapeHtml(c.ts || '')}</span></button>` : '';
+            <span class="cx-play-ic"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M7 4.5v15l13-7.5z" fill="currentColor"/></svg>${escapeHtml(ts)}</span></button>` : '';
     return `<div class="cx-src" data-cid="${escapeHtml(cid)}" data-st="${escapeHtml(c.stance || 'none')}">${num}
         <blockquote class="cc-quote">${escapeHtml(c.quote || c.obs)}</blockquote>
         ${c.quote && c.obs ? `<div class="cc-obs"><span class="cx-ai-tag">${T('cx.aiNote')}</span> ${escapeHtml(c.obs)}</div>` : ''}
@@ -710,7 +712,7 @@ function sourceItemHtml(cid, c, n) {
             <span>${escapeHtml(c.label || 'EP' + c.ep_no)} · ${escapeHtml(c.episode || '')}</span>
             ${c.date ? `<span>${escapeHtml(c.date)}</span>` : ''}${stance}
         </div>
-        <div class="cx-src-actions">${transcript}${watch}${typeof clipButtonHtml === 'function' ? clipButtonHtml(c) : ''}
+        <div class="cx-src-actions">${transcript}${watch}${play || typeof clipButtonHtml !== 'function' ? '' : clipButtonHtml(c)}
             <button type="button" class="cx-link" data-share="${escapeHtml(cid)}">${T('share.title')}</button></div>
     </div>`;
 }
