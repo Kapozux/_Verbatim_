@@ -811,7 +811,9 @@ function mediaLink(m, t) {
 
 function mediaSrc(m, t) {
     if (m.kind === 'yt') {
-        return `https://www.youtube-nocookie.com/embed/${m.id}?start=${t}&autoplay=1&enablejsapi=1&rel=0&playsinline=1`
+        // youtube.com 而不是 youtube-nocookie.com：后者不带用户的登录，IP 被 YouTube 盯上时（比如拉字幕多了）匿名嵌入
+        // 一律弹「Sign in to confirm you're not a bot」，放不了
+        return `https://www.youtube.com/embed/${m.id}?start=${t}&autoplay=1&enablejsapi=1&rel=0&playsinline=1`
             + `&origin=${encodeURIComponent(location.origin)}`;
     }
     return `https://player.bilibili.com/player.html?bvid=${m.id}&p=${m.p}&t=${t}&autoplay=1&high_quality=1&danmaku=0`;

@@ -68,8 +68,10 @@ console.log(JSON.stringify(out));
             and r.get('bili_id') == {'kind': 'bili', 'id': 'BV1xx411c7mD', 'p': 1}, so[:300])
     t.check('别的网站：本机有音频就放音频，没有就不放播放器',
             r.get('audio') == {'kind': 'audio', 'src': '/api/history/abc/audio'} and r.get('none') is None, so[:300])
-    t.check('YouTube 播放器从出处那一秒开始、能接收跳转命令、不嵌外站的隐私 cookie',
-            'youtube-nocookie.com/embed/dQw4w9WgXcQ?start=2040' in r.get('ytSrc', '')
+    # 用 youtube.com 不用 youtube-nocookie.com：后者不带用户的 YouTube 登录，10-04 这台机器拉字幕多了以后
+    # 匿名嵌入一律弹「Sign in to confirm you're not a bot」，换 youtube.com 就能放
+    t.check('YouTube 播放器从出处那一秒开始、能接收跳转命令、用带登录的 youtube.com 嵌入',
+            'https://www.youtube.com/embed/dQw4w9WgXcQ?start=2040' in r.get('ytSrc', '')
             and 'enablejsapi=1' in r.get('ytSrc', '') and 'origin=http%3A%2F%2F127.0.0.1%3A5001' in r.get('ytSrc', ''))
     t.check('外链带时间：YouTube &t=2040s，B 站 ?p=3&t=75',
             r.get('ytLink') == 'https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=2040s'

@@ -12,7 +12,7 @@
 以前在笔记本里点出处，转写来源只会滚到那一句文字；YouTube 字幕直取的期本机没有音频，连声音都没有。现在：
 
 - `projects.js` 的 `openTranscriptViewer`：按 `/api/history/<tid>` 的 `source_url` / `video_id` / `has_audio` 选播放器（`mediaSourceOf`）：
-  - YouTube → `youtube-nocookie.com/embed/<id>?start=<秒>&enablejsapi=1`；同一期再点出处用 `postMessage` 的 `seekTo`，不重新加载；
+  - YouTube → `youtube.com/embed/<id>?start=<秒>&enablejsapi=1`（10-04 从 nocookie 换过来：匿名嵌入在 IP 被盯上时弹「不是机器人」检查）；同一期再点出处用 `postMessage` 的 `seekTo`，不重新加载；
   - B 站 → `player.bilibili.com/player.html?bvid=…&p=…&t=…`；
   - 本机有音频 → `<audio>`，`currentTime` 跳过去；
   - 都没有 → 跟以前一样只滚到那一句。
