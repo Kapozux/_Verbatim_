@@ -9,7 +9,7 @@
 
 | 事 | 谁 | 在哪 | 状态 |
 |---|---|---|---|
-| 点出处就地看原视频 / 听原音（YouTube / B 站嵌播放器从那一秒开始）+ README GIF + YC 演示 | cite-video 窗口 | `feature/cite-video`（10-04 本地提交，没合） | 测试 9 条、四个宽度截图过；下一步：合进 main、录 GIF。交接 `docs/handoff/cite-video.md` |
+| 点出处就地看原视频 / 听原音（YouTube / B 站嵌播放器从那一秒开始）+ README GIF + YC 演示 | cite-video 窗口 | main（10-04 合进、5001 已重启） | 上线。README GIF 在 `docs/media/verbatim-cite.gif`（18 秒，4.7 MB；另有 mp4）；YC 演示：等用户定（见「等用户拍板」）。交接 `docs/handoff/cite-video.md` |
 | 读书笔记层（ADR 0010）：所有来源类型都读成统一格式的笔记，播客 / 报告 / 幻灯片按笔记定计划、细讲处回原文 | getaudio-fa | main（10-03 20:0x 合进、5001 已重启） | IB 计算机科学 19 份已读（$0.23）；马督工 1021 期没读（估 $4.23，等用户点）；下一步：两份失败的 PPTX 点重试、1 小时长播客方案 |
 | 笔记本 8 个问题 + 播客原声核对 + DeepSeek / Kimi key + 大量资料的默认要求 + PPTX 直接读字 | getaudio-fa | main（10-03 合进、5001 已重启） | 完成；没推远端 |
 
@@ -17,6 +17,7 @@
 
 | 事 | 为什么要拍板 | 建议 |
 |---|---|---|
+| YC 100 期演示 | DeepSeek 卡只在 scratch 副本里；要放进 `verbatim-demo` 得删旧的 5 期 YC、停掉一直崩的 launchd 任务（`com.kapozux.verbatim-demo`），公开上线还要定放哪、提问花谁的钱 | 本机先跑 5002 + 开提问（DeepSeek 一问约 $0.001），公开前加每天上限 |
 | 推送远端 | GitHub Kapozux 10-03 已推到 `38cd934`；GitLab 落后 29 个；Daemon 原版（`~/Documents/Code_no_big_AI`）3 个本地提交没推；`refactor/deep-modules` 等分支只在本地 | 一次只推一个远端、推前 fetch，按 CLAUDE.md 红线来；GitHub 新账号一天最多推一次 |
 | 画面证据卡质量评测 | 8 期覆盖幻灯片 / 录屏 / 白板 / 真人出镜等，人工标答案，量漏帧、重复、抄错、编造，约 $0.2 | 跑，再按结果调挑帧和去重 |
 | All-In 预测对账发布 | 51 条已核完，标了「需人工复核」的几条要人看；发布形式（X 串推 / Show HN / 公开页面）没定 | 见 `~/verbatim_outreach/HANDOFF.md` 第 6 节 |
