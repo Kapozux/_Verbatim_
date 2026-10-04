@@ -4,6 +4,7 @@ Supports Whisper (local) and Gemini (cloud) engines with SSE progress streaming.
 Persists results (audio + transcript + summary) to disk for history playback.
 """
 
+import hashlib
 import hmac
 import json
 import os
@@ -864,7 +865,9 @@ def _run_transcription(task_id, filepath, engine, original_filename, q,
                     pass
             elif (engine_used in ('gemini', 'gemini35') and not DEMO_MODE
                   and not wordtime.is_youtube((extra_meta or {}).get('source_url'))):
-                # Gemini 的时间点是模型写的：本机 Whisper 后台补逐词时间（YouTube 的走字幕，更省）
+                # Gemini 的时间点是模型写的：本机 Whisper 后台补逐词时间（YouTube 的走字幕，更省）。
+                # 目录先建好：后台线程看到没有结果目录会当成删掉了的期跳过（_save_results 还没跑到）
+                os.makedirs(os.path.join(config.RESULTS_FOLDER, task_id), exist_ok=True)
                 wordtime.queue_whisper(task_id, input_path, offset_sec or 0)
             t0 = time.monotonic()
             _save_results(task_id, original_filename, engine_used, input_path,
@@ -4952,6 +4955,55 @@ def api_clip():
     name = f"{_transcript_title(tid)[:40]}_{start // 60:02d}m{start % 60:02d}s.m4a"
     return send_file(path, mimetype='audio/mp4', as_attachment=request.args.get('dl') == '1',
                      download_name=re.sub(r'[\\/:*?"<>|]', '_', name), conditional=True)
+
+
+_align_locks = {}
+
+
+@app.route('/api/cite/align', methods=['POST'])
+def api_cite_align():
+    """点出处时现场对齐（ADR 0012）。body: {task_id, sec, quote} → {sec, exact}。
+    有逐词时间轴就直接查；没有（旧的 Gemini 期，比如 B 站）就截出处前 20 秒到后 70 秒的音频，本机 Whisper
+    打逐词时间，在这一小段里找原话。结果缓存在 results/<tid>/cite_times.json；找不到 sec 为 None。"""
+    body = request.get_json(silent=True) or {}
+    tid, quote = str(body.get('task_id') or ''), str(body.get('quote') or '')[:600]
+    try:
+        sec = max(0, int(float(body.get('sec'))))
+    except (TypeError, ValueError):
+        sec = None
+    if not _UUID_RE.match(tid) or sec is None or len(wordtime.tokens(quote)) < 3:
+        return jsonify({'error': 'Invalid request'}), 400
+    if not os.path.isdir(os.path.join(config.RESULTS_FOLDER, tid)):
+        return jsonify({'error': 'Not found'}), 404
+    if wordtime.has(tid):
+        hit = wordtime.locate(tid, quote, sec)
+        return jsonify({'sec': int(hit) if hit is not None else None, 'exact': hit is not None})
+    cache_p = os.path.join(config.RESULTS_FOLDER, tid, 'cite_times.json')
+    key = hashlib.sha1(f'{sec}|{quote}'.encode('utf-8')).hexdigest()[:16]
+    lock = _align_locks.setdefault(key, threading.Lock())
+    with lock:
+        try:
+            with open(cache_p, encoding='utf-8') as f:
+                cache = json.load(f)
+        except (OSError, ValueError):
+            cache = {}
+        if key in cache:
+            hit = cache[key]
+        else:
+            start = max(0, sec - 20)
+            try:
+                clip = _make_clip(tid, start, 90)
+                words = [(s + start, w) for s, w in wordtime.whisper_words(clip)]
+            except Exception as e:  # noqa: BLE001
+                return jsonify({'error': str(e)[:300]}), 502
+            hit = wordtime.locate_words(words, quote, sec)
+            hit = int(hit) if hit is not None else None
+            cache[key] = hit
+            tmp = cache_p + '.tmp'
+            with open(tmp, 'w', encoding='utf-8') as f:
+                json.dump(cache, f)
+            os.replace(tmp, cache_p)
+    return jsonify({'sec': hit, 'exact': hit is not None})
 
 
 @app.route('/api/export/docx', methods=['POST'])

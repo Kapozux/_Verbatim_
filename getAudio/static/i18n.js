@@ -420,6 +420,7 @@ const STRINGS = {
 
         "nb.openFull": "Open full transcript ↗",
         "reader.openOn": "Open on {site} at {t}",
+        "reader.aligning": "Finding the exact moment…",
 
         "nb.tile.read": "Portrait and five lenses",
 
@@ -1909,6 +1910,7 @@ const STRINGS = {
 
         "nb.openFull": "打开完整转写 ↗",
         "reader.openOn": "在 {site} 打开（{t}）",
+        "reader.aligning": "正在对准原话那一秒……",
 
         "nb.tile.read": "人物画像和五个镜头",
 

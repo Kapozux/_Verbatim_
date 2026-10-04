@@ -102,6 +102,15 @@ def _load(task_id):
             raw = json.load(f).get('words') or []
     except (OSError, ValueError):
         return [], {}
+    out, pos = _index(raw)
+    if len(_cache) > 200:
+        _cache.clear()
+    _cache[task_id] = (mt, out, pos)
+    return out, pos
+
+
+def _index(raw):
+    """[(秒, 显示词)] → ([(秒, 比对用的词)], {词: [位置…]})。一个显示词拆出几个（中文一串字）时，时间顺着往后铺。"""
     out = []
     for k, (s, w) in enumerate(raw):
         ts = tokens(w)
@@ -111,9 +120,6 @@ def _load(task_id):
     pos = {}                                  # 词 → 出现的位置（升序）：locate 用少见的词当锚点
     for i, (_, tk) in enumerate(out):
         pos.setdefault(tk, []).append(i)
-    if len(_cache) > 200:
-        _cache.clear()
-    _cache[task_id] = (mt, out, pos)
     return out, pos
 
 
@@ -124,6 +130,16 @@ def locate(task_id, quote, sec=None, before=180, after=240, min_cover=0.6):
     if not task_id:
         return None
     toks, pos = _load(task_id)
+    return _locate(toks, pos, quote, sec, before, after, min_cover)
+
+
+def locate_words(words, quote, sec=None, min_cover=0.6):
+    """同 locate，但在给定的一小段 [(秒, 词)] 里找（点出处时现场对齐的那 90 秒）。"""
+    toks, pos = _index(words)
+    return _locate(toks, pos, quote, sec, 10 ** 9, 10 ** 9, min_cover)
+
+
+def _locate(toks, pos, quote, sec, before, after, min_cover):
     if not toks:
         return None
     frag = next((f for f in _FRAG_RE.split(quote or '') if len(tokens(f)) >= 3), '')

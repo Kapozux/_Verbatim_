@@ -37,7 +37,8 @@
 - 测试 `tests/test_wordtime.py`（16 条，用 1:00–1:35 实测字幕，听错的词原样保留）。
 - 阿里云转写（qwenasr / 精准模式）请求开 `enable_words`，`transcribe_audio(words_out=…)` 收词时间（`wordtime.merge_pieces` 拼片段），`_finish_ok` 在 `_save_results` 之前存 `words.json`（加片段偏移）。测试 `tests/test_wordtime_qwen.py`。
 - Gemini 转写（来源不是 YouTube）：`_finish_ok` 调 `wordtime.queue_whisper`，音频硬链接到 `uploads/_align/`，后台一条线程跑本机 Whisper（跟 Whisper 转写共用 `_mlx_gpu_lock`），存 `words.json`（来源 whisper）后删音频；重启后剩下的重新排。`WORDTIME_WHISPER=0` 关。10 分钟音频约 70 秒。测试 `tests/test_wordtime_whisper.py`。
-- 下一步：旧的 Gemini 期（音频没留、没 YouTube 字幕，比如 B 站）点出处时只下前后约 1 分钟现场对齐。
+- 旧的 Gemini 期（音频没留、没 YouTube 字幕，比如 B 站）：点没对准的出处时前端 `alignCite` → `POST /api/cite/align`，后端 `_make_clip` 截出处前 20 秒起的 90 秒、本机 Whisper、`wordtime.locate_words`，缓存在 `results/<tid>/cite_times.json`。左栏播放器下面先写「正在对准原话那一秒……」，对上了跳过去、换高亮；出处卡片里放着的也跳。真实 B 站一期实测 10–13 秒一次。测试 `tests/test_cite_align.py`。
+- 下一步：老的 Qwen 期没有 words.json（以前没开 enable_words），点出处也走现场对齐；要整期补就得重转（花钱），先不做。
 
 ## 验证
 

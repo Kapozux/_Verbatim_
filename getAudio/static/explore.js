@@ -735,7 +735,7 @@ function wireCitations(root, citations) {
         } else if (c && c.kind === 'doc' && typeof openSourceReader === 'function') {
             openSourceReader(c.doc_id, passageIndexOf(b.dataset.cid));
         } else if (c && c.task_id && typeof openTranscriptViewer === 'function') {
-            openTranscriptViewer(c.task_id, c.sec);
+            openTranscriptViewer(c.task_id, c.sec, c);
         }
         const block = b.closest('.cx-msg, .cx-digest, .cmp-result') || root;
         const det = block.querySelector('.cx-sources');
@@ -778,6 +778,18 @@ function playCiteCard(btn, c) {
         allow="autoplay; encrypted-media; picture-in-picture; fullscreen" referrerpolicy="strict-origin-when-cross-origin"></iframe>`;
     box._thumb = btn;
     btn.replaceWith(box);
+    // 没对准到那一秒的：现场对齐，回来后播放器跳过去（YouTube 发跳转命令，B 站重新加载）
+    if (c.exact !== true && typeof alignCite === 'function') {
+        alignCite(c).then(s => {
+            const f = box.isConnected && box.querySelector('iframe');
+            if (s == null || !f) return;
+            if (m.kind === 'yt' && f.contentWindow) {
+                f.contentWindow.postMessage(JSON.stringify({ event: 'command', func: 'seekTo', args: [s, true] }), '*');
+            } else {
+                f.src = mediaSrc(m, s);
+            }
+        });
+    }
 }
 
 function stopCiteCards() {

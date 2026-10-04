@@ -921,19 +921,58 @@ function stopReaderMedia() {
     }
 }
 
-async function openTranscriptViewer(taskId, sec) {
+// 出处没对准到那一秒（exact 不是 true：这一期还没有逐词时间轴）→ 问后端现场对齐（ADR 0012）。
+// 同一条出处只问一次；对上了改写 c 本身（sec / ts / exact），后面再点直接准
+function alignCite(c) {
+    if (!c || c.exact === true || !c.task_id || c.sec == null || !c.quote) return Promise.resolve(null);
+    if (!c._align) {
+        c._align = fetch('/api/cite/align', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ task_id: c.task_id, sec: c.sec, quote: c.quote }) })
+            .then(r => (r.ok ? r.json() : null))
+            .then(j => {
+                if (!j || j.sec == null) return null;
+                c.sec = j.sec; c.ts = mediaClock(j.sec); c.exact = true;
+                return j.sec;
+            })
+            .catch(() => null);
+    }
+    return c._align;
+}
+
+// 文字稿里高亮秒数落在的那一句，滚到播放器下面
+function readerHighlightAt(body, sec) {
+    body.querySelectorAll('.rd-seg.hl').forEach(x => x.classList.remove('hl'));
+    const row = [...body.querySelectorAll('.rd-seg')].filter(r => +r.dataset.sec <= sec + 0.5).pop();
+    if (!row) return;
+    readerFocus(body, `.rd-seg[data-si="${row.dataset.si}"]`);
+    setTimeout(() => revealBelowMedia(row), 60);
+}
+
+// 左栏打开了一个没对准的出处：播放器下面那行先写「正在对准」，对上了播放器跳过去、高亮换到那一句
+function readerAlign(taskId, cite) {
+    if (!cite || cite.exact === true) return;
+    const link = readerMedia && readerMedia.taskId === taskId && readerMedia.el.querySelector('.rd-media-link');
+    const was = link ? link.textContent : '';
+    if (link) link.textContent = T('reader.aligning');
+    alignCite(cite).then(s => {
+        if (link && link.isConnected) link.textContent = was;
+        const body = document.querySelector('#src-reader:not(.hidden) #src-reader-body');
+        if (s == null || !body || !readerMedia || readerMedia.taskId !== taskId) return;
+        seekReaderMedia(s);
+        readerHighlightAt(body, s);
+    });
+}
+
+async function openTranscriptViewer(taskId, sec, cite) {
     const box = document.getElementById('src-reader');
     const curBody = box && !box.classList.contains('hidden') && box.querySelector('#src-reader-body');
     if (readerMedia && readerMedia.taskId === taskId && curBody && readerMedia.el.isConnected) {
         // 同一期再点一个出处：播放器跳过去、文字稿换一句高亮，不重新加载
-        if (sec != null) seekReaderMedia(sec);
-        curBody.querySelectorAll('.rd-seg.hl').forEach(x => x.classList.remove('hl'));
-        const rows = [...curBody.querySelectorAll('.rd-seg')];
-        const hitRow = sec == null ? null : rows.filter(r => +r.dataset.sec <= sec + 0.5).pop();
-        if (hitRow) {
-            readerFocus(curBody, `.rd-seg[data-si="${hitRow.dataset.si}"]`);
-            setTimeout(() => revealBelowMedia(hitRow), 60);
+        if (sec != null) {
+            seekReaderMedia(sec);
+            readerHighlightAt(curBody, sec);
         }
+        readerAlign(taskId, cite);
         return;
     }
     let d;
@@ -968,6 +1007,7 @@ async function openTranscriptViewer(taskId, sec) {
     if (typeof vcDecorateTranscript === 'function') vcDecorateTranscript(body, taskId, segs);   // 每句是谁说的、▶ 听
     readerGuide('task', taskId);
     if (typeof readerNotes === 'function') readerNotes('task', taskId);
+    readerAlign(taskId, cite);
 }
 
 function closeSourceReader() {
