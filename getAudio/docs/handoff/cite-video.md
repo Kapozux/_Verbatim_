@@ -35,7 +35,8 @@
 - `backfill_words.py <chain_id>`：给已有的期补，间隔 20 秒、连着两次 429 停手。
 - `ask.card_view` / `ask.retime_citations`：出口处换时间、标 `exact`；前端没 exact 的写「≈」；能内嵌播放的出处不再给「听这段 / 下载这段」。
 - 测试 `tests/test_wordtime.py`（16 条，用 1:00–1:35 实测字幕，听错的词原样保留）。
-- 下一步：Qwen 自带的句 / 词时间写进 words.json；Gemini 转写的本机 Whisper 对齐（新转写转完就对，旧期点出处时只下前后 40 秒现场对）。
+- 阿里云转写（qwenasr / 精准模式）请求开 `enable_words`，`transcribe_audio(words_out=…)` 收词时间（`wordtime.merge_pieces` 拼片段），`_finish_ok` 在 `_save_results` 之前存 `words.json`（加片段偏移）。测试 `tests/test_wordtime_qwen.py`。
+- 下一步：Gemini 转写的本机 Whisper 对齐（新转写转完就对，旧期点出处时只下前后 40 秒现场对）。
 
 ## 验证
 

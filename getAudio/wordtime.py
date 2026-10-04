@@ -56,6 +56,24 @@ def parse_json3(data):
     return out
 
 
+_CJK_RE = re.compile(r'[\u4e00-\u9fff\u3400-\u4dbf]')
+
+
+def merge_pieces(pieces):
+    """阿里云 enable_words 返回的词片段 → [(秒, 整词)]。英文新词开头带空格（' bit'），一个词可能拆成几片
+    （'Frank' + 'ly'），没空格的片段接到上一片；上一片带了标点就断开。中文每片各算一个（不带空格，不然整句粘成一个）。"""
+    out, prev_punct, prev_cjk = [], True, False
+    for w in pieces or []:
+        p = str(w.get('text') or '')
+        cjk = bool(_CJK_RE.search(p))
+        if not out or p.startswith(' ') or prev_punct or cjk or prev_cjk:
+            out.append([(w.get('begin_time') or 0) / 1000, p.strip()])
+        else:
+            out[-1][1] += p
+        prev_punct, prev_cjk = bool(str(w.get('punctuation') or '').strip()), cjk
+    return [(round(s, 2), x) for s, x in out if x]
+
+
 def save(task_id, words, source, lang=''):
     path = _path(task_id)
     tmp = path + '.tmp'

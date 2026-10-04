@@ -754,6 +754,7 @@ def _run_transcription(task_id, filepath, engine, original_filename, q,
 
     cleanup_paths = [filepath]
     input_path = filepath
+    word_track = []          # 阿里云顺带给的逐词时间 [(秒, 词)]：存好转写时写 words.json（ADR 0012）
 
     # 链条已被停止 → 队列里剩下的这些别再开跑（停止前可能已经提交了几十个）。
     # 音频留在 uploads/ 不删，Continue 会直接拿它重转，不用重下载。
@@ -854,6 +855,13 @@ def _run_transcription(task_id, filepath, engine, original_filename, q,
             # 片段截取（如只转 10:00–25:00）：把 0 起的时间戳整体加偏移，
             # 落盘 + done 事件都带真实位置。放这里是所有引擎/兜底路径的唯一收口。
             segs = _offset_segments(segs, offset_sec)
+            if word_track and engine_used in ('qwenasr', 'dashscope', 'precise'):
+                # 先于 _save_results 存：那里会给 YouTube 的期排队拉字幕，已经有了就跳过
+                try:
+                    os.makedirs(os.path.join(config.RESULTS_FOLDER, task_id), exist_ok=True)
+                    wordtime.save(task_id, [(s + (offset_sec or 0), w) for s, w in word_track], source='qwen')
+                except Exception:
+                    pass
             t0 = time.monotonic()
             _save_results(task_id, original_filename, engine_used, input_path,
                           segs, summary, model_review=model_review,
@@ -969,8 +977,10 @@ def _run_transcription(task_id, filepath, engine, original_filename, q,
 
             # 开说话人分离，并像 gemini35 一样把「说话人N：」写进正文——
             # 剔除连麦嘉宾、分析、搜索都靠这个前缀认人
+            word_track.clear()
             segments = transcribe_audio(
-                input_path, progress_callback=progress_cb, diarization=True
+                input_path, progress_callback=progress_cb, diarization=True,
+                words_out=word_track,
             )
             for seg in segments:
                 if seg.get('speaker') is not None:
@@ -1014,9 +1024,10 @@ def _run_transcription(task_id, filepath, engine, original_filename, q,
 
             def _do_dashscope():
                 try:
+                    word_track.clear()
                     holder['dashscope'] = _dashscope_tx(
                         input_path, diarization=True,
-                        speaker_count=speaker_count,
+                        speaker_count=speaker_count, words_out=word_track,
                     )
                     usage.record('dashscope', config.DASHSCOPE_ASR_MODEL, 'asr',
                                  audio_seconds=audio_dur or 0)
