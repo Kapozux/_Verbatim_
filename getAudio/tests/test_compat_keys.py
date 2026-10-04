@@ -84,7 +84,7 @@ t.check('阿里云欠费：同一次就接到官方 DeepSeek，之后不再先�
         == ['dashscope.aliyuncs.com', 'api.deepseek.com', 'api.deepseek.com'] and posts[1]['model'] == 'deepseek-v4-flash'
         and 'enable_thinking' not in posts[1]['payload'])
 posts.clear()
-t.check('政治内容两条路都不走', llmroute.text('今天聊一下中共的人事。', 'summary') is None and not posts)
+t.check('提到中国的内容也照常走（不预判；被审核拦了才回 Gemini）', llmroute.text('今天聊一下中共的人事。', 'summary') == 'OK from api.deepseek.com' and len(posts) == 1)
 fake_post.aliyun_fail = False
 os.environ['DASHSCOPE_API_KEY'] = ''
 llmroute._state.update(paused_until=0.0, reason='')

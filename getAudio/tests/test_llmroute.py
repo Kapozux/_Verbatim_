@@ -76,14 +76,14 @@ got = {k: llmroute.china_related(k) for k in cases}
 print('1 判断：', got)
 ok['classify'] = got == cases
 
-# 2 通用入口：无关内容 + 可换用途 → DeepSeek（关思考）；敏感 / 不在名单 / grounded → Gemini
+# 2 通用入口：可换用途 → DeepSeek（关思考），跟中国相关的也先发（10-04 用户：不预先判断，报错再回 Gemini）；不在名单 / grounded → Gemini
 reset()
 a = analyze._call_gemini(SAFE, purpose='ask')
 b = analyze._call_gemini(HOT, purpose='ask')
 c = analyze._call_gemini(SAFE, purpose='cards')
 d = analyze._call_gemini(SAFE, purpose='ask', grounded=True)
 print('2 通用：', a, b, c, d, '| DeepSeek 调用', calls['ds'])
-ok['generic'] = (a == 'DS:ask' and b == c == d == 'GEM' and len(calls['ds']) == 1
+ok['generic'] = (a == b == 'DS:ask' and c == d == 'GEM' and len(calls['ds']) == 2
                  and calls['ds'][0]['model'] == 'deepseek-v4-flash' and calls['ds'][0]['extra'] == {'enable_thinking': False})
 
 # 3 失败回退：审核拦截只回退这一次；欠费停 30 分钟、这期间不再去试
@@ -144,18 +144,21 @@ print('5 流式：', s1, '|', s2, '|', s3, '| 记账', [(a[:3], k.get('input_tok
 ok['stream'] = (s1 == '你好，世界' and s2 == s3 == 'GEM-STREAM'
                 and recorded[0][0][:3] == ('aliyun', 'deepseek-v4-flash', 'ask') and recorded[0][1]['input_tokens'] == 1000)
 
-# 6 摘要 / 补全标签 / 回顾面板都接上了；走 Gemini 时不开思考
+# 6 摘要 / 补全标签 / 回顾面板都接上了：提到中国的也先走 DeepSeek；DeepSeek 审核拦截才回 Gemini，回 Gemini 时不开思考
 reset()
 o1 = summarize._call_gemini('总结：' + SAFE)
-o2 = summarize._call_gemini(HOT)
 o3 = enrich._enrich_text(SAFE)
-o4 = enrich._enrich_text(HOT)
 o5 = reflect._call_model(SAFE)
+h1, h2, h3 = summarize._call_gemini(HOT), enrich._enrich_text(HOT), reflect._call_model(HOT)
+fake_compat.fail = '400: data_inspection_failed'
+o2 = summarize._call_gemini(HOT)
+o4 = enrich._enrich_text(HOT)
 o6 = reflect._call_model(HOT)
+fake_compat.fail = None
 think = [g.get('thinking') for g in calls['gem']]
-print('6 接入：', o1, o2, o3, o4, o5, o6, '| Gemini 思考预算', think, '| DeepSeek 用途', [c['purpose'] for c in calls['ds']])
-ok['wired'] = (o1 == 'DS:summary' and o2 == 'GEM' and o3 == 'DS:enrich' and o4 == 'GEM' and o5 == 'DS:reflect'
-               and o6 == 'GEM' and think[:2] == [0, 0])
+print('6 接入：', o1, o3, o5, h1, h2, h3, '| 拦截后', o2, o4, o6, '| Gemini 思考预算', think, '| DeepSeek 用途', [c['purpose'] for c in calls['ds']])
+ok['wired'] = (o1 == h1 == 'DS:summary' and o3 == h2 == 'DS:enrich' and o5 == h3 == 'DS:reflect'
+               and o2 == o4 == o6 == 'GEM' and think[:2] == [0, 0])
 
 # 7 记价：DeepSeek 有价，按表算（输入 1000、输出 500 token）
 cost = usage.estimate_cost('deepseek-v4-flash', 1000, 500)

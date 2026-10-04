@@ -434,14 +434,7 @@ _CN_PROVIDERS = ('aliyun', 'deepseek', 'moonshot')
 
 
 def _route_episode(provider, extract_model, text):
-    """按整期判断：这一期跟中国相关，就整期改用 Gemini 抽取档。分段 / 分窗以后每段提到的次数可能不够检查门槛，
-    但整期就是在聊中国（YC 那期讲中美制造业，切成 3 分钟一窗以后每窗只提一两次）——按整期判才不漏。"""
-    if provider in _CN_PROVIDERS:
-        import llmroute
-        why = llmroute.china_related(text)
-        if why:
-            print(f'[分析] 这一期跟中国相关（{why}），整期改用 Gemini')
-            return 'gemini', resolve_analysis('gemini')[1]
+    """不再按整期预判（10-04 用户：不要预先判断，国内模型报错了再回 Gemini，见 _llm）。留着这个口子，调用处不用改。"""
     return provider, extract_model
 
 
@@ -449,17 +442,20 @@ def _llm(prompt, provider, model, grounded=False, purpose='analysis'):
     """按 provider 分发：gemini 走 google-genai，aliyun 走百炼，openrouter 走 OpenRouter。
     purpose：记账用途标签（cards / synth / verify / lens / brief / review / xhs …）。
 
-    红线：发往国内模型（百炼 / 官方 DeepSeek / Kimi）之前先过 llmroute.china_related，跟中国相关的改走 Gemini
-    （抽卡、体检用抽取档，其余用合成档）。llmroute 只管摘要、问答这些用途；笔记本选了国内分析预设时，抽卡、体检、
-    写画像都走这里——2026-10-04 以前这里没查，一期讲中美制造业的 YC 访谈被体检步骤发给了 DeepSeek。"""
+    国内模型（百炼 / 官方 DeepSeek / Kimi）先发、报错再回 Gemini（10-04 用户：不要预先判断）：审核拦截、超时、接口错
+    都是这一次改用 Gemini 同档模型（抽卡、体检用抽取档，其余用合成档），不整期改道。"""
     if provider in _CN_PROVIDERS:
-        import llmroute
-        why = llmroute.china_related(prompt)
-        if why:
+        try:
+            return _llm_cn(prompt, provider, model, purpose)
+        except Exception as e:  # noqa: BLE001
             _, g_extract, g_synth = resolve_analysis('gemini')
-            print(f'[分析] 内容跟中国相关（{why}），这次不发国内模型，改用 Gemini')
+            print(f'[分析] {provider} 报错（{str(e)[:120]}），这次改用 Gemini')
             return _call_gemini(prompt, grounded=grounded, model=g_extract if purpose in ('cards', 'review') else g_synth,
                                 purpose=purpose)
+    return _llm_other(prompt, provider, model, grounded, purpose)
+
+
+def _llm_cn(prompt, provider, model, purpose):
     if provider == 'aliyun':
         key = config.dashscope_key()
         if not key:
@@ -476,6 +472,10 @@ def _llm(prompt, provider, model, grounded=False, purpose='analysis'):
         if not key:
             raise RuntimeError('MOONSHOT_API_KEY 未设置 — 在 Settings → Kimi 里填 key')
         return _call_openai_compat(prompt, model, config.MOONSHOT_COMPAT_BASE, key, label='Kimi', purpose=purpose)
+    raise RuntimeError(f'unknown provider {provider}')
+
+
+def _llm_other(prompt, provider, model, grounded, purpose):
     if provider == 'openrouter':
         key = os.environ.get('OPENROUTER_API_KEY', '')
         if not key:
