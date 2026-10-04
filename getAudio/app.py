@@ -862,6 +862,10 @@ def _run_transcription(task_id, filepath, engine, original_filename, q,
                     wordtime.save(task_id, [(s + (offset_sec or 0), w) for s, w in word_track], source='qwen')
                 except Exception:
                     pass
+            elif (engine_used in ('gemini', 'gemini35') and not DEMO_MODE
+                  and not wordtime.is_youtube((extra_meta or {}).get('source_url'))):
+                # Gemini 的时间点是模型写的：本机 Whisper 后台补逐词时间（YouTube 的走字幕，更省）
+                wordtime.queue_whisper(task_id, input_path, offset_sec or 0)
             t0 = time.monotonic()
             _save_results(task_id, original_filename, engine_used, input_path,
                           segs, summary, model_review=model_review,

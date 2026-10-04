@@ -213,3 +213,101 @@ def _run_queue():
             _q.put((tid, url))
             time.sleep(600)
         time.sleep(20 + random.uniform(0, 10))
+
+
+# ---- Gemini 转写的期：本机 Whisper 补（10-04 实测中位数差 0.24 秒、约 11 倍实时）----
+# 音频转写完默认不留（KEEP_AUDIO），所以排队时先硬链接一份到 uploads/_align/，Whisper 跑完就删；
+# 服务重启后队列没了，下次排队时把 _align/ 里剩下的重新排上。GPU 跟 Whisper 转写共用一把锁（mlx 不是线程安全的）。
+_wq = _queue.Queue()
+_wworker = None
+_wlock = threading.Lock()
+_wresumed = False
+
+
+def align_dir():
+    d = os.path.join(config.UPLOAD_FOLDER, '_align')
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def is_youtube(url):
+    return bool(_YT_RE.search(str(url or '')))
+
+
+def whisper_words(path):
+    """本机 Whisper 带逐词时间转一遍 → [(秒, 词)]。语言自动判断（中文 / 英文都行）。"""
+    import transcribe_whisper as tw
+    model, kind = tw._get_model()
+    if kind == 'mlx':
+        import mlx_whisper
+        with tw._mlx_gpu_lock:
+            r = mlx_whisper.transcribe(path, path_or_hf_repo=model, word_timestamps=True)
+        segs = r.get('segments') or []
+        return [(round(float(w['start']), 2), w['word'].strip()) for s in segs for w in s.get('words') or [] if w['word'].strip()]
+    if kind == 'faster':
+        segs, _ = model.transcribe(path, word_timestamps=True, vad_filter=True)
+        return [(round(float(w.start), 2), w.word.strip()) for s in segs for w in (s.words or []) if w.word.strip()]
+    r = model.transcribe(path, word_timestamps=True)
+    return [(round(float(w['start']), 2), w['word'].strip()) for s in r.get('segments') or [] for w in s.get('words') or []]
+
+
+def queue_whisper(task_id, audio_path, offset_sec=0):
+    """转写存好后调（Gemini 引擎、来源不是 YouTube）：留一份音频排队补逐词时间轴。WORDTIME_WHISPER=0 时不做。"""
+    global _wworker
+    if os.environ.get('WORDTIME_WHISPER', '1') != '1' or not task_id or has(task_id) or not os.path.isfile(audio_path or ''):
+        return False
+    keep = os.path.join(align_dir(), f'{task_id}__{int(offset_sec or 0)}{os.path.splitext(audio_path)[1].lower()}')
+    try:
+        if not os.path.exists(keep):
+            try:
+                os.link(audio_path, keep)
+            except OSError:
+                import shutil
+                shutil.copyfile(audio_path, keep)
+    except OSError:
+        return False
+    _wq.put(keep)
+    _ensure_whisper_worker()
+    return True
+
+
+def _ensure_whisper_worker():
+    global _wworker, _wresumed
+    with _wlock:
+        if not _wresumed:                       # 上次没跑完的（服务重启）重新排上
+            _wresumed = True
+            queued = set(_wq.queue)
+            for f in sorted(os.listdir(align_dir())):
+                p = os.path.join(align_dir(), f)
+                if '__' in f and p not in queued:
+                    _wq.put(p)
+        if _wworker is None or not _wworker.is_alive():
+            _wworker = threading.Thread(target=_run_whisper_queue, name='wordtime-whisper', daemon=True)
+            _wworker.start()
+
+
+def _run_whisper_queue():
+    while True:
+        try:
+            p = _wq.get(timeout=600)
+        except _queue.Empty:
+            return
+        if not os.path.isfile(p):
+            continue
+        tid, _, rest = os.path.basename(p).partition('__')
+        try:
+            off = int(os.path.splitext(rest)[0] or 0)
+        except ValueError:
+            off = 0
+        try:
+            if not has(tid) and os.path.isdir(os.path.join(config.RESULTS_FOLDER, tid)):
+                words = whisper_words(p)
+                if words:
+                    save(tid, [(s + off, w) for s, w in words], source='whisper')
+        except Exception:
+            pass
+        finally:
+            try:
+                os.remove(p)
+            except OSError:
+                pass

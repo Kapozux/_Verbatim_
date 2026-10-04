@@ -36,7 +36,8 @@
 - `ask.card_view` / `ask.retime_citations`：出口处换时间、标 `exact`；前端没 exact 的写「≈」；能内嵌播放的出处不再给「听这段 / 下载这段」。
 - 测试 `tests/test_wordtime.py`（16 条，用 1:00–1:35 实测字幕，听错的词原样保留）。
 - 阿里云转写（qwenasr / 精准模式）请求开 `enable_words`，`transcribe_audio(words_out=…)` 收词时间（`wordtime.merge_pieces` 拼片段），`_finish_ok` 在 `_save_results` 之前存 `words.json`（加片段偏移）。测试 `tests/test_wordtime_qwen.py`。
-- 下一步：Gemini 转写的本机 Whisper 对齐（新转写转完就对，旧期点出处时只下前后 40 秒现场对）。
+- Gemini 转写（来源不是 YouTube）：`_finish_ok` 调 `wordtime.queue_whisper`，音频硬链接到 `uploads/_align/`，后台一条线程跑本机 Whisper（跟 Whisper 转写共用 `_mlx_gpu_lock`），存 `words.json`（来源 whisper）后删音频；重启后剩下的重新排。`WORDTIME_WHISPER=0` 关。10 分钟音频约 70 秒。测试 `tests/test_wordtime_whisper.py`。
+- 下一步：旧的 Gemini 期（音频没留、没 YouTube 字幕，比如 B 站）点出处时只下前后约 1 分钟现场对齐。
 
 ## 验证
 
