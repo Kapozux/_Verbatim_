@@ -1890,6 +1890,17 @@ body.demo .creator-hide { display: none; }
 .rd-seg { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px; padding: 5px 8px; margin: 0 -8px;
   border-radius: var(--r-sm); font-size: 15.5px; line-height: 1.65; color: var(--ink-soft); }
 .rd-ts { font-family: var(--mono); font-size: 12.5px; color: var(--muted); padding-top: 3px; }
+/* 出处就地看原视频 / 听原音：贴在栏头下面（top 由 JS 按栏头高度设），往下读文字稿时一直看得见；点一句跳到那一句 */
+.rd-media { position: sticky; z-index: 2; background: var(--card); padding-bottom: 10px; margin-bottom: 4px; }
+/* 最高占屏幕 38%：窄屏一栏铺满时 16:9 会比屏幕一半还高，把文字稿挤没了 */
+.rd-video { position: relative; aspect-ratio: 16 / 9; width: min(100%, calc(38vh * 16 / 9));
+  border-radius: var(--r-md); overflow: hidden; background: #000; }
+.rd-video iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+.rd-media audio { width: 100%; display: block; }
+.rd-media-link { display: inline-block; margin-top: 6px; font-size: 13.5px; color: var(--muted); }
+.rd-media-link:hover { color: var(--coral-deep); }
+.rd-playable .rd-seg { cursor: pointer; }
+.rd-playable .rd-seg:hover:not(.hl) { background: var(--paper); }
 
 /* 中间：问答（一栏；开场问题在空状态里，范围由左栏勾选决定）*/
 .cx-chat { display: flex; flex-direction: column; gap: 12px; }
@@ -2250,6 +2261,10 @@ body.demo .creator-hide { display: none; }
   .nb:has(.nb-src.reading), .nb:has(.dsc-res:not(.hidden)) {
     --nb-l: minmax(300px, 1.6fr); --nb-r: minmax(210px, .9fr);
     grid-template-columns: var(--nb-l) minmax(0, 2fr) var(--nb-r); }
+  /* 左栏在看原文时工作台只剩 210px：两列格子里 Predictions 这类英文名会被拦腰截断——改成一列横排（图标 + 名字） */
+  #chain-explore:has(.nb-src.reading) .nb-tiles { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+  #chain-explore:has(.nb-src.reading) .nb-tile { flex-direction: row; align-items: center; padding: 8px 10px; }
+  #chain-explore:has(.nb-src.reading) .nb-tile .nb-tl { overflow-wrap: normal; }
   .nb.src-min { --nb-l: 52px; }
   .nb.studio-min { --nb-r: 52px; }
   .nb.src-min .nb-src > :not(.nb-src-top), .nb.src-min .nb-src-top > :not(.nb-pane-h), .nb.src-min .nb-src .nb-pane-h b,

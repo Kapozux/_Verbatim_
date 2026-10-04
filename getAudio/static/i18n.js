@@ -419,6 +419,7 @@ const STRINGS = {
         "nb.needsRec": "These views are built from recordings. Documents are answered from directly in Chat.",
 
         "nb.openFull": "Open full transcript ↗",
+        "reader.openOn": "Open on {site} at {t}",
 
         "nb.tile.read": "Portrait and five lenses",
 
@@ -1906,6 +1907,7 @@ const STRINGS = {
         "nb.needsRec": "这几栏是从录音里抽出来的；文档直接在对话里问就行。",
 
         "nb.openFull": "打开完整转写 ↗",
+        "reader.openOn": "在 {site} 打开（{t}）",
 
         "nb.tile.read": "人物画像和五个镜头",
 

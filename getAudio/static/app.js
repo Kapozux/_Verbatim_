@@ -3027,10 +3027,11 @@ function renderMarkdown(md) {
         // 有序列表
         if (/^\s*\d+\.\s+/.test(line)) {
             const buf = [];
+            const start = parseInt(line, 10) || 1;   // 每项之间空一行时，每项各成一个列表：照原来的编号起头，别全显示成 1.
             while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) {
                 buf.push('<li>' + renderInline(lines[i].replace(/^\s*\d+\.\s+/, '')) + '</li>'); i++;
             }
-            out.push('<ol>' + buf.join('') + '</ol>');
+            out.push((start > 1 ? `<ol start="${start}">` : '<ol>') + buf.join('') + '</ol>');
             continue;
         }
         // 空行
