@@ -4,6 +4,7 @@
 
 **Free, local, unlimited-length transcription. Paste a YouTube/Bilibili link, get a transcript with timestamps. No account needed.**
 
+![Verbatim demo](getAudio/docs/media/verbatim-cite.gif)
 Built by Kapozux/Kerwin, student in Shanghai. In active development since March 2026.
 
 ![Verbatim](docs/verbatim.png)
