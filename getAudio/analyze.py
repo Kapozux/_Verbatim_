@@ -99,6 +99,8 @@ def review_transcript(segments, preset=None, window=180):
     if not segments:
         return set()
     provider, extract_model, _ = resolve_analysis(preset)
+    provider, extract_model = _route_episode(provider, extract_model,
+                                             ' '.join(str(s.get('text') or '') for s in segments if isinstance(s, dict)))
     drop = set()
     for base in range(0, len(segments), window):
         chunk = segments[base:base + window]
@@ -428,9 +430,36 @@ def _call_openai_compat(prompt, model, base_url, api_key, extra_payload=None,
     raise RuntimeError(f'{label}({model}) 调用失败: {last_err}')
 
 
+_CN_PROVIDERS = ('aliyun', 'deepseek', 'moonshot')
+
+
+def _route_episode(provider, extract_model, text):
+    """按整期判断：这一期跟中国相关，就整期改用 Gemini 抽取档。分段 / 分窗以后每段提到的次数可能不够检查门槛，
+    但整期就是在聊中国（YC 那期讲中美制造业，切成 3 分钟一窗以后每窗只提一两次）——按整期判才不漏。"""
+    if provider in _CN_PROVIDERS:
+        import llmroute
+        why = llmroute.china_related(text)
+        if why:
+            print(f'[分析] 这一期跟中国相关（{why}），整期改用 Gemini')
+            return 'gemini', resolve_analysis('gemini')[1]
+    return provider, extract_model
+
+
 def _llm(prompt, provider, model, grounded=False, purpose='analysis'):
     """按 provider 分发：gemini 走 google-genai，aliyun 走百炼，openrouter 走 OpenRouter。
-    purpose：记账用途标签（cards / synth / verify / lens / brief / review / xhs …）。"""
+    purpose：记账用途标签（cards / synth / verify / lens / brief / review / xhs …）。
+
+    红线：发往国内模型（百炼 / 官方 DeepSeek / Kimi）之前先过 llmroute.china_related，跟中国相关的改走 Gemini
+    （抽卡、体检用抽取档，其余用合成档）。llmroute 只管摘要、问答这些用途；笔记本选了国内分析预设时，抽卡、体检、
+    写画像都走这里——2026-10-04 以前这里没查，一期讲中美制造业的 YC 访谈被体检步骤发给了 DeepSeek。"""
+    if provider in _CN_PROVIDERS:
+        import llmroute
+        why = llmroute.china_related(prompt)
+        if why:
+            _, g_extract, g_synth = resolve_analysis('gemini')
+            print(f'[分析] 内容跟中国相关（{why}），这次不发国内模型，改用 Gemini')
+            return _call_gemini(prompt, grounded=grounded, model=g_extract if purpose in ('cards', 'review') else g_synth,
+                                purpose=purpose)
     if provider == 'aliyun':
         key = config.dashscope_key()
         if not key:
@@ -560,6 +589,15 @@ def _extract_cards_chunked(title, chunks, author, provider, model):
     return data
 
 
+# 模型偶尔把 layer 写成英文（DeepSeek 关思考时约 3%）：代码只认三个中文取值，整理回来
+_LAYER_ALIASES = {
+    'his claim': '他的主张', 'his claims': '他的主张', 'her claim': '他的主张', 'their claim': '他的主张',
+    'claim': '他的主张', 'speaker claim': '他的主张',
+    'transcript evidence': '转写自证', 'self-evident': '转写自证', 'transcript': '转写自证', 'rhetoric': '转写自证',
+    'external verification': '外部核实', 'external check': '外部核实', 'verified': '外部核实',
+}
+
+
 def _cards_lang_rule(transcript_text):
     """提示词里「语言跟随转写」那条，模型不思考时会被中文提示词带偏（2026-10-04 对比：Gemini 关思考、DeepSeek
     都把英文节目的 obs 写成了中文）。判断好语言，写在转写后面——模型最看重最后读到的。layer 的取值是代码认的，原样保留。"""
@@ -588,6 +626,10 @@ def _extract_cards(title, transcript_text, author, provider, model):
     if not isinstance(data, dict):
         return None
     data.setdefault('cards', [])
+    for c in data['cards'] if isinstance(data['cards'], list) else []:
+        if isinstance(c, dict):
+            c['layer'] = _LAYER_ALIASES.get(str(c.get('layer') or '').strip().lower(), c.get('layer'))
+            c['timestamp'] = str(c.get('timestamp') or '').strip().strip('[]').strip()
     data.setdefault('metrics', {})
     data.setdefault('asr_suspects', [])
     return data
@@ -645,6 +687,7 @@ def analyze_episode(title, transcript_text, author='该博主', verify=False, pr
         if not ok:
             return unusable_episode(title, reason)
     provider, extract_model, _ = resolve_analysis(preset)
+    provider, extract_model = _route_episode(provider, extract_model, transcript_text)
     chunks = _split_transcript(transcript_text)
     if len(chunks) > 1:
         data = _extract_cards_chunked(title, chunks, author, provider, extract_model)
