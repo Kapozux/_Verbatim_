@@ -64,6 +64,7 @@ GitHub 反垃圾系统眼里的"新账号 + 改名 + 关键词描述 + 批量 to
 - 详细功能与架构见 `README.md`（写于 2026-08-10，之后新增的 Gemini 3.5 引擎、Reflect
   面板、演示模式、合并转写、单期重转写还没写进去）。
 - MCP server 在 `../verbatim-mcp`（已发 PyPI）；打包脚本在 `packaging/`。
+- 宣传片（Remotion，源码在仓库外 `~/verbatim_outreach/promo/v2_src`）：做过什么、哪些做法管用、踩过的坑都在 `docs/handoff/promo-video.md`，碰宣传 / 演示视频前先读。
 
 ## 工作约定
 
