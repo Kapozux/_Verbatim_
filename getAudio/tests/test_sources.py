@@ -77,7 +77,7 @@ if have('textutil'):
                 '\n\nKey quote: everything changes.')
     subprocess.run(['textutil', '-convert', 'docx', note, '-output', os.path.join(TMP, 'note.docx')], check=True)
     m = wait(S.create_doc(filename='note.docx', data=open(os.path.join(TMP, 'note.docx'), 'rb').read())['id'])
-    t.check('Word 用 textutil 兜底', m['status'] == 'ready' and m['converter'] == 'textutil' and S.doc_passages(m['id']))
+    t.check('Word 用 textutil 兜底', m['status'] == 'ready' and m['converter'] in ('docx-text', 'textutil') and S.doc_passages(m['id']))
 else:
     t.skip('Word 用 textutil 兜底', '没有 textutil（不是 macOS）')
 

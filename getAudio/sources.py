@@ -59,7 +59,9 @@ def _read_json(path, default=None):
 
 
 def _write_json(path, data):
-    tmp = path + '.tmp'
+    # 临时文件名带进程和线程号：两个线程同时给同一份文档建段落缓存（加完文档后台在建、这边又马上提问）时，
+    # 共用一个 .tmp 会被对方先 rename 走，这边就 FileNotFoundError
+    tmp = f'{path}.{os.getpid()}.{threading.get_ident()}.tmp'
     with open(tmp, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=1)
     os.replace(tmp, path)
@@ -175,6 +177,16 @@ def _convert(doc_id):
     _save_meta(meta)
     errors = []
     try:
+        # PPTX / DOCX：直接从文件里读字（几秒）。原来先交墨页，墨页要先用 Office 转成 PDF，大的幻灯片会超时
+        # （IB 计算机科学 19 份里两份就是这样失败的）。读出来几乎没字（整页是图）再交墨页 OCR
+        if meta['ext'] in ('pptx', 'docx'):
+            try:
+                md, pages, conv = _office_text(src, meta['ext'])
+                if len(md) >= 40 * max(1, len(pages or [1])):
+                    _finish_text(meta, md, pages, conv)
+                    return
+            except Exception as e:  # noqa: BLE001
+                errors.append(f'{meta["ext"]}: {e}')
         if moye_alive():
             try:
                 md, pages, conv = _via_moye(src, meta)
@@ -430,6 +442,73 @@ def _via_moye(src, meta):
 
 # ================= 本机兜底 =================
 
+_A_NS = '{http://schemas.openxmlformats.org/drawingml/2006/main}'
+_W_NS = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
+
+
+def _pptx_order(z, names):
+    """幻灯片的真实顺序在 presentation.xml 的 sldIdLst 里（文件名编号是创建顺序，挪过页就对不上）。读不出返回 []。"""
+    import xml.etree.ElementTree as ET
+    try:
+        rel_ns = '{http://schemas.openxmlformats.org/officeDocument/2006/relationships}'
+        pres = ET.fromstring(z.read('ppt/presentation.xml'))
+        rels = ET.fromstring(z.read('ppt/_rels/presentation.xml.rels'))
+        target = {r.get('Id'): r.get('Target') for r in rels}
+        out = []
+        for sid in pres.iter('{http://schemas.openxmlformats.org/presentationml/2006/main}sldId'):
+            t = target.get(sid.get(rel_ns + 'id')) or ''
+            n = 'ppt/' + t.lstrip('/').removeprefix('ppt/') if not t.startswith('/') else t.lstrip('/')
+            if n in names:
+                out.append(n)
+        return out
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _office_text(src, ext):
+    """PPTX / DOCX 本身是 zip 里的 XML：不装任何库、不转 PDF，直接读字。
+    PPTX 一页幻灯片算一页（加上演讲者备注）；DOCX 按段落，标题样式转成 Markdown 标题。→ (md, pages, 转换器名)"""
+    import zipfile
+    import xml.etree.ElementTree as ET
+    with zipfile.ZipFile(src) as z:
+        names = z.namelist()
+        if ext == 'pptx':
+            def num(n):
+                m = re.search(r'(\d+)\.xml$', n)
+                return int(m.group(1)) if m else 0
+            slides = _pptx_order(z, names) or sorted((n for n in names if re.fullmatch(r'ppt/slides/slide\d+\.xml', n)), key=num)
+            pages = []
+            for i, n in enumerate(slides, 1):
+                root = ET.fromstring(z.read(n))
+                paras = []
+                for para in root.iter(_A_NS + 'p'):
+                    t = ''.join(x.text or '' for x in para.iter(_A_NS + 't')).strip()
+                    if t:
+                        paras.append(t)
+                note = f'ppt/notesSlides/notesSlide{num(n)}.xml'
+                if note in names:
+                    nroot = ET.fromstring(z.read(note))
+                    extra = [''.join(x.text or '' for x in p.iter(_A_NS + 't')).strip() for p in nroot.iter(_A_NS + 'p')]
+                    extra = [x for x in extra if x and not x.isdigit()]       # 备注里常有个页码
+                    if extra:
+                        paras.append('Notes: ' + ' '.join(extra))
+                text = _tidy('\n\n'.join(paras))
+                if text:
+                    pages.append({'page': i, 'text': text})
+            md = '\n\n'.join(f"<!-- page {p['page']} -->\n{p['text']}" for p in pages)
+            return md, pages or None, 'pptx-text'
+        root = ET.fromstring(z.read('word/document.xml'))
+        out = []
+        for para in root.iter(_W_NS + 'p'):
+            t = ''.join(x.text or '' for x in para.iter(_W_NS + 't')).strip()
+            if not t:
+                continue
+            style = para.find(f'{_W_NS}pPr/{_W_NS}pStyle')
+            lvl = re.search(r'(?:Heading|标题)\s*(\d)', (style.get(_W_NS + 'val') or '') if style is not None else '')
+            out.append(('#' * min(3, int(lvl.group(1))) + ' ' if lvl else '') + t)
+        return _tidy('\n\n'.join(out)), None, 'docx-text'
+
+
 def _via_local(src, ext):
     if ext == 'pdf' and shutil.which('pdftotext'):
         out = subprocess.run(['pdftotext', '-layout', '-enc', 'UTF-8', src, '-'], capture_output=True,
@@ -588,3 +667,68 @@ def transcript_passages(task_id):
 
 def list_docs(ids):
     return [m for m in (doc_meta(i) for i in ids) if m]
+
+
+# ================= 来源概述（阅读器顶上那块：这份文档讲什么、有哪些主题）=================
+
+GUIDE_PROMPT = """Below is a document (or, for a long one, its table of contents plus excerpts from across it). Write a short guide to it for someone deciding what to read.
+Write everything in {lang}, even if the document is in another language. Keep names and technical terms as they are when there is no common translation.
+Return JSON only: {{"summary": "3-5 plain sentences: what this document is, what it covers, and what it is useful for", "topics": ["5-8 key topics it covers, each 2-6 words"]}}
+
+Title: {title}
+
+{text}"""
+
+GUIDE_SAMPLE_CHARS = 60000
+_guide_lock = threading.Lock()
+
+
+def _guide_sample(md, limit=GUIDE_SAMPLE_CHARS):
+    """长文档不整本送：目录（# 标题行）+ 开头 + 均匀抽几段。整本教材（130 万字）也只送约 6 万字。"""
+    if len(md) <= limit:
+        return md
+    heads = '\n'.join(ln for ln in md.splitlines() if re.match(r'#{1,3}\s', ln))[:limit // 5]
+    start = md[:limit // 4]
+    rest = limit - len(heads) - len(start)
+    n, size = 8, max(500, rest // 8)
+    step = (len(md) - len(start)) // n
+    picks = [md[len(start) + i * step: len(start) + i * step + size] for i in range(n)]
+    return ('Table of contents:\n' + heads + '\n\nBeginning:\n' + start + '\n\nExcerpts:\n'
+            + '\n[…]\n'.join(picks))
+
+
+def doc_guide(doc_id, lang):
+    """写过的概述 {summary, topics}；没写过 → None。按语言分开存（界面换语言不用重写另一种）。"""
+    g = _read_json(os.path.join(doc_dir(doc_id), 'guide.json'), {}) or {}
+    return g.get(lang)
+
+
+def write_doc_guide(doc_id, lang):
+    """便宜模型写一份概述，存进 guide.json；同一份文档同一种语言只写一次。"""
+    with _guide_lock:
+        have = doc_guide(doc_id, lang)
+        if have:
+            return have
+        meta = doc_meta(doc_id) or {}
+        md = doc_markdown(doc_id).strip()
+        if not md:
+            raise RuntimeError('The document has no text')
+        import summarize
+        raw = summarize._call_gemini(GUIDE_PROMPT.format(
+            lang='Chinese (简体中文)' if lang == 'zh' else 'English', title=meta.get('title') or '',
+            text=_guide_sample(md)))
+        m = re.search(r'\{.*\}', raw or '', re.S)
+        try:
+            obj = json.loads(m.group(0)) if m else {}
+        except ValueError:
+            obj = {}
+        summary = str(obj.get('summary') or '').strip()
+        if not summary:
+            raise RuntimeError('The model returned nothing usable')
+        g = {'summary': summary[:1500],
+             'topics': [str(t).strip()[:60] for t in obj.get('topics') or [] if str(t).strip()][:8]}
+        path = os.path.join(doc_dir(doc_id), 'guide.json')
+        all_g = _read_json(path, {}) or {}
+        all_g[lang] = g
+        _write_json(path, all_g)
+        return g

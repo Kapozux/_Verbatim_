@@ -120,6 +120,7 @@ async function srcLoad() {
     srcRender();
     srcSyncCount();
     if (typeof vcLoad === 'function' && vcState.id !== id) vcLoad();        // 说话人那一行（换了项目才重新拉）
+    if (typeof ntLoad === 'function') ntLoad();                              // 读书笔记那一行
     // 来源数跟档案头对不上（刚加 / 刚删）：刷新档案头——「问」能不能用也是按它算的
     const ch = cx.chain || {};
     const n = srcAllIds(d).length;
@@ -149,6 +150,7 @@ const SRC_PATHS = {
     audio: '<path d="M4 14v-2a8 8 0 0 1 16 0v2"/><rect x="3" y="14" width="4" height="6" rx="1.5"/><rect x="17" y="14" width="4" height="6" rx="1.5"/>',
     video: '<rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M10.5 9.3v5.4l4.5-2.7z"/>',
     channel: '<rect x="3" y="6" width="18" height="13" rx="2.5"/><path d="M8 3l4 3 4-3"/>',
+    folder: '<path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v7.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/>',
 };
 function srcSvg(kind) {
     return `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7"
@@ -170,7 +172,8 @@ function srcRow(kind, sid, icon, title, sub, opts = {}) {
         <span class="sr-ic">${icon}</span>
         <button type="button" class="sr-title" ${can ? '' : 'disabled'} title="${escapeHtml(title)}">${escapeHtml(title)}</button>
         ${sub ? `<span class="sr-sub ${opts.subCls || ''}">${escapeHtml(sub)}</span>` : ''}
-        ${opts.menu && !window.VERBATIM_DEMO ? `<details class="sr-menu"><summary aria-label="⋯">⋯</summary><div>${opts.menu}</div></details>` : ''}
+        ${opts.menu && !window.VERBATIM_DEMO ? `<details class="sr-menu"><summary aria-label="⋯">⋯</summary><div>
+            <button type="button" data-act="folder">${T('src.moveToFolder')}</button>${opts.menu}</div></details>` : ''}
         <input type="checkbox" class="sr-check" ${can ? '' : 'disabled'} ${can && srcIsOn(sid) ? 'checked' : ''}
             aria-label="${escapeHtml(title)}">
     </div>`;
@@ -235,11 +238,13 @@ function srcRender() {
         ${d.indexing ? `<p class="src-note cx-thinking">${T('src.indexing')}</p>` : ''}
         ${rows.length ? `<label class="sr-all"><span>${T('src.selectAll')}</span>
             <input type="checkbox" id="sr-all" ${allOn ? 'checked' : ''} ${all.length ? '' : 'disabled'}></label>
-            <div class="sr-list">${rows.join('')}${typeof vcSrcRowHtml === 'function' ? vcSrcRowHtml() : ''}</div>`
+            <div class="sr-list">${rows.join('')}${typeof vcSrcRowHtml === 'function' ? vcSrcRowHtml() : ''}${typeof ntSrcRowHtml === 'function' ? ntSrcRowHtml() : ''}</div>`
             : `<div class="sr-empty"><div class="sr-empty-ic">${srcSvg('doc')}</div><b>${T('nb.srcEmptyT')}</b>
                 <span>${T('nb.srcEmptyD')}</span></div>`}`;
+    srcApplyFolders(box, ro);
     srcWire(box);
     if (typeof vcWireSrc === 'function') vcWireSrc(box);
+    if (typeof ntWireSrc === 'function') ntWireSrc(box);
     srcRenderRail(d, ro);
     srcRenderCta();
 }
@@ -301,10 +306,11 @@ function srcSetSel(ids, on) {
 function srcWire(box) {
     const allBox = box.querySelector('#sr-all');
     if (allBox) allBox.addEventListener('change', () => srcSetSel(srcAllIds(srcState.data), allBox.checked));
-    box.querySelectorAll('.sr-row:not(.vc-src)').forEach(row => {          // 「说话人」那一行自己接线（voices.js）
+    box.querySelectorAll('.sr-row:not(.vc-src):not(.nt-src)').forEach(row => {  // 「说话人」「读书笔记」那两行自己接线（voices.js / notes.js）
         const kind = row.dataset.kind;
         const sid = row.dataset.sid;
         const chk = row.querySelector('.sr-check');
+        if (kind === 'folder') { srcWireFolder(row); return; }
         if (kind === 'channel') {
             const key = row.dataset.ckey;
             const d = srcState.data;
@@ -331,6 +337,133 @@ function srcWire(box) {
     });
 }
 
+// ---- 来源文件夹：只是把左栏理整齐（提问范围照旧按勾选算）。存在 sources.json 的 folders 里 ----
+function srcFolders() { return (srcState.data && srcState.data.folders) || []; }
+
+// 已经画好的行按文件夹收进去：文件夹排在最前，默认收起；文件夹里的行缩进
+function srcApplyFolders(box, ro) {
+    const list = box.querySelector('.sr-list');
+    const folders = srcFolders();
+    if (!list || !folders.length) return;
+    const ready = new Set(srcAllIds(srcState.data));
+    const bySid = new Map([...list.querySelectorAll(':scope > .sr-row[data-sid]:not(.sr-child)')].map(el => [el.dataset.sid, el]));
+    const frag = document.createDocumentFragment();
+    folders.forEach(f => {
+        const items = (f.items || []).filter(sid => bySid.has(sid));
+        const ids = items.filter(sid => ready.has(sid));
+        const open = !!srcState.open['f:' + f.id];
+        const on = ids.length && ids.every(srcIsOn);
+        const head = document.createElement('div');
+        head.className = 'sr-row sr-group sr-folder';
+        head.dataset.kind = 'folder';
+        head.dataset.fid = f.id;
+        head.innerHTML = `<span class="sr-ic"><span class="sr-svg" data-k="folder">${srcSvg('folder')}</span></span>
+            <button type="button" class="sr-title sr-fold" aria-expanded="${open}" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</button>
+            <span class="sr-sub">${items.length}</span>
+            ${ro ? '' : `<details class="sr-menu"><summary aria-label="⋯">⋯</summary><div>
+                <button type="button" data-act="rename-folder">${T('src.folderRename')}</button>
+                <button type="button" data-act="delete-folder">${T('src.folderDelete')}</button></div></details>`}
+            <button type="button" class="sr-caret" aria-label="toggle">${open ? '▾' : '▸'}</button>
+            <input type="checkbox" class="sr-check" ${ids.length ? '' : 'disabled'} ${on ? 'checked' : ''} aria-label="${escapeHtml(f.name)}">`;
+        frag.appendChild(head);
+        items.forEach(sid => {
+            const row = bySid.get(sid);
+            const err = row.nextElementSibling && row.nextElementSibling.classList.contains('sr-err') ? row.nextElementSibling : null;
+            if (open) {
+                row.classList.add('sr-child');
+                frag.appendChild(row);
+                if (err) frag.appendChild(err);
+            } else {
+                row.remove();
+                if (err) err.remove();
+            }
+        });
+    });
+    list.prepend(frag);
+}
+
+function srcWireFolder(row) {
+    const fid = row.dataset.fid;
+    const f = srcFolders().find(x => x.id === fid);
+    if (!f) return;
+    const fold = () => { srcState.open['f:' + fid] = !srcState.open['f:' + fid]; srcRender(); };
+    row.querySelector('.sr-fold').addEventListener('click', fold);
+    row.querySelector('.sr-caret').addEventListener('click', fold);
+    const ready = new Set(srcAllIds(srcState.data));
+    const chk = row.querySelector('.sr-check');
+    chk.addEventListener('change', () => srcSetSel((f.items || []).filter(sid => ready.has(sid)), chk.checked));
+    const close = () => { const m = row.querySelector('.sr-menu'); if (m) m.open = false; };
+    const rn = row.querySelector('[data-act="rename-folder"]');
+    if (rn) rn.addEventListener('click', () => { close(); setTimeout(() => srcFolderRename(row, fid), 0); });
+    const del = row.querySelector('[data-act="delete-folder"]');
+    if (del) del.addEventListener('click', () => {
+        close();
+        if (!confirm(T('src.folderDeleteConfirm', { t: f.name }))) return;
+        srcFoldersSave(srcFolders().filter(x => x.id !== fid));
+    });
+}
+
+async function srcFoldersSave(folders) {
+    const r = await srcPost(`/api/chain/${srcState.id}/sources/folders`, { method: 'PUT',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ folders }) });
+    if (!r) return null;
+    srcState.data.folders = r.folders;
+    srcRender();
+    return r.folders;
+}
+
+// 移到哪个文件夹：现有的一个个列出来（当前所在的打勾），底下一行新建
+function srcFolderPick(anchor, sid) {
+    const folders = srcFolders();
+    const cur = folders.find(f => (f.items || []).includes(sid));
+    const move = async (fid, newName) => {
+        let next = folders.map(f => ({ ...f, items: (f.items || []).filter(x => x !== sid) }));
+        if (newName) {
+            next.push({ id: Math.random().toString(36).slice(2, 10), name: newName, items: [sid] });
+        } else if (fid) {
+            next = next.map(f => (f.id === fid ? { ...f, items: [...f.items, sid] } : f));
+        }
+        pjPopClose();
+        const saved = await srcFoldersSave(next);
+        const to = saved && saved.find(f => f.items.includes(sid));
+        if (to) { srcState.open['f:' + to.id] = true; srcRender(); }
+    };
+    const pop = pjPop(anchor, `
+        <div class="pj-col-h">${T('src.moveToFolder')}</div>
+        <div class="pj-col-list">${folders.map(f => `<button type="button" class="pj-mi" data-fid="${escapeHtml(f.id)}">
+            ${srcSvg('folder')}<span>${escapeHtml(f.name)}</span>${cur && cur.id === f.id ? '<span class="sr-fd-on">✓</span>' : ''}</button>`).join('')}
+            ${cur ? `<button type="button" class="pj-mi" data-out="1">${T('src.folderOut')}</button>` : ''}</div>
+        <form class="pj-col-new"><input class="search-input" maxlength="40" placeholder="${escapeHtml(T('src.folderNewPh'))}">
+            <button type="submit" class="btn-secondary">${T('src.folderNew')}</button></form>`, 'pj-col-pop');
+    pop.addEventListener('click', e => e.stopPropagation());
+    pop.querySelectorAll('[data-fid]').forEach(b => b.addEventListener('click', () => move(b.dataset.fid)));
+    const out = pop.querySelector('[data-out]');
+    if (out) out.addEventListener('click', () => move(null));
+    pop.querySelector('form').addEventListener('submit', e => {
+        e.preventDefault();
+        const name = e.target.querySelector('input').value.trim();
+        if (name) move(null, name);
+    });
+    if (!folders.length) pop.querySelector('input').focus();
+}
+
+function srcFolderRename(anchor, fid) {
+    const f = srcFolders().find(x => x.id === fid);
+    if (!f) return;
+    const pop = pjPop(anchor, `<form class="pj-col-new sr-fd-rename"><input class="search-input" maxlength="40" value="${escapeHtml(f.name)}">
+        <button type="submit" class="btn-secondary">${T('src.folderSave')}</button></form>`, 'pj-col-pop');
+    pop.addEventListener('click', e => e.stopPropagation());
+    const input = pop.querySelector('input');
+    input.focus();
+    input.select();
+    pop.querySelector('form').addEventListener('submit', e => {
+        e.preventDefault();
+        const name = input.value.trim();
+        pjPopClose();
+        if (name && name !== f.name) srcFoldersSave(srcFolders().map(x => (x.id === fid ? { ...x, name } : x)));
+    });
+}
+
 async function srcPost(url, opts) {
     try {
         const r = await (await fetch(url, opts)).json();
@@ -351,6 +484,13 @@ async function srcAction(kind, sid, act) {
         const m = document.querySelector(`.sr-row[data-sid="${CSS.escape(sid)}"] .sr-menu`);
         if (m) m.open = false;
         repoReadPicker(sid);
+        return;
+    }
+    if (act === 'folder') {                  // 移到文件夹：锚在这一行上的小弹层（等这次点击冒泡完再开，不然当场被关掉）
+        const row = document.querySelector(`#cx-sources .sr-row[data-sid="${CSS.escape(sid)}"]`);
+        const m = row && row.querySelector('.sr-menu');
+        if (m) m.open = false;
+        if (row) setTimeout(() => srcFolderPick(row, sid), 0);
         return;
     }
     if (act === 'retry') {
@@ -544,8 +684,20 @@ function nbShowPane(p) {
     document.querySelectorAll('.nb-switch [data-nb]').forEach(b => b.classList.toggle('on', b.dataset.nb === p));
 }
 
+// 打开阅读器前在哪：关掉时回到那里（窄屏回到原来那一栏，来源清单回到原来滚到的位置）
+let readerFrom = null;
+
 function readerOpen(title, sub, origHref) {
     const box = document.getElementById('src-reader');
+    const ex = document.getElementById('chain-explore');
+    const pane = document.querySelector('#chain-explore .nb-src');
+    if (box.classList.contains('hidden')) {
+        readerFrom = { pane: ex && ex.dataset.nbActive, top: pane ? pane.scrollTop : 0, winY: window.scrollY };
+    }
+    ['src-reader-guide', 'src-reader-notes'].forEach(gid => {          // 换一份原文：上一份的概述、笔记先清掉
+        const g = document.getElementById(gid);
+        if (g) { g.innerHTML = ''; g.classList.add('hidden'); g.dataset.key = ''; }
+    });
     box.querySelector('#src-reader-name').textContent = title || '';
     box.querySelector('#src-reader-sub').textContent = sub ? ' · ' + sub : '';
     const orig = box.querySelector('#src-reader-orig');
@@ -556,7 +708,38 @@ function readerOpen(title, sub, origHref) {
     document.getElementById('cx-sources').classList.add('hidden');
     document.querySelector('#chain-explore .nb-src').classList.add('reading');
     if (window.innerWidth < 1080) nbShowPane('sources');
+    if (pane) pane.scrollTop = 0;                  // 换一份原文：从头（出处那一段由 readerFocus 滚过去）
     return box.querySelector('#src-reader-body');
+}
+
+// 来源概述（像 NotebookLM 的 Source guide）：这份讲什么 + 几个主题。转写用现成的摘要；
+// 文档第一次打开时让便宜模型写一份（约 $0.001–0.005），存下来以后直接读
+async function readerGuide(kind, id) {
+    const box = document.getElementById('src-reader-guide');
+    if (!box) return;
+    const lang = currentLang === 'zh' ? 'zh' : 'en';
+    const key = `${kind}:${id}:${lang}`;
+    box.dataset.key = key;
+    const show = g => {
+        if (box.dataset.key !== key) return;
+        if (!g) { box.classList.add('hidden'); return; }
+        box.innerHTML = `<details open><summary>${T('src.guide')}</summary>
+            <p>${escapeHtml(g.summary)}</p>
+            ${(g.topics || []).length ? `<div class="src-guide-topics">${g.topics.map(x => `<span>${escapeHtml(x)}</span>`).join('')}</div>` : ''}
+        </details>`;
+        box.classList.remove('hidden');
+    };
+    let g = null;
+    try { g = (await (await fetch(`/api/sources/guide?${kind}=${encodeURIComponent(id)}&lang=${lang}`)).json()).guide; } catch { return; }
+    if (g || kind !== 'doc' || window.VERBATIM_DEMO) { show(g); return; }
+    if (box.dataset.key !== key) return;
+    box.innerHTML = `<p class="cx-muted cx-thinking">${T('src.guideWriting')}</p>`;
+    box.classList.remove('hidden');
+    try {
+        const r = await (await fetch('/api/sources/guide', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ doc: id, lang }) })).json();
+        show(r.guide || null);
+    } catch { show(null); }
 }
 
 function readerFocus(body, sel) {
@@ -594,6 +777,8 @@ async function openSourceReader(docId, passageIndex) {
         return `${pre}<div class="rd-par md-body" data-pi="${p.i}">${renderMarkdown(p.text)}</div>`;
     }).join('') || `<div class="md-body">${renderMarkdown(d.markdown || '')}</div>`;
     readerFocus(body, passageIndex != null ? `.rd-par[data-pi="${passageIndex}"]` : null);
+    readerGuide('doc', docId);
+    if (typeof readerNotes === 'function') readerNotes('doc', docId);
 }
 
 async function openTranscriptViewer(taskId, sec) {
@@ -612,6 +797,8 @@ async function openTranscriptViewer(taskId, sec) {
     body.querySelector('.rd-open').addEventListener('click', e => navigate(e.target.dataset.go));
     readerFocus(body, hit != null ? `.rd-seg[data-si="${hit}"]` : null);
     if (typeof vcDecorateTranscript === 'function') vcDecorateTranscript(body, taskId, segs);   // 每句是谁说的、▶ 听
+    readerGuide('task', taskId);
+    if (typeof readerNotes === 'function') readerNotes('task', taskId);
 }
 
 function closeSourceReader() {
@@ -621,11 +808,26 @@ function closeSourceReader() {
     document.getElementById('cx-sources').classList.remove('hidden');
     const pane = document.querySelector('#chain-explore .nb-src');
     if (pane) pane.classList.remove('reading');
+    const from = readerFrom;
+    readerFrom = null;
+    if (!from) return;
+    if (window.innerWidth < 1080 && from.pane && from.pane !== 'sources') nbShowPane(from.pane);
+    if (pane) pane.scrollTop = from.top || 0;
+    if (window.innerWidth < 1080) window.scrollTo(0, from.winY || 0);
 }
 
 (function wireReader() {
     const x = document.getElementById('src-reader-x');
     if (x) x.addEventListener('click', closeSourceReader);
+    // Esc 关原文（弹框、弹层、工作台里展开的结果先关它们自己的）
+    document.addEventListener('keydown', e => {
+        if (e.key !== 'Escape' || e.target.closest('input, textarea, [contenteditable="true"]')) return;
+        if (document.querySelector('.settings-overlay:not(.hidden)') || document.getElementById('pj-pop')) return;
+        const nbv = document.getElementById('nb-viewer');
+        if (nbv && !nbv.classList.contains('hidden')) return;
+        const box = document.getElementById('src-reader');
+        if (box && !box.classList.contains('hidden')) closeSourceReader();
+    });
     document.querySelectorAll('.nb-switch [data-nb]').forEach(b => b.addEventListener('click', () => nbShowPane(b.dataset.nb)));
     const back = document.getElementById('nb-back-chat');
     if (back) back.addEventListener('click', () => cxShowTab('ask'));

@@ -1860,8 +1860,21 @@ body.demo .creator-hide { display: none; }
 .sr-empty-ic { font-size: 26px; }
 
 /* 左栏里看原文：文档按段落（PDF 按页分隔）、转写按句；出处点进来的那一段高亮 */
+/* 返回键贴在栏顶：从出处跳到原文中间，不用往回滑就能关（上下各吃掉栏的 14px 内边距，盖住滚上来的字） */
 .src-reader-head { display: flex; justify-content: space-between; align-items: center; gap: 10px;
-  padding-bottom: 8px; border-bottom: 1px solid var(--line); margin-bottom: 10px; }
+  padding: 14px 0 8px; margin-top: -14px; border-bottom: 1px solid var(--line); margin-bottom: 10px;
+  position: sticky; top: -14px; z-index: 3; background: var(--card); }
+@media (max-width: 1079.98px) { .src-reader-head { top: 0; } .nb > .nb-src.reading { overflow: visible; overflow-x: clip; } }
+/* 原文里的宽表格、代码块在栏里横着滚，不把整页撑宽 */
+.src-reader-body table { display: block; max-width: 100%; overflow-x: auto; }
+.src-reader-body pre, .src-reader-body img { max-width: 100%; overflow-x: auto; }
+.src-guide { margin: 0 0 14px; padding: 10px 14px; border-radius: var(--r-md); background: var(--paper); border: 1px solid var(--line); }
+.src-guide summary { cursor: pointer; font-size: 13px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.src-guide p { margin: 8px 0 0; font-size: 15px; line-height: 1.65; color: var(--ink-soft); }
+.src-guide-topics { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.src-guide-topics span { font-size: 13px; padding: 3px 10px; border-radius: 999px; background: var(--card); border: 1px solid var(--line-2); color: var(--ink-soft); }
+.sr-fd-on { margin-left: auto; color: var(--coral-deep); }
+.sr-svg[data-k="folder"] { color: var(--ink-soft); }
 .src-reader-title { font-size: 17px; margin-bottom: 8px; overflow-wrap: anywhere; }
 .rd-page { font-size: 12.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--faint);
   margin: 18px 0 6px; padding-top: 10px; border-top: 1px dashed var(--line-2); }
@@ -1993,8 +2006,11 @@ body.demo .creator-hide { display: none; }
 
 /* 自测题 */
 .qz-score { display: flex; align-items: center; gap: 12px; font-size: 16px; margin-bottom: 10px; }
-.qz-list { padding-left: 1.4em; display: grid; gap: 18px; margin: 0; }
-.qz-q { font-size: 16.5px; }
+/* 题号自己画（浏览器自带的序号挂在列表左边的留白里，两位数「10.」会被栏边裁成「0.」） */
+.qz-list { list-style: none; padding: 0; display: grid; gap: 18px; margin: 0; counter-reset: qz; }
+.qz-q { font-size: 16.5px; counter-increment: qz; display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 8px; }
+.qz-q::before { content: counter(qz) "."; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.6; }
+.qz-q > * { grid-column: 2; }
 .qz-text p { margin: 0 0 8px; font-weight: 600; }
 .qz-opts { display: grid; gap: 6px; }
 .qz-opt { display: flex; gap: 10px; align-items: baseline; text-align: left; font: inherit; color: var(--ink); background: var(--paper);
@@ -2750,9 +2766,9 @@ body.demo .creator-hide { display: none; }
 .pod-pick .cx-modal-title { display: flex; align-items: center; gap: 8px; }
 .pod-f { display: grid; gap: 6px; }
 .pod-l { font-size: 13.5px; color: var(--muted); }
-.pod-f input[type=text] { font: inherit; font-size: 15px; color: var(--ink); background: var(--card); border: 1px solid var(--line-2);
+.pod-f input[type=text], .pod-f textarea { font: inherit; font-size: 15px; color: var(--ink); background: var(--card); border: 1px solid var(--line-2);
   border-radius: 12px; padding: 8px 12px; min-width: 0; }
-.pod-f input[type=text]:focus { outline: none; border-color: var(--coral); }
+.pod-f input[type=text]:focus, .pod-f textarea:focus { outline: none; border-color: var(--coral); }
 .pod-sides { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 8px; align-items: center; }
 .pod-lens { display: flex; flex-wrap: wrap; gap: 6px; }
 .pod-len { font: inherit; font-size: 14px; color: var(--ink); background: none; border: 1px solid var(--line-2); border-radius: 999px;
@@ -2870,3 +2886,25 @@ pre.cc-quote.repo-quote { font-family: var(--mono); font-size: 13px; line-height
 .sl-notes { margin-top: 6px; font-size: 14px; }
 .sl-notes summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 .sl-notes .md-body { margin-top: 6px; color: var(--ink-soft); }
+
+/* 笔记本三栏的滚动条：细、没有轨道，平时看不见，鼠标进了那一栏才淡淡显出来（照 Google / NotebookLM） */
+#chain-detail-view .nb-pane, #chain-detail-view .cx-scroll, #chain-detail-view .nbv-body,
+#chain-detail-view .nb-main > [data-cx-panel] { scrollbar-width: thin; scrollbar-color: transparent transparent; }
+#chain-detail-view .nb-pane:hover, #chain-detail-view .cx-scroll:hover, #chain-detail-view .nbv-body:hover,
+#chain-detail-view .nb-main > [data-cx-panel]:hover { scrollbar-color: var(--line-2) transparent; }
+/* 弹框底部「来自 1 / 1021 个来源」：只勾了一部分时用强调色，免得以为用的是全部 */
+.st-subset { color: var(--coral-deep); font-weight: 600; }
+.st-fit { font-size: 13.5px; line-height: 1.5; margin: -4px 0 10px; }
+.pod-f textarea, textarea.st-focus { resize: vertical; min-height: 54px; line-height: 1.5; font: inherit; font-size: 15px; }
+.st-field textarea.st-focus { height: auto; min-height: 58px; padding-top: 8px; padding-bottom: 8px; white-space: pre-wrap; }
+/* 读书笔记：左栏最后一行（「读剩下的 N 份（约 $x）」在行尾）、阅读器里的笔记 */
+.sr-row.nt-src { grid-template-columns: 22px minmax(0, 1fr) auto; }
+.nt-src .nt-t { cursor: default; }
+.nt-src .nt-go-wrap { grid-column: 2 / -1; }
+.nt-go { font-size: 13.5px; }
+.nt-src .sr-svg { color: var(--ink-soft); }
+.nt-reader .nt-unit { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--line-2); }
+.nt-reader .nt-unit:first-of-type { border-top: none; }
+.nt-where { font-size: 12.5px; font-weight: 700; letter-spacing: .04em; color: var(--faint); }
+.nt-reader ul { margin: 6px 0 0; padding-left: 18px; font-size: 14px; line-height: 1.6; color: var(--ink-soft); }
+.nt-skip { font-size: 13px; color: var(--muted); }

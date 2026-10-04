@@ -383,6 +383,14 @@ def _call_gemini_stream(prompt, model=None, purpose='analysis'):
     raise RuntimeError(f'Gemini 调用失败（已试模型 {ladder}）: {last_err}')
 
 
+def _provider_of(base_url):
+    """记账用的服务商名：按端点域名认。"""
+    for host, name in (('openrouter.ai', 'openrouter'), ('deepseek.com', 'deepseek'), ('moonshot.', 'moonshot')):
+        if host in (base_url or ''):
+            return name
+    return 'aliyun'
+
+
 def _call_openai_compat(prompt, model, base_url, api_key, extra_payload=None,
                         label='模型', purpose='analysis'):
     """OpenAI 兼容端点（阿里云百炼 / OpenRouter）。带重试，返回文本或抛异常。
@@ -392,6 +400,7 @@ def _call_openai_compat(prompt, model, base_url, api_key, extra_payload=None,
     headers = {'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'}
     payload = {'model': model, 'messages': [{'role': 'user', 'content': prompt}]}
     is_openrouter = 'openrouter.ai' in base_url
+    provider = _provider_of(base_url)
     if is_openrouter:
         payload['usage'] = {'include': True}
     if extra_payload:
@@ -402,8 +411,7 @@ def _call_openai_compat(prompt, model, base_url, api_key, extra_payload=None,
             r = requests.post(url, headers=headers, json=payload, timeout=600)
             if r.status_code == 200:
                 body = r.json()
-                usage.record_openai(body, 'openrouter' if is_openrouter else 'aliyun',
-                                    model, purpose)
+                usage.record_openai(body, provider, model, purpose)
                 txt = ((body.get('choices') or [{}])[0]
                        .get('message', {}).get('content') or '').strip()
                 if txt:
@@ -429,6 +437,16 @@ def _llm(prompt, provider, model, grounded=False, purpose='analysis'):
             raise RuntimeError('DASHSCOPE_API_KEY 未设置（阿里云分析需要）')
         return _call_openai_compat(prompt, model, ALIYUN_COMPAT_BASE, key,
                                    label='阿里云', purpose=purpose)
+    if provider == 'deepseek':
+        key = config.deepseek_key()
+        if not key:
+            raise RuntimeError('DEEPSEEK_API_KEY 未设置 — 在 Settings → DeepSeek 里填 key')
+        return _call_openai_compat(prompt, model, config.DEEPSEEK_COMPAT_BASE, key, label='DeepSeek', purpose=purpose)
+    if provider == 'moonshot':
+        key = config.moonshot_key()
+        if not key:
+            raise RuntimeError('MOONSHOT_API_KEY 未设置 — 在 Settings → Kimi 里填 key')
+        return _call_openai_compat(prompt, model, config.MOONSHOT_COMPAT_BASE, key, label='Kimi', purpose=purpose)
     if provider == 'openrouter':
         key = os.environ.get('OPENROUTER_API_KEY', '')
         if not key:

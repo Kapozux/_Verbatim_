@@ -42,8 +42,9 @@ function stTitle(o) {
     }
     if (o.kind === 'compare') return T('st.k.compare') + ' · ' + String(o.question || '').slice(0, 40);
     if (o.kind === 'visual') return T('st.k.visual') + ' · ' + T('vs.nEps', { n: (o.tasks || []).length });
-    if (o.kind === 'podcast') return podcastTitle(o);
-    if (o.kind === 'slides') return slidesTitle(o);
+    // podcast.js / slides.js 在 study.js 之后加载；列表可能先画出来，那时还没定义
+    if (o.kind === 'podcast') return typeof podcastTitle === 'function' ? podcastTitle(o) : T('st.k.podcast');
+    if (o.kind === 'slides') return typeof slidesTitle === 'function' ? slidesTitle(o) : T('st.k.slides');
     if (o.kind === 'report') {
         const name = o.format === 'custom' ? String(o.prompt || T('st.f.custom')).slice(0, 40) : T('st.f.' + (o.format || 'briefing'));
         return name + (o.focus ? ' · ' + o.focus : '');
@@ -235,8 +236,36 @@ function stOpenDialog(kind) {
             `<option value="${escapeHtml(x.id)}"${guess && guess.id === x.id ? ' selected' : ''}>${escapeHtml(x.title)}</option>`).join('');
     }
     ov.querySelector('#st-from').textContent = T(kind === 'coverage' ? 'st.fromList' : 'st.from', { s: srcCountText() });
+    ov.querySelector('#st-from').classList.toggle('st-subset', !!srcScopeBody());     // 只勾了一部分来源：标出来，别以为用的是全部
     ov.classList.remove('hidden');
+    ov.querySelectorAll('.st-fit').forEach(x => x.remove());
+    if (kind !== 'coverage') stFitHint(ov, '#st-focus');
     setTimeout(() => ov.querySelector(kind === 'coverage' ? '#st-outline' : '#st-focus').focus(), 50);
+}
+
+// 弹框打开时问后端：勾选的来源一次放得下吗？放不下就在「重点」下面说一句，并把默认要求填进去（看得见、能改）。
+// 用户已经写了重点就不覆盖。podcast.js / slides.js 也用它。
+async function stFitHint(ov, inputSel) {
+    const input = ov.querySelector(inputSel);
+    if (!input) return;
+    const label = input.closest('label') || input.parentElement;
+    ov.querySelectorAll('.st-fit').forEach(x => x.remove());
+    const scope = srcScopeBody();
+    let r;
+    try {
+        r = await (await fetch(`/api/chain/${cx.id}/studio/fit` + (scope ? `?scope=${encodeURIComponent(JSON.stringify(scope))}` : ''))).json();
+    } catch { return; }
+    if (!r || r.error || r.fits || ov.classList.contains('hidden')) return;
+    const def = (r.default || {})[currentLang === 'zh' ? 'zh' : 'en'] || '';
+    if (!input.value.trim() && def) {
+        input.value = def;
+        input.title = def;
+    }
+    const p = document.createElement('p');
+    p.className = 'st-fit cx-muted';
+    p.textContent = T('st.tooBig', { n: r.sources, p: r.passages })
+        + (r.notes_missing ? ' ' + T('st.notesMissing', { n: r.notes_missing }) : r.notes_read ? ' ' + T('st.notesUsed') : '');
+    label.after(p);
 }
 
 function stRenderFormats() {
@@ -320,7 +349,11 @@ function stCoverage(o) {
     if (o.kind === 'visual') return o.cost_usd ? fmtUsd(o.cost_usd) : '';
     if (!c) return '';
     const bits = [T('st.covSources', { n: c.sources })];
-    if (c.thinned) bits.push(T(o.focus ? 'st.covFocus' : 'st.covThinned', { n: c.passages_used, m: c.passages_total }));
+    if (c.thinned && c.plan === 'notes' && (c.themes || []).length) {       // 按读书笔记定的计划
+        bits.push(T('st.covPlan', { n: c.passages_used, m: c.passages_total, t: c.themes.join('、') }));
+    } else if (c.thinned && (c.themes || []).length) {          // 材料太多、没写重点：先挑了几个主题
+        bits.push(T('st.covThemes', { n: c.passages_used, m: c.passages_total, t: c.themes.join('、') }));
+    } else if (c.thinned) bits.push(T(o.focus ? 'st.covFocus' : 'st.covThinned', { n: c.passages_used, m: c.passages_total }));
     if (o.cost_usd) bits.push(fmtUsd(o.cost_usd));
     return bits.join(' · ');
 }

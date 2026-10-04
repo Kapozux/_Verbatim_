@@ -67,6 +67,11 @@ _SETTING_ENV = {
     'gemini_base_url': 'GEMINI_BASE_URL',
     'dashscope_key': 'DASHSCOPE_API_KEY',
     'openrouter_key': 'OPENROUTER_API_KEY',
+    'deepseek_key': 'DEEPSEEK_API_KEY',
+    'kimi_key': 'MOONSHOT_API_KEY',
+    'deepseek_model': 'DEEPSEEK_MODEL',
+    'deepseek_pro_model': 'DEEPSEEK_PRO_MODEL',
+    'kimi_model': 'KIMI_MODEL',
     # Models（非秘密，运行时读 env，保存即生效）
     'whisper_model': 'WHISPER_MODEL_SIZE',
     'gemini_transcribe_model': 'GEMINI_TRANSCRIBE_MODEL',
@@ -80,7 +85,9 @@ _SETTING_ENV = {
 
 # 非秘密、可清空（空 = 回默认）的设置字段
 _PLAIN_FIELDS = ('gemini_base_url', 'whisper_model', 'gemini_transcribe_model',
-                 'gemini_analysis_model', 'gemini_extract_model', 'keep_audio', 'backup_dir')
+                 'gemini_analysis_model', 'gemini_extract_model', 'keep_audio', 'backup_dir',
+                 'deepseek_model', 'deepseek_pro_model', 'kimi_model')
+_KEY_FIELDS = ('gemini_key', 'dashscope_key', 'openrouter_key', 'deepseek_key', 'kimi_key')
 
 
 def _keep_audio():
@@ -1194,7 +1201,7 @@ def _static_version():
     文件一变这串数字就变，浏览器才会当成新资源重新拉取。
     """
     try:
-        paths = [os.path.join(app.static_folder, name) for name in ('app.js', 'style.css', 'i18n.js', 'explore.js', 'tools.js', 'projects.js', 'study.js', 'voices.js', 'visual.js', 'podcast.js', 'repos.js', 'slides.js')]
+        paths = [os.path.join(app.static_folder, name) for name in ('app.js', 'style.css', 'i18n.js', 'explore.js', 'tools.js', 'projects.js', 'study.js', 'voices.js', 'visual.js', 'podcast.js', 'repos.js', 'slides.js', 'notes.js')]
         return str(int(max(os.path.getmtime(p) for p in paths if os.path.isfile(p))))
     except (ValueError, OSError):
         return '0'
@@ -4013,7 +4020,40 @@ def api_project_sources(chain_id):
         'videos': vids, 'recordings': _rec_rows(chain_id), 'docs': _doc_rows(chain_id), 'repos': _repo_rows(chain_id),
         'indexing': chain_id in _project_jobs, 'moye': sources.moye_alive(timeout=1),
         'has_cards': bool(have_cards), 'cards_missing': len(missing) if not state.get('url') else 0,
+        'folders': _reg(chain_id).get('folders') or [],
     }, ensure_ascii=False), mimetype='application/json')
+
+
+_FOLDER_ID = re.compile(r'[a-z0-9]{1,16}')
+
+
+@app.route('/api/chain/<chain_id>/sources/folders', methods=['PUT'])
+def api_project_folders(chain_id):
+    """左栏的来源文件夹，整份替换：{folders: [{id, name, items: [来源 id]}]}。只是整理左栏，
+    不影响提问范围、不动来源本身；一个来源只在一个文件夹里（后出现的那份不算）。"""
+    if not _project_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    raw = (request.get_json(silent=True) or {}).get('folders')
+    if not isinstance(raw, list) or len(raw) > 50:
+        return jsonify({'error': 'Bad folders'}), 400
+    seen, out = set(), []
+    for f in raw:
+        if not isinstance(f, dict):
+            continue
+        fid = str(f.get('id') or '')
+        if not _FOLDER_ID.fullmatch(fid) or fid in {x['id'] for x in out}:
+            fid = uuid.uuid4().hex[:8]
+        items = []
+        for sid in f.get('items') or []:
+            if isinstance(sid, str) and 0 < len(sid) <= 64 and sid not in seen:
+                seen.add(sid)
+                items.append(sid)
+        out.append({'id': fid, 'name': str(f.get('name') or '').strip()[:40] or 'Folder', 'items': items})
+    with _chain_write_lock:
+        reg = _reg(chain_id)
+        reg['folders'] = out
+        _reg_save(chain_id, reg)
+    return jsonify({'ok': True, 'folders': out})
 
 
 def _project_add_docs(cid, doc_ids):
@@ -4401,6 +4441,12 @@ def api_project_remove_source(chain_id, source_id):
                                 os.remove(f)
                     except Exception:  # noqa: BLE001
                         pass
+        if removed:                     # 文件夹里也拿掉（文件夹本身留着）
+            reg = _reg(chain_id)
+            if any(source_id in (f.get('items') or []) for f in reg.get('folders') or []):
+                for f in reg['folders']:
+                    f['items'] = [x for x in f.get('items') or [] if x != source_id]
+                _reg_save(chain_id, reg)
     if not removed:
         return jsonify({'error': 'Not in this notebook'}), 404
     return jsonify({'ok': True})
@@ -4540,6 +4586,184 @@ def api_doc_original(doc_id):
     return send_file(path, download_name=meta['filename'], as_attachment=False)
 
 
+# ---- 读书笔记（notes.py，ADR 0010）：每份来源读一次，工作台放不下全部原文时按笔记定计划 ----
+
+def _note_sources(cid, single_only=False):
+    """笔记本里能读笔记的来源 [(kind, id, 标题)]：转好的文档、代码库、转完的录音 / 期（含引用的博主的期）。
+    single_only：只要单独加进来的（文档、代码库、录音），不要频道 / 引用博主的期——自动读只读这些。"""
+    import sources
+    reg, state = _reg(cid), _read_chain(cid)
+    out, seen = [], set()
+
+    def add(kind, sid, title):
+        if sid and (kind, sid) not in seen:
+            seen.add((kind, sid))
+            out.append((kind, sid, title or ''))
+    for d in reg['docs']:
+        m = sources.doc_meta(d.get('doc_id'))
+        if m and m.get('status') == 'ready':
+            add('doc', m['id'], m.get('title'))
+    for r in reg['repos']:
+        add('repo', r.get('repo_id'), '')
+    vids = _rec_rows(cid)                          # 额外加的录音：转写文件在了才算转完
+    if not (single_only and state.get('url')):
+        vids += list(state.get('videos') or [])
+    if not single_only:
+        for ref in _ref_rows(cid, reg):
+            vids += ref['state'].get('videos') or []
+    for v in vids:
+        if v.get('task_id') and v.get('status') == 'done':
+            add('task', v['task_id'], v.get('title'))
+    return out
+
+
+_notes_est_cache = {}
+
+
+@app.route('/api/chain/<chain_id>/notes')
+def api_notes_status(chain_id):
+    """左栏「读书笔记」那一行：读了几份、在读几份、读不了的；?estimate=1 再给没读的那些的估价（转写多时要一两秒）。"""
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    import notes
+    items = []
+    for kind, sid, title in _note_sources(chain_id):
+        st = notes.status(kind, sid)
+        items.append({'kind': kind, 'id': sid, 'title': title, 'status': st.get('status'),
+                      'done': st.get('done'), 'total': st.get('total'), 'error': st.get('error'),
+                      'skipped': st.get('skipped') or []})
+    unread = [x for x in items if x['status'] in ('none', 'failed')]
+    out = {'total': len(items), 'read': sum(1 for x in items if x['status'] == 'done'),
+           'reading': sum(1 for x in items if x['status'] == 'reading'), 'unread': len(unread),
+           'items': items if request.args.get('items') else []}
+    if request.args.get('estimate') and unread:
+        sig = (chain_id, tuple(sorted(x['id'] for x in unread)))
+        if sig not in _notes_est_cache:
+            usd = 0.0
+            for x in unread:
+                try:
+                    usd += notes.estimate(x['kind'], x['id'])['usd']
+                except Exception:  # noqa: BLE001
+                    pass
+            _notes_est_cache[sig] = round(usd, 3)
+        out['estimate_usd'] = _notes_est_cache[sig]
+    return jsonify(out)
+
+
+@app.route('/api/sources/notes')
+def api_source_notes():
+    """一份来源的读书笔记（阅读器里看）：?kind=doc|task|repo&id=…；没读过 notes: null。只读。"""
+    import notes
+    kind, sid = request.args.get('kind') or '', request.args.get('id') or ''
+    if not notes.valid(kind, sid):
+        return jsonify({'error': 'Not found'}), 404
+    return jsonify({'notes': notes.load(kind, sid)})
+
+
+@app.route('/api/chain/<chain_id>/notes/read', methods=['POST'])
+def api_notes_read(chain_id):
+    """读还没读的来源（{ids?: [来源 id]} 只读这几份；不给 = 全部没读的）。后台读，花费记在 notes:<笔记本> 上。"""
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    import notes
+    want = set((request.get_json(silent=True) or {}).get('ids') or [])
+    todo = [(k, sid) for k, sid, _ in _note_sources(chain_id)
+            if (not want or sid in want) and notes.status(k, sid).get('status') in ('none', 'failed')]
+    with usage.scope(ref=f'notes:{chain_id[:8]}', chain=chain_id):
+        n = notes.start_read(todo)
+    return jsonify({'ok': True, 'started': n})
+
+
+def _notes_auto(cid):
+    """加完来源（_project_refresh 最后）：单份估价低于 notes.AUTO_USD 的自动读，一次最多花 $0.25；
+    贵的（整个频道、大代码库）等用户在左栏点。"""
+    import notes
+    budget, todo = 0.25, []
+    for kind, sid, _ in _note_sources(cid, single_only=True):
+        if notes.status(kind, sid).get('status') != 'none':
+            continue
+        try:
+            usd = notes.estimate(kind, sid)['usd']
+        except Exception:  # noqa: BLE001
+            continue
+        if usd <= notes.AUTO_USD and usd <= budget:
+            todo.append((kind, sid))
+            budget -= usd
+    if todo:
+        with usage.scope(ref=f'notes:{cid[:8]}', chain=cid):
+            notes.start_read(todo)
+
+
+@app.route('/api/chain/<chain_id>/studio/fit')
+def api_studio_fit(chain_id):
+    """工作台弹框打开时问：勾选的来源一次放得下吗？放不下就在「重点」里预先填默认要求（study.DEFAULT_LARGE）。
+    ?scope=<JSON>（跟生成时一样）。只读、不花钱。"""
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    import ask
+    import study
+    try:
+        scope = json.loads(request.args.get('scope') or 'null')
+    except ValueError:
+        scope = None
+    try:
+        corpus = ask.load(_chain_dir(chain_id), passages=True)
+    except Exception as e:  # noqa: BLE001
+        return jsonify({'error': str(e)[:200]}), 500
+    pool = ask.scope_pool(corpus, scope if isinstance(scope, dict) else None)
+    pool = corpus['cards'] if pool is None else pool
+    ok, size = study.fit(corpus, pool)
+    have, missing = ([], 0) if ok else study._notes_for(corpus, pool)
+    return jsonify({'fits': ok, 'tokens': size, 'budget': study.BUDGET_TOKENS, 'passages': len(pool),
+                    'sources': len({c['ep'] for c in pool}), 'default': study.DEFAULT_LARGE,
+                    'notes_read': len(have), 'notes_missing': missing})
+
+
+@app.route('/api/sources/guide')
+def api_source_guide():
+    """来源概述（来源栏阅读器顶上那块）：?doc=<id> | ?task=<id>，&lang=zh|en。只读现成的，不花钱：
+    转写用转写完就写好的摘要（summary.json），文档用写过的概述（没有就 guide: null，前端再 POST 去写）。"""
+    import sources
+    lang = 'zh' if request.args.get('lang') == 'zh' else 'en'
+    tid = request.args.get('task') or ''
+    if tid:
+        if not re.fullmatch(r'[0-9a-f]{32}', tid):
+            return jsonify({'error': 'Not found'}), 404
+        try:
+            with open(os.path.join(config.RESULTS_FOLDER, tid, 'summary.json'), 'r', encoding='utf-8') as f:
+                sm = json.load(f) or {}
+        except (OSError, ValueError):
+            sm = {}
+        if not sm.get('overview'):
+            return jsonify({'guide': None})
+        return jsonify({'guide': {'summary': sm['overview'],
+                                  'topics': [x.get('title') for x in sm.get('sections') or [] if x.get('title')][:8]}})
+    did = request.args.get('doc') or ''
+    if not sources.valid_doc_id(did) or not sources.doc_meta(did):
+        return jsonify({'error': 'Not found'}), 404
+    return jsonify({'guide': sources.doc_guide(did, lang)})
+
+
+@app.route('/api/sources/guide', methods=['POST'])
+def api_source_guide_write():
+    """{doc, lang}：给文档写概述（便宜模型，约 $0.001–0.005 一份；大文档只读目录和抽样段落），写过的直接返回。"""
+    import sources
+    body = request.get_json(silent=True) or {}
+    did = str(body.get('doc') or '')
+    lang = 'zh' if body.get('lang') == 'zh' else 'en'
+    meta = sources.doc_meta(did) if sources.valid_doc_id(did) else None
+    if not meta:
+        return jsonify({'error': 'Not found'}), 404
+    if meta.get('status') != 'ready':
+        return jsonify({'error': 'The document is not ready yet'}), 409
+    try:
+        with usage.scope(ref='guide:' + did):
+            g = sources.write_doc_guide(did, lang)
+    except Exception as e:  # noqa: BLE001
+        return jsonify({'error': str(e)[:200]}), 502
+    return jsonify({'guide': g})
+
+
 def _project_refresh(cid, force_build=False):
     """来源变了：后台等文档转完 → （开了抽卡的、没频道的项目）给新录音抽卡、更新综述 → 补向量。
     同一个项目不并发跑；跑的时候又有新来源进来，就标个 dirty，跑完再来一轮。"""
@@ -4568,6 +4792,8 @@ def _project_refresh(cid, force_build=False):
                         _build_collection(state, rewrite_overview=build)   # 已有的卡复用，只抽新的；综述每月最多自动重写一次
                 with usage.scope(ref=f'index:{cid[:8]}', chain=cid):
                     ask.embed_chain(_chain_dir(cid))
+                if not DEMO_MODE:
+                    _notes_auto(cid)                       # 新来源便宜的就顺手读成笔记（ADR 0010）
                 _voices_refresh(cid)                       # 录音变了：重新认说话人（没做过声纹的项目什么都不做）
                 with _project_jobs_lock:
                     if _project_jobs.get(cid) == 'dirty':
@@ -6641,6 +6867,9 @@ def api_settings_get():
         'dashscope': {'set': dset, 'hint': dhint},
         'openrouter': {'set': oset, 'hint': ohint},
     }
+    for name, env in (('deepseek', 'DEEPSEEK_API_KEY'), ('kimi', 'MOONSHOT_API_KEY')):
+        kset, khint = _mask_key(env)
+        out[name] = {'set': kset, 'hint': khint}
     # 非秘密字段直接回显供编辑（模型名空 = 用默认）
     for field in _PLAIN_FIELDS:
         out[field] = (os.environ.get(_SETTING_ENV[field]) or '').strip()
@@ -6653,7 +6882,7 @@ def api_settings_save():
     data = _load_settings()
 
     # key：只有传了非空值才更新（留空 = 保持不变，避免用户没重填就被清空）
-    for field in ('gemini_key', 'dashscope_key', 'openrouter_key'):
+    for field in _KEY_FIELDS:
         if field in body:
             v = (body.get(field) or '').strip()
             if v:
@@ -6757,7 +6986,39 @@ def api_settings_test():
         except Exception as e:
             return jsonify({'ok': False, 'reason': str(e)[:180]})
 
+    if engine in ('deepseek', 'kimi'):
+        return jsonify(_test_compat_key(engine, body))
+
     return jsonify({'ok': False, 'reason': 'Unknown engine.'}), 400
+
+
+def _test_compat_key(engine, body):
+    """DeepSeek / Kimi 官方 key：打一次 GET /models（不花钱），看 key 能不能用、填的模型名在不在里面。"""
+    if engine == 'deepseek':
+        key = (body.get('deepseek_key') or '').strip() or config.deepseek_key()
+        base, want = config.DEEPSEEK_COMPAT_BASE, [(body.get('deepseek_model') or '').strip() or config.deepseek_models()[0],
+                                                   (body.get('deepseek_pro_model') or '').strip() or config.deepseek_models()[1]]
+    else:
+        key = (body.get('kimi_key') or '').strip() or config.moonshot_key()
+        base, want = config.MOONSHOT_COMPAT_BASE, [(body.get('kimi_model') or '').strip() or config.kimi_model()]
+    if not key:
+        return {'ok': False, 'reason': 'No key entered or saved yet.'}
+    try:
+        import requests as _rq
+        r = _rq.get(base.rstrip('/') + '/models', headers={'Authorization': f'Bearer {key}'}, timeout=15)
+    except Exception as e:  # noqa: BLE001
+        return {'ok': False, 'reason': str(e)[:180]}
+    if r.status_code in (401, 403):
+        return {'ok': False, 'reason': 'API key looks invalid.'}
+    if r.status_code != 200:
+        return {'ok': False, 'reason': f'Error {r.status_code}: {r.text[:120]}'}
+    ids = [m.get('id') for m in (r.json() or {}).get('data') or [] if m.get('id')]
+    missing = [m for m in dict.fromkeys(want) if ids and m not in ids]
+    if missing:
+        return {'ok': False, 'models': ids,
+                'reason': f'Key works, but this key has no model named {", ".join(missing)}. '
+                          f'Available: {", ".join(ids[:12])}'}
+    return {'ok': True, 'models': ids, 'reason': 'Works — key accepted. Models: ' + ', '.join(dict.fromkeys(want))}
 
 
 # ========== 存储 / 音频压缩 ==========

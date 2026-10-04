@@ -3393,6 +3393,11 @@ const setGeminiKey = document.getElementById('set-gemini-key');
 const setGeminiBase = document.getElementById('set-gemini-base');
 const setDashKey = document.getElementById('set-dashscope-key');
 const setOpenrouterKey = document.getElementById('set-openrouter-key');
+// 自己的 DeepSeek / Kimi 官方 key + 模型名（空 = 默认）
+const SET_COMPAT = [
+    { key: 'deepseek', keyField: 'deepseek_key', models: [['set-deepseek-model', 'deepseek_model'], ['set-deepseek-pro-model', 'deepseek_pro_model']] },
+    { key: 'kimi', keyField: 'kimi_key', models: [['set-kimi-model', 'kimi_model']] },
+];
 const settingsMsg = document.getElementById('settings-msg');
 
 let activeSettingsPane = 'reflect';
@@ -3413,6 +3418,12 @@ async function openSettings(pane) {
             ? T('settings.savedKeyHint', { hint: s.dashscope.hint }) : T('settings.pasteKey');
         setOpenrouterKey.placeholder = (s.openrouter && s.openrouter.set)
             ? T('settings.savedKeyHint', { hint: s.openrouter.hint }) : T('settings.pasteKey');
+        SET_COMPAT.forEach(c => {
+            const k = document.getElementById(`set-${c.key}-key`);
+            k.value = '';
+            k.placeholder = (s[c.key] && s[c.key].set) ? T('settings.savedKeyHint', { hint: s[c.key].hint }) : T('settings.pasteKey');
+            c.models.forEach(([id, f]) => { document.getElementById(id).value = s[f] || ''; });
+        });
         // Models（空 = 默认）
         document.getElementById('set-whisper-model').value = s.whisper_model || '';
         document.getElementById('set-gemini-transcribe').value = s.gemini_transcribe_model || '';
@@ -3424,6 +3435,7 @@ async function openSettings(pane) {
     document.getElementById('test-gemini-res').textContent = '';
     document.getElementById('test-dashscope-res').textContent = '';
     document.getElementById('test-openrouter-res').textContent = '';
+    SET_COMPAT.forEach(c => { document.getElementById(`test-${c.key}-res`).textContent = ''; });
     settingsMsg.textContent = '';
 }
 function closeSettings() { settingsOverlay.classList.add('hidden'); }
@@ -3730,6 +3742,12 @@ document.getElementById('test-openrouter').addEventListener('click', () => {
     });
 });
 
+SET_COMPAT.forEach(c => document.getElementById(`test-${c.key}`).addEventListener('click', () => {
+    const body = { [c.keyField]: document.getElementById(`set-${c.key}-key`).value.trim() };
+    c.models.forEach(([id, f]) => { body[f] = document.getElementById(id).value.trim(); });
+    testEngine(c.key, document.getElementById(`test-${c.key}-res`), body);
+}));
+
 document.getElementById('settings-save').addEventListener('click', async () => {
     const body = {
         gemini_base_url: setGeminiBase.value.trim(),
@@ -3743,6 +3761,11 @@ document.getElementById('settings-save').addEventListener('click', async () => {
     if (setGeminiKey.value.trim()) body.gemini_key = setGeminiKey.value.trim();
     if (setDashKey.value.trim()) body.dashscope_key = setDashKey.value.trim();
     if (setOpenrouterKey.value.trim()) body.openrouter_key = setOpenrouterKey.value.trim();
+    SET_COMPAT.forEach(c => {
+        const k = document.getElementById(`set-${c.key}-key`).value.trim();
+        if (k) body[c.keyField] = k;
+        c.models.forEach(([id, f]) => { body[f] = document.getElementById(id).value.trim(); });
+    });
     settingsMsg.className = 'settings-msg';
     settingsMsg.textContent = T('settings.saving');
     try {

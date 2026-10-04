@@ -151,8 +151,8 @@ def ids_in_last_prompt():
 
 
 def titles_in_last_prompt():
-    # 提示词里的来源清单：「DOC1 = 考试提纲 (document)」「EP3 = …」，只列这次用到的来源
-    return set(re.findall(r'^(?:DOC|EP)\d+ = (.+?)(?: \(document\))?(?: \(\d{4}-\d{2}-\d{2}\))?$', calls['prompts'][-1], re.M))
+    # 提示词里的来源清单：「DOC1 = 考试提纲 (document)」「DOC2 = lecture (document, PDF)」「EP3 = …」，列勾选范围里的来源
+    return set(re.findall(r'^(?:DOC|EP)\d+ = (.+?)(?: \(document(?:, \w+)?\))?(?: \(\d{4}-\d{2}-\d{2}\))?$', calls['prompts'][-1], re.M))
 ask_stream(PID, 'outline?', scope={'type': 'docs'}); a = ids_in_last_prompt()
 ask_stream(PID, 'startups?', scope={'type': 'media'}); b = ids_in_last_prompt()
 doc1 = src['docs'][0]['doc_id']
