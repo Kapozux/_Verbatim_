@@ -6,6 +6,7 @@ Persists results (audio + transcript + summary) to disk for history playback.
 
 import hashlib
 import hmac
+from urllib.parse import urlsplit
 import json
 import os
 import queue
@@ -125,6 +126,44 @@ _task_progress = {}
 # 设置后：首次访问带 ?token=xxx 或 Authorization: Bearer xxx，之后走 cookie。
 
 _AUTH_COOKIE = 'getaudio_token'
+
+
+# ===== 跨站防护（不管设没设令牌都生效）=====
+# 浏览器的同源策略只拦「读结果」，不拦「发请求」：没设令牌时，用户打开的任何网页都能对 localhost:5001 发表单 /
+# fetch(no-cors) 的简单请求，/upload、/api/transcribe_urls、/api/chain 照样执行、花用户的 key（2026-10-06 查出）。
+# 改动类请求要求 Origin（没有就看 Sec-Fetch-Site）是 Verbatim 自己；只监听本机时 Host 必须是本机名，防 DNS 重绑定
+# （恶意域名解析到 127.0.0.1 后连结果都能读）。curl、脚本、MCP server 不带这些头，照常放行。
+# 反向代理改写了地址等特殊情况：VERBATIM_ALLOWED_ORIGINS=https://a.example,https://b.example
+_LOOPBACK_HOSTS = {'localhost', '127.0.0.1', '::1', '[::1]'}
+_UNSAFE_METHODS = {'POST', 'PUT', 'PATCH', 'DELETE'}
+
+
+def _host_only(hostport):
+    h = (hostport or '').strip().lower()
+    if h.startswith('['):                      # [::1]:5001
+        return h[:h.find(']') + 1] if ']' in h else h
+    return h.rsplit(':', 1)[0] if h.count(':') == 1 else h
+
+
+@app.before_request
+def _cross_site_guard():
+    bind = (os.environ.get('HOST') or '127.0.0.1').strip()
+    if _host_only(bind) in _LOOPBACK_HOSTS and _host_only(request.host) not in _LOOPBACK_HOSTS:
+        return jsonify({'error': f'Blocked: unexpected host {request.host!r} (Verbatim only answers on localhost).'}), 403
+    if request.method not in _UNSAFE_METHODS:
+        return None
+    origin = (request.headers.get('Origin') or '').strip()
+    if origin:
+        allowed = {o.strip().rstrip('/').lower() for o in os.environ.get('VERBATIM_ALLOWED_ORIGINS', '').split(',') if o.strip()}
+        netloc = urlsplit(origin).netloc.lower() if origin != 'null' else ''
+        if (netloc and netloc == request.host.lower()) or origin.rstrip('/').lower() in allowed:
+            return None
+        return jsonify({'error': f'Blocked a request from another website ({origin}). Open Verbatim at its own address, '
+                                 'or list that origin in VERBATIM_ALLOWED_ORIGINS.'}), 403
+    site = (request.headers.get('Sec-Fetch-Site') or '').strip().lower()
+    if site and site not in ('same-origin', 'none'):
+        return jsonify({'error': 'Blocked a cross-site request.'}), 403
+    return None
 
 
 # ===== 演示工作区（给外界看的只读实例）=====

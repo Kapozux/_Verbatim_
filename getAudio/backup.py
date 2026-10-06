@@ -5,9 +5,13 @@ Verbatim 内置备份：把转写库的文本部分只增不删地同步到 Goog
 launchd 起的 bash 读 Documents 下的脚本，连续失败两个月，界面上毫无痕迹）。现在备份由
 应用自己跑、状态在 Settings → Storage 里看得见。
 
-只备文本：meta / transcript / transcript_raw / summary 和博主分析的 chain.json + md 文档。
-音频默认已不再保存，就算有也不备（体积大、回放又没人用）。只增不删：目标里只会多不会少，
-在应用里误删一条，备份里还在。
+备什么：
+- 每条转写：文字（meta / transcript / summary / words …）和声纹 voices.npz；
+- 笔记本（_chains）：chain.json、md 文档、向量 embeddings.npz，以及 studio/ 里的产出（json、播客 mp3、幻灯片 pptx）；
+- 上传的文档（_docs）：整份目录，包括 PDF / PPTX / DOCX 原件——这些丢了补不回。
+2026-10-06 以前只备第一层的 .json/.md/.txt/.srt、跳过所有 _ 开头的目录，上传的原件和生成的播客 / 幻灯片一份都没备过。
+不备：转写的音频（体积大、回放又没人用）、播客原声片段缓存 _clips、幻灯片预览图、代码库快照 _repos（都能重新生成）。
+只增不删：目标里只会多不会少，在应用里误删一条，备份里还在。
 
 节奏：启动 90 秒后跑一次，之后每 6 小时；每有转写完成，10 分钟防抖后再跑一次。
 """
@@ -25,6 +29,9 @@ INTERVAL_S = 6 * 3600
 FIRST_DELAY_S = 90
 DEBOUNCE_S = 600
 TEXT_EXT = ('.json', '.md', '.txt', '.srt')
+TRANSCRIPT_EXT = TEXT_EXT + ('.npz',)                   # 声纹：本机算一小时课要几分钟
+CHAIN_EXT = TEXT_EXT + ('.npz',)                        # 向量：花钱算的
+STUDIO_EXT = TEXT_EXT + ('.mp3', '.pptx')               # 生成的播客、幻灯片
 
 _lock = threading.Lock()
 _running = False
@@ -90,15 +97,16 @@ def status(results_dir):
     }
 
 
-def _sync_dir(src, dst):
-    """把 src 下的文本文件复制到 dst：目标缺失或源更新才复制，从不删除。返回复制的文件数。"""
+def _sync_dir(src, dst, exts=TEXT_EXT):
+    """把 src 第一层里扩展名在 exts 中的文件复制到 dst（exts=None：全部文件）：目标缺失或源更新才复制，
+    从不删除。返回复制的文件数。"""
     copied = 0
     try:
         names = os.listdir(src)
     except OSError:
         return 0
     for name in names:
-        if not name.endswith(TEXT_EXT) or name.endswith('.tmp'):
+        if name.endswith('.tmp') or (exts is not None and not name.endswith(exts)):
             continue
         s = os.path.join(src, name)
         if not os.path.isfile(s):
@@ -137,9 +145,14 @@ def run(results_dir):
                 continue
             if name == '_chains':
                 for cid in os.listdir(src):
-                    copied += _sync_dir(os.path.join(src, cid), os.path.join(dest, '_chains', cid))
+                    c_src, c_dst = os.path.join(src, cid), os.path.join(dest, '_chains', cid)
+                    copied += _sync_dir(c_src, c_dst, CHAIN_EXT)
+                    copied += _sync_dir(os.path.join(c_src, 'studio'), os.path.join(c_dst, 'studio'), STUDIO_EXT)
+            elif name == '_docs':
+                for doc in os.listdir(src):
+                    copied += _sync_dir(os.path.join(src, doc), os.path.join(dest, '_docs', doc), None)
             elif not name.startswith('_'):
-                copied += _sync_dir(src, os.path.join(dest, name))
+                copied += _sync_dir(src, os.path.join(dest, name), TRANSCRIPT_EXT)
         st.update(last_ok=now, copied=copied, error='')
     except Exception as e:  # noqa: BLE001
         st['error'] = str(e)[:300]
