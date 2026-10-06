@@ -2,7 +2,8 @@
 
 ## 速览
 
-- **现状**（10-05）：第一个 PR（简体中文翻译修正，118 条）已经提到 lfnovo/open-notebook，cubic 机器人的两条意见当天改完，等维护者批准 CI 和审核。#1315 讨论帖已由用户回复（出处精确到时间戳、规模经验）。用户中途误点关闭过一次 PR，已重新打开。
+- **现状**（10-06）：**#1477（前端代理 100 MB 上传上限）已认领并被指派**，代码写完、测完，本地分支 `fix/1477-proxy-upload-size` 提交 `c5b351e`，还没推；PR 说明在 `~/verbatim_outreach/open-notebook_PR2_1477上传上限.md`。维护者要求常数放无 import 的 `src/lib/upload-limits.ts`、相对路径引用（已照做）。本机前端测试里 `markdown-editor.test.tsx` 3 条在干净的 main 上也失败，跟我们无关。
+  10-05：第一个 PR（简体中文翻译修正，118 条）已经提到 lfnovo/open-notebook，cubic 机器人的两条意见当天改完，等维护者批准 CI 和审核。#1315 讨论帖已由用户回复（出处精确到时间戳、规模经验）。用户中途误点关闭过一次 PR，已重新打开。
 - **怎么跑**：本机克隆在 `~/Documents/CODEelse/.claude/scratch-data/open-notebook`（分支 `fix/zh-cn-translation`，远端 `fork` = `https://github.com/Kapozux/open-notebook.git`）。前端测试 `cd frontend && npx vitest run src/lib/locales`；试用新界面：`.claude/scratch-data/on-run/docker-compose.yml`（v1-dev 镜像，UI 8512、API 5065，避开 Ephemeris 的 5055）。
 - **已知问题**：没有。PR 等审，维护者一般一周内看。
 - **下一步**：等 PR 合并后再提第二个。候选（按「被接受的可能性 × 价值」）：content-core 加 B 站来源（content-core 允许直接提 PR，不用先讨论）；Open Notebook 的明显小 bug（默认 transformation 提示词永远不生效、播客段数上限 3–20 vs 底层 1–10、`/sources/{id}/retry` 防重入被吞、YouTube 没字幕时误导文案「去配 STT」、Source Chat 停止按钮没接上）；引用核对要先在 #1315 里提。两个安全问题（content-core 全局关 SSL 校验、跟随重定向后不再校验 URL）按 SECURITY.md 私下报告，别公开提。
