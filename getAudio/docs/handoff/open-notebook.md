@@ -2,7 +2,8 @@
 
 ## 速览
 
-- **现状**（10-06）：**#1477（前端代理 100 MB 上传上限）已认领并被指派**，代码写完、测完，本地分支 `fix/1477-proxy-upload-size` 提交 `c5b351e`，还没推；PR 说明在 `~/verbatim_outreach/open-notebook_PR2_1477上传上限.md`。维护者要求常数放无 import 的 `src/lib/upload-limits.ts`、相对路径引用（已照做）。本机前端测试里 `markdown-editor.test.tsx` 3 条在干净的 main 上也失败，跟我们无关。
+- **现状**（10-07）：**PR #1479（#1477，前端代理 100 MB 上传上限）** 10-07 推了 `cb5c6f8`，改完 cubic 的 5 条意见。最要紧的 P1：同源不代表请求一定经过 Next，nginx 把 `/api/` 直连 5055 时也是同源，旧检查会误拦。现在加了 Next 自己的 `/api/frontend-proxy` 路由，它排在 rewrite 前面，经过 Next 时回 200，直连时 API 回 404；已在真实 `next build` 上验证。**回复 cubic 各条、改 PR 说明的草稿**在 `~/verbatim_outreach/open-notebook_PR2_cubic回复草稿.md`，还没发，等用户点头、隔天再发。维护者还没看。本机 `markdown-editor.test.tsx` 3 条在干净的 main 上也失败，跟我们无关。
+  **PR #1449（zh-CN 翻译）有合并冲突**：lfnovo 10-04 的 #1457 也改了 `zh-CN/index.ts`。要 rebase 到 main、解决冲突再推，排在 #1479 的回复之后，另一天做。
   10-05：第一个 PR（简体中文翻译修正，118 条）已经提到 lfnovo/open-notebook，cubic 机器人的两条意见当天改完，等维护者批准 CI 和审核。#1315 讨论帖已由用户回复（出处精确到时间戳、规模经验）。用户中途误点关闭过一次 PR，已重新打开。
 - **怎么跑**：本机克隆在 `~/Documents/CODEelse/.claude/scratch-data/open-notebook`（分支 `fix/zh-cn-translation`，远端 `fork` = `https://github.com/Kapozux/open-notebook.git`）。前端测试 `cd frontend && npx vitest run src/lib/locales`；试用新界面：`.claude/scratch-data/on-run/docker-compose.yml`（v1-dev 镜像，UI 8512、API 5065，避开 Ephemeris 的 5055）。
 - **已知问题**：没有。PR 等审，维护者一般一周内看。

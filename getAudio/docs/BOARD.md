@@ -12,7 +12,7 @@
 | 来源标签（照 NotebookLM：按主题自动分组、一个来源一个标签、排序：最近 / 标题 / 类型），取代文件夹 | getaudio-fa | main（10-05 合进、5001 已重启） | 已本地提交、测试全过；IB 计算机科学实测 19 份 → 7 组，$0.0003、2.6 秒 |
 | 点出处就地看原视频 / 听原音（YouTube / B 站嵌播放器从那一秒开始）+ README GIF + YC 演示 | cite-video 窗口 | main（10-04 合进、5001 已重启） | 上线。README GIF 在 `docs/media/verbatim-cite.gif`（18 秒，4.7 MB；另有 mp4）；YC 演示：等用户定（见「等用户拍板」）。交接 `docs/handoff/cite-video.md` |
 | gemini35 段落时间不可信（短文件中位数只有真实的 0.337，转 16k 再送也一样，不是格式问题）| gemini35-time 窗口 | worktree `.claude/worktrees/gemini35-time`，分支 fix/gemini35-timeline（已合进 main、5001 已重启） | 10-05 停：本机 Whisper 回补到 848/1031 电脑太卡，用户决定不补旧期、也不花钱补；新 Gemini 期仍自动排本机对齐 |
-| 给 Open Notebook 做贡献 | getaudio-1d | 仓库外 `.claude/scratch-data/open-notebook`（fork：Kapozux/open-notebook） | PR 1（zh-CN 翻译 118 条）等维护者审；#1315 已回复；下一个候选 content-core 的 B 站来源。GitHub 动作一次一件、用户点头。交接 `docs/handoff/open-notebook.md` |
+| 给 Open Notebook 做贡献 | getaudio-1d | 仓库外 `.claude/scratch-data/open-notebook`（fork：Kapozux/open-notebook） | #1479（上传上限）10-07 推了 P1 修复，cubic 回复草稿待发；#1449（翻译）有冲突待 rebase；#1315 已回复；下一个候选 content-core 的 B 站来源。GitHub 动作一次一件、用户点头。交接 `docs/handoff/open-notebook.md` |
 | 宣传片（朋友圈中文版）| 宣传片窗口（getaudio-1d） | 仓库外 `~/verbatim_outreach/promo/v2_src`（Remotion） | 10-05 暂停：可发的仍是 v15；v16/v17（NotebookLM 结构、Canvas 配乐、只能内部测试）用户说粗糙；v18「逐镜头复刻 Canvas」镜头表已出、没开始做。交接 `docs/handoff/promo-video.md` |
 | 读书笔记层（ADR 0010）：所有来源类型都读成统一格式的笔记，播客 / 报告 / 幻灯片按笔记定计划、细讲处回原文 | getaudio-fa | main（10-03 20:0x 合进、5001 已重启） | IB 计算机科学 19 份已读（$0.23）；马督工 1021 期没读（估 $4.23，等用户点）；下一步：两份失败的 PPTX 点重试、1 小时长播客方案 |
 | 笔记本 8 个问题 + 播客原声核对 + DeepSeek / Kimi key + 大量资料的默认要求 + PPTX 直接读字 | getaudio-fa | main（10-03 合进、5001 已重启） | 完成；没推远端 |
