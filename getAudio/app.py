@@ -4828,6 +4828,54 @@ def api_notes_read(chain_id):
     return jsonify({'ok': True, 'started': n})
 
 
+def _revnotes_auto(cid):
+    import revnotes
+    try:
+        revnotes.auto(_chain_dir(cid), cid, _note_sources(cid, single_only=True))
+    except Exception as e:  # noqa: BLE001  出不了笔记不能拖垮加来源
+        print(f'[revnotes] {cid[:8]} 自动出笔记失败：{e}')
+
+
+@app.route('/api/chain/<chain_id>/revnotes')
+def api_revnotes_get(chain_id):
+    """复习笔记模板的设置（弹框打开时问）：模板、自动开没开、默认模板、出了几份、还差哪几份和估价。只读、不花钱。"""
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    import revnotes
+    cdir = _chain_dir(chain_id)
+    srcs = _note_sources(chain_id, single_only=True)
+    miss = revnotes.missing(cdir, srcs)
+    ests = []
+    for k, sid, _ in (miss or [s for s in srcs if s[0] in revnotes.KINDS])[:20]:
+        try:
+            ests.append(revnotes.estimate(k, sid))
+        except Exception:  # noqa: BLE001
+            pass
+    each = round(sum(ests) / len(ests), 4) if ests else 0.0
+    lang = 'zh' if (request.args.get('lang') or 'zh').startswith('zh') else 'en'
+    return jsonify({**revnotes.config(cdir), 'default_template': revnotes.DEFAULT_TEMPLATE[lang],
+                    'made': len(revnotes.made(cdir)), 'missing': [{'kind': k, 'id': sid, 'title': t} for k, sid, t in miss],
+                    'est_each_usd': each, 'est_missing_usd': round(each * len(miss), 4)})
+
+
+@app.route('/api/chain/<chain_id>/revnotes', methods=['POST'])
+def api_revnotes_save(chain_id):
+    """存模板和「加来源时自动出」开关；{run_missing: true} 顺手给还没出的各出一份（弹框里写了估价，用户点的）。"""
+    if not _chain_ok(chain_id) or DEMO_MODE:
+        return jsonify({'error': 'Not found'}), 404
+    import revnotes
+    body = request.get_json(silent=True) or {}
+    cdir = _chain_dir(chain_id)
+    try:
+        cfg = revnotes.save_config(cdir, body.get('template'), body.get('auto'))
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    started = 0
+    if body.get('run_missing'):
+        started = revnotes.start(cdir, chain_id, revnotes.missing(cdir, _note_sources(chain_id, single_only=True)))
+    return jsonify({'ok': True, **cfg, 'started': started})
+
+
 def _notes_auto(cid):
     """加完来源（_project_refresh 最后）：单份估价低于 notes.AUTO_USD 的自动读，一次最多花 $0.25；
     贵的（整个频道、大代码库）等用户在左栏点。"""
@@ -4948,6 +4996,7 @@ def _project_refresh(cid, force_build=False):
                     ask.embed_chain(_chain_dir(cid))
                 if not DEMO_MODE:
                     _notes_auto(cid)                       # 新来源便宜的就顺手读成笔记（ADR 0010）
+                    _revnotes_auto(cid)                    # 开了复习笔记模板：新来源按模板各出一份
                 _voices_refresh(cid)                       # 录音变了：重新认说话人（没做过声纹的项目什么都不做）
                 with _project_jobs_lock:
                     if _project_jobs.get(cid) == 'dirty':

@@ -676,8 +676,9 @@ def _outline(corpus, pool, lang, focus, outline_src):
 
 
 def start(cdir, chain_id, kind, focus='', n=None, scope=None, outline=None, lang=None, run=None,
-          fmt=None, prompt=None):
-    """建一条 running 的产出，后台生成（费用记在 ref=study:<id> 上）。run(fn) 测试时可以换成同步执行。"""
+          fmt=None, prompt=None, extra=None):
+    """建一条 running 的产出，后台生成（费用记在 ref=study:<id> 上）。run(fn) 测试时可以换成同步执行。
+    extra：随产出一起存的字段（复习笔记的 revnote 标记），第一次存盘前就放进去，列表马上看得到。"""
     if kind not in KINDS:
         raise ValueError('unknown kind')
     focus = str(focus or '').strip()[:200]
@@ -698,6 +699,8 @@ def start(cdir, chain_id, kind, focus='', n=None, scope=None, outline=None, lang
            'scope': scope if isinstance(scope, dict) else None, 'outline_src': outline or '', 'chain': chain_id}
     if kind == 'report':
         out.update(format=fmt, prompt=prompt if fmt == 'custom' else '')
+    if isinstance(extra, dict):
+        out.update(extra)
     _save(cdir, out)
     with _lock:
         _running.add(oid)

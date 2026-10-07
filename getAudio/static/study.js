@@ -11,6 +11,7 @@ const ST_PATHS = {
     quiz: '<circle cx="12" cy="12" r="8.5"/><path d="M9.6 9.4a2.5 2.5 0 1 1 3.4 2.4c-.6.3-1 .8-1 1.5v.4"/><path d="M12 16.8h.01"/>',
     coverage: '<path d="M4 6.5l1.6 1.6L8.5 5"/><path d="M4 13.5l1.6 1.6 2.9-3.1"/><path d="M11.5 7h8.5M11.5 14h8.5M11.5 20h8.5"/><path d="M5.5 20h.01"/>',
     note: '<path d="M7 3.5h10a1 1 0 0 1 1 1V21l-6-4-6 4V4.5a1 1 0 0 1 1-1z"/>',
+    revnotes: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9 14.5l2 2 4-4"/>',
     read: '<path d="M3 5h6a3 3 0 0 1 3 3v12a2.5 2.5 0 0 0-2.5-2.5H3z"/><path d="M21 5h-6a3 3 0 0 0-3 3v12a2.5 2.5 0 0 1 2.5-2.5H21z"/>',
     topics: '<path d="M12 4v16"/><path d="M7 20h10"/><path d="M4 7h16"/><path d="M7 7l-3 6.5a3 3 0 0 0 6 0z"/><path d="M17 7l-3 6.5a3 3 0 0 0 6 0z"/>',
     predictions: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r=".8"/>',
@@ -45,6 +46,7 @@ function stTitle(o) {
     // podcast.js / slides.js 在 study.js 之后加载；列表可能先画出来，那时还没定义
     if (o.kind === 'podcast') return typeof podcastTitle === 'function' ? podcastTitle(o) : T('st.k.podcast');
     if (o.kind === 'slides') return typeof slidesTitle === 'function' ? slidesTitle(o) : T('st.k.slides');
+    if (o.revnote) return T('st.k.revnotes') + ' · ' + (o.revnote.title || '');     // 复习笔记：按模板给一份来源出的
     if (o.kind === 'report') {
         const name = o.format === 'custom' ? String(o.prompt || T('st.f.custom')).slice(0, 40) : T('st.f.' + (o.format || 'briefing'));
         return name + (o.focus ? ' · ' + o.focus : '');
@@ -140,7 +142,7 @@ function stRenderList() {
     box.innerHTML = all.map(o => `
         <div class="st-item${stOpenId && stOpenId() === o.id ? ' on' : ''}" data-id="${escapeHtml(o.id)}" data-st="${escapeHtml(o.status)}">
             <button type="button" class="st-open" ${o.status === 'running' ? 'disabled' : ''}>
-                ${stIcon(o.kind === 'doc' ? 'read' : o.kind === 'view' ? o.view : o.kind, 16)}
+                ${stIcon(o.revnote ? 'revnotes' : o.kind === 'doc' ? 'read' : o.kind === 'view' ? o.view : o.kind, 16)}
                 <span class="st-txt"><span class="st-it">${escapeHtml(stTitle(o))}</span><span class="st-im">${stMeta(o)}</span></span>
             </button>
             ${o.status === 'failed' ? `<button type="button" class="cx-link st-retry" title="${escapeHtml(o.error || '')}">${T('st.retry')}</button>` : ''}
@@ -294,7 +296,7 @@ async function stGenerate(body, quiet) {
 
 function stWire() {
     document.querySelectorAll('#chain-explore .st-tool').forEach(b =>
-        b.addEventListener('click', () => b.dataset.st === 'visual' ? visualPicker() : b.dataset.st === 'podcast' ? podcastPicker() : b.dataset.st === 'slides' ? slidesPicker() : stOpenDialog(b.dataset.st)));
+        b.addEventListener('click', () => b.dataset.st === 'visual' ? visualPicker() : b.dataset.st === 'revnotes' ? revnotesPicker() : b.dataset.st === 'podcast' ? podcastPicker() : b.dataset.st === 'slides' ? slidesPicker() : stOpenDialog(b.dataset.st)));
     document.getElementById('st-form').addEventListener('submit', async e => {
         e.preventDefault();
         const ov = document.getElementById('st-overlay');
@@ -338,7 +340,7 @@ async function stView(id) {
     stState.fc = null;
     stState.filter = 'all';
     cxShowTab('studio');
-    nbvKind(T('st.k.' + o.kind));
+    nbvKind(T('st.k.' + (o.revnote ? 'revnotes' : o.kind)));
     nbvTitle(stTitle(o));
     stRenderList();
     stRender();
@@ -584,3 +586,56 @@ async function stSaveNote(m, btn) {
 stWire();
 // 直接打开 #/chain/<id> 时 explore.js 先跑过 exploreOpen、本文件后加载：补一次
 if (typeof cx !== 'undefined' && cx.id && !stState.id) stOpen(cx.id);
+
+
+// ----- 复习笔记模板（revnotes.py）：每份来源按同一个模板出一份笔记，加来源时自动出 -----
+// 格子 → 中间弹框：模板、「加来源时自动出」、还没出的几份要不要现在出（估价写在按钮上）。
+// 出好的笔记就是列表里的报告（标题「复习笔记 · 来源名」），点开、出处、导出都跟报告一样。
+async function revnotesPicker() {
+    const ov = stPickOverlay();
+    let g = {};
+    try { g = await (await fetch(`/api/chain/${cx.id}/revnotes?lang=${currentLang === 'zh' ? 'zh' : 'en'}`)).json(); } catch { /* 用默认 */ }
+    const nMiss = (g.missing || []).length;
+    const each = g.est_each_usd ? fmtUsd(g.est_each_usd) : '';
+    const fresh = !g.template;               // 没保存过：模板预填默认，自动默认勾上（用户要的就是这个）
+    ov.innerHTML = `<div class="cx-modal rd-pick vp-pick rn-pick" role="dialog" aria-modal="true" aria-labelledby="rn-t">
+        <button class="settings-x" type="button" data-close aria-label="${escapeHtml(T('common.close'))}">×</button>
+        <h2 class="cx-modal-title" id="rn-t">${stIcon('revnotes', 20)}<span>${escapeHtml(T('st.k.revnotes'))}</span></h2>
+        <p class="cx-muted">${escapeHtml(T('rn.desc'))}</p>
+        <form id="rn-form">
+            <label class="pod-f"><span class="pod-l">${escapeHtml(T('rn.tpl'))}
+                <button type="button" class="cx-link rn-reset" id="rn-reset">${escapeHtml(T('rn.reset'))}</button></span>
+                <textarea id="rn-tpl" rows="10" maxlength="2000">${escapeHtml(g.template || g.default_template || '')}</textarea></label>
+            <label class="vs-ep rn-chk"><input type="checkbox" id="rn-auto" ${fresh || g.auto ? 'checked' : ''}>
+                <span>${escapeHtml(each ? T('rn.autoCost', { cost: each }) : T('rn.auto'))}</span></label>
+            ${nMiss ? `<label class="vs-ep rn-chk"><input type="checkbox" id="rn-run">
+                <span>${escapeHtml(T('rn.runMissing', { n: nMiss, cost: fmtUsd(g.est_missing_usd || 0) }))}</span></label>` : ''}
+            <div class="vp-foot"><span class="rd-pick-s" id="rn-msg">${escapeHtml(g.made ? T('rn.made', { n: g.made }) : '')}</span>
+                <button type="submit" class="rd-pick-go primary" id="rn-go">${escapeHtml(T('rn.save'))}</button></div>
+        </form></div>`;
+    const run = ov.querySelector('#rn-run');
+    const go = ov.querySelector('#rn-go');
+    const label = () => {
+        go.textContent = run && run.checked ? T('rn.saveRun', { n: nMiss, cost: fmtUsd(g.est_missing_usd || 0) }) : T('rn.save');
+    };
+    if (run) run.addEventListener('change', label);
+    ov.querySelector('#rn-reset').addEventListener('click', () => { ov.querySelector('#rn-tpl').value = g.default_template || ''; });
+    ov.classList.remove('hidden');
+    ov.querySelector('#rn-form').addEventListener('submit', async e => {
+        e.preventDefault();
+        const body = { template: ov.querySelector('#rn-tpl').value.trim(), auto: ov.querySelector('#rn-auto').checked,
+            run_missing: !!(run && run.checked) };
+        go.disabled = true;
+        let r;
+        try {
+            const resp = await fetch(`/api/chain/${cx.id}/revnotes`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body) });
+            r = await resp.json();
+        } catch (err) { r = { error: String(err) }; }
+        if (r.error) { ov.querySelector('#rn-msg').textContent = r.error; go.disabled = false; return; }
+        ov.classList.add('hidden');
+        showToast(r.started ? T('rn.started', { n: r.started }) : T(body.auto ? 'rn.savedAuto' : 'rn.saved'));
+        stLoad();
+    });
+}
+

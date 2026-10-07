@@ -2765,6 +2765,12 @@ body.demo .creator-hide { display: none; }
 .vs-ep.off { cursor: default; color: var(--faint); }
 .vs-ep.off:hover { background: none; }
 .vs-ep input { margin: 0; accent-color: var(--coral); }
+/* 复习笔记模板弹框：模板框高一点；两个勾选行贴着边（不是一期一期的列表） */
+.rn-pick #rn-tpl { min-height: 220px; }
+.rn-pick .pod-l { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.rn-reset { font-size: 13px; }
+.rn-chk { padding: 6px 0; border-radius: var(--r-sm); }
+.rn-chk:hover { background: none; }
 .vs-ep-t { font-size: 15px; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .vs-ep-m { grid-column: 2; font-size: 13px; color: var(--muted); }
 .vs-all { padding: 8px 15px 10px; font-weight: 500; }
