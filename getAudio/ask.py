@@ -968,6 +968,26 @@ Conversation so far:
 
 Latest question (answer in {lang}): {question}"""
 
+# 只送了一部分卡时追加在 not_covered 后面（借 Open Notebook 的 source_text_status）：不写明的话，
+# 模型会把「这批里没有」说成「他从没讲过」
+PARTIAL_MARK = 'Only part of the notebook is shown'
+PARTIAL = {
+    'search': (PARTIAL_MARK + ': these are the {used} of the {total} cards that matched this question best; the '
+               'rest were not given to you. So never say {author} doesn\'t talk about something or count how often '
+               'they say it across all sources: say it doesn\'t come up in what was found.'),
+    'spread': (PARTIAL_MARK + ': these are an even sample of {used} of the {total} cards, spread across the '
+               'sources in time order; the rest were not given to you. Describe trends from this sample, and '
+               'never say {author} doesn\'t talk about something or give totals across all sources.'),
+}
+
+
+def _partial_line(cov, author):
+    tpl = PARTIAL.get(cov.get('mode'))
+    if not tpl or cov.get('cards_used', 0) >= cov.get('pool_cards', 0):
+        return ''
+    return ' ' + tpl.format(used=cov['cards_used'], total=cov['pool_cards'], author=author)
+
+
 NOT_COVERED = {
     # 查了多少张卡界面上每条回答下面都写着，这里不让模型复述（它会把英文的检索说明原样贴进中文回答）
     'about': ('If the cards do not answer the question, say plainly that {author} doesn\'t talk about it in '
@@ -1238,7 +1258,8 @@ def _prepare(chain_dir, question, mode='about', history=None, topic=None, ui_lan
     lang = _answer_lang(question, ui_lang)
     prompt = ANSWER_PROMPT.format(
         author=who['author'] or 'this creator', subject=_subject(who), mode_rules=MODE_RULES[mode],
-        not_covered=NOT_COVERED[mode].format(author=who['author'] or 'the creator'),
+        not_covered=NOT_COVERED[mode].format(author=who['author'] or 'the creator')
+        + _partial_line(cov, who['author'] or 'the creator'),
         lang=lang, background=_bg_block(who),
         episodes=_episode_lines(corpus, {c['ep'] for c in picked}, full=True,
                                 scope_eps=None if pool is None else {c['ep'] for c in pool}),
