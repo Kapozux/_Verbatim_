@@ -2,10 +2,10 @@
 
 ## 速览
 
-- **现状**（10-09）：分支 `feature/on-port`（worktree `.claude/worktrees/on-port`），没合进 main、5001 没动。工程项做完 7 件，每件一个本地提交、带测试，全量测试过。
+- **现状**（10-09）：分支 `feature/on-port`（worktree `.claude/worktrees/on-port`），没合进 main、5001 没动。工程项做完 8 件，每件一个本地提交、带测试，全量测试过。
 - **怎么跑**：`cd .claude/worktrees/on-port/getAudio && ./run_tests.sh`；要看界面用复制出来的数据开别的端口（CLAUDE.md 多窗口第 2 条）。
 - **已知问题**：tasks.db 加了 `kwargs` 列。新代码一启动就会给库加上这一列，之后**旧代码**的 `taskdb.create`（`INSERT ... VALUES` 9 个值、没写列名）会报列数不对。所以合进 main 时 5001 必须一次换成新代码；别的 worktree 不要拿已经加过列的库副本跑旧代码。
-- **下一步**：第 4 项（下载 / 提取错误分类），然后第 3、10 项，再做用户功能（见下面清单）。
+- **下一步**：第 3 项和模型注册表跟重构分支阶段 4、5 是同一块，等用户定怎么排；第 10 项要先占 ADR 号；然后做用户功能（见下面清单）。
 
 ## 来源
 
@@ -18,7 +18,7 @@
 | 1 | embeddings.npz 记下模型名和维度，对不上当作没有、整份重算 | 完成 | `52f9568` · `tests/test_embed_model.py` |
 | 2 | tasks.db 存转写的完整入参，重启恢复时带上 | 完成 | `4f99642` · `tests/test_task_recover_args.py` |
 | 3 | 引擎层抛类型化异常、每个引擎声明重试策略 | 没做 | 报告说工期要翻倍；动 app.py 的 `_is_network_error` 一片 |
-| 4 | 下载 / 文档提取的错误分几类，前端按类给可操作的提示，原始 stderr 只进日志 | 没做 | |
+| 4 | 下载失败分 7 类（`downloader.DOWNLOAD_ERRORS`），给能照着做的提示；yt-dlp 原话只进日志；视频没了 / 要登录 / 地区限制 / 不支持的网站试一次就停 | 完成 | `a822b9e` · `tests/test_download_errors.py`；文档 / 网页提取（sources.py）还没分类 |
 | 5 | 上传 / 本机路径进队列前用 ffprobe 预检 | 完成 | `7142f95` · `tests/test_upload_preflight.py` |
 | 6 | i18n 中英键、占位符、重复键测试；localStorage 包 try/catch | 完成 | `fbc41e5` · `tests/test_i18n.py`（要 node，没有就跳过） |
 | 7 | 笔记本的轮询离开就停、后台标签页暂停（`cxLater` / `notebookLeave`） | 完成 | `09443f0` · `tests/test_notebook_polling.py`（要 node） |
