@@ -10,6 +10,7 @@
 import json
 import os
 import threading
+import uuid
 
 AUTO_MAX = 20
 AUTO_BUDGET_USD = 0.5
@@ -31,6 +32,67 @@ DEFAULT_TEMPLATE = {
 }
 
 _lock = threading.Lock()
+LIBRARY_MAX = 50
+
+
+# ---- 模板库（借 Open Notebook：transformation 是全局的）：写一次，每个笔记本都能套用 ----
+# 存在数据目录的 revnote_library.json：[{id, name, template, updated}]。笔记本里用的仍是自己那份 revnotes.json
+# （套用 = 把库里的文字填进去再保存），库里的改了不会悄悄改动已经在用的笔记本。
+
+def _lib_path():
+    import config
+    return os.path.join(config.DATA_DIR, 'revnote_library.json')
+
+
+def library():
+    try:
+        with open(_lib_path(), 'r', encoding='utf-8') as f:
+            items = json.load(f)
+    except (OSError, ValueError):
+        items = []
+    items = [x for x in items if isinstance(x, dict) and x.get('id') and x.get('name')]
+    return sorted(items, key=lambda x: x['name'].lower())
+
+
+def _lib_write(items):
+    tmp = _lib_path() + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(items, f, ensure_ascii=False, indent=1)
+    os.replace(tmp, _lib_path())
+
+
+def library_save(name, template):
+    """存进模板库；同名（不分大小写）就改那一份。→ id"""
+    from datetime import datetime
+    name = ' '.join(str(name or '').split())[:60]
+    template = str(template or '').strip()
+    if not name:
+        raise ValueError('Give the template a name')
+    if not template:
+        raise ValueError('Write the template first')
+    if len(template) > TEMPLATE_MAX:
+        raise ValueError(f'The template is too long (max {TEMPLATE_MAX} characters)')
+    with _lock:
+        items = library()
+        hit = next((x for x in items if x['name'].lower() == name.lower()), None)
+        if not hit:
+            if len(items) >= LIBRARY_MAX:
+                raise ValueError(f'The library is full ({LIBRARY_MAX} templates); delete one first')
+            hit = {'id': uuid.uuid4().hex[:12]}
+            items.append(hit)
+        hit.update(name=name, template=template, updated=datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+        _lib_write(items)
+    return hit['id']
+
+
+def library_delete(tid):
+    with _lock:
+        items = library()
+        keep = [x for x in items if x['id'] != tid]
+        if len(keep) == len(items):
+            return False
+        _lib_write(keep)
+    return True
 
 
 def _path(cdir):

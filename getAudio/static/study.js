@@ -591,6 +591,58 @@ if (typeof cx !== 'undefined' && cx.id && !stState.id) stOpen(cx.id);
 // ----- 复习笔记模板（revnotes.py）：每份来源按同一个模板出一份笔记，加来源时自动出 -----
 // 格子 → 中间弹框：模板、「加来源时自动出」、还没出的几份要不要现在出（估价写在按钮上）。
 // 出好的笔记就是列表里的报告（标题「复习笔记 · 来源名」），点开、出处、导出都跟报告一样。
+// 模板库（借 Open Notebook：transformation 是全局的）：写一次，每个笔记本都能套用。
+// 套用 = 把库里的文字填进模板框，用户点保存才算数；存进库要起个名字（同名覆盖），名字就地输入、不弹浏览器对话框
+function rnLibWire(ov, lib) {
+    const box = ov.querySelector('#rn-lib');
+    const tpl = ov.querySelector('#rn-tpl');
+    const msg = ov.querySelector('#rn-msg');
+    const render = () => {
+        box.innerHTML = lib.length ? `<select id="rn-lib-pick" class="search-input">
+                <option value="">${escapeHtml(T('rn.libPick', { n: lib.length }))}</option>
+                ${lib.map(x => `<option value="${escapeHtml(x.id)}">${escapeHtml(x.name)}</option>`).join('')}</select>
+            <button type="button" class="cx-link rn-reset hidden" id="rn-lib-del">${escapeHtml(T('rn.libDelete'))}</button>` : '';
+        const pick = box.querySelector('#rn-lib-pick');
+        const del = box.querySelector('#rn-lib-del');
+        if (!pick) return;
+        pick.addEventListener('change', () => {
+            const it = lib.find(x => x.id === pick.value);
+            del.classList.toggle('hidden', !it);
+            if (it) tpl.value = it.template;
+        });
+        del.addEventListener('click', async () => {
+            let r;
+            try { r = await (await fetch(`/api/revnote_library/${encodeURIComponent(pick.value)}`, { method: 'DELETE' })).json(); } catch { r = {}; }
+            if (r.templates) { lib = r.templates; render(); }
+        });
+    };
+    render();
+    ov.querySelector('#rn-libsave').addEventListener('click', () => {
+        if (box.querySelector('#rn-lib-name')) return;
+        const row = document.createElement('div');
+        row.className = 'rn-lib-new';
+        row.innerHTML = `<input type="text" id="rn-lib-name" class="search-input" maxlength="60" placeholder="${escapeHtml(T('rn.libNamePh'))}">
+            <button type="button" class="btn-secondary" id="rn-lib-ok">${escapeHtml(T('rn.libSaveGo'))}</button>`;
+        box.appendChild(row);
+        const name = row.querySelector('#rn-lib-name');
+        name.focus();
+        const save = async () => {
+            if (!name.value.trim()) { name.focus(); return; }
+            let r;
+            try {
+                r = await (await fetch('/api/revnote_library', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: name.value.trim(), template: tpl.value.trim() }) })).json();
+            } catch (err) { r = { error: String(err) }; }
+            if (r.error) { msg.textContent = r.error; return; }
+            lib = r.templates || lib;
+            render();
+            msg.textContent = T('rn.libSaved', { name: name.value.trim() });
+        };
+        row.querySelector('#rn-lib-ok').addEventListener('click', save);
+        name.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); save(); } });
+    });
+}
+
 async function revnotesPicker() {
     const ov = stPickOverlay();
     let g = {};
@@ -603,8 +655,10 @@ async function revnotesPicker() {
         <h2 class="cx-modal-title" id="rn-t">${stIcon('revnotes', 20)}<span>${escapeHtml(T('st.k.revnotes'))}</span></h2>
         <p class="cx-muted">${escapeHtml(T('rn.desc'))}</p>
         <form id="rn-form">
+            <div class="rn-lib" id="rn-lib"></div>
             <label class="pod-f"><span class="pod-l">${escapeHtml(T('rn.tpl'))}
-                <button type="button" class="cx-link rn-reset" id="rn-reset">${escapeHtml(T('rn.reset'))}</button></span>
+                <span class="rn-acts"><button type="button" class="cx-link rn-reset" id="rn-libsave">${escapeHtml(T('rn.libSave'))}</button>
+                <button type="button" class="cx-link rn-reset" id="rn-reset">${escapeHtml(T('rn.reset'))}</button></span></span>
                 <textarea id="rn-tpl" rows="10" maxlength="2000">${escapeHtml(g.template || g.default_template || '')}</textarea></label>
             <label class="vs-ep rn-chk"><input type="checkbox" id="rn-auto" ${fresh || g.auto ? 'checked' : ''}>
                 <span>${escapeHtml(each ? T('rn.autoCost', { cost: each }) : T('rn.auto'))}</span></label>
@@ -620,6 +674,7 @@ async function revnotesPicker() {
     };
     if (run) run.addEventListener('change', label);
     ov.querySelector('#rn-reset').addEventListener('click', () => { ov.querySelector('#rn-tpl').value = g.default_template || ''; });
+    rnLibWire(ov, g.library || []);
     ov.classList.remove('hidden');
     ov.querySelector('#rn-form').addEventListener('submit', async e => {
         e.preventDefault();

@@ -4946,6 +4946,7 @@ def api_revnotes_get(chain_id):
     each = round(sum(ests) / len(ests), 4) if ests else 0.0
     lang = 'zh' if (request.args.get('lang') or 'zh').startswith('zh') else 'en'
     return jsonify({**revnotes.config(cdir), 'default_template': revnotes.DEFAULT_TEMPLATE[lang],
+                    'library': revnotes.library(),
                     'made': len(revnotes.made(cdir)), 'missing': [{'kind': k, 'id': sid, 'title': t} for k, sid, t in miss],
                     'est_each_usd': each, 'est_missing_usd': round(each * len(miss), 4)})
 
@@ -4966,6 +4967,36 @@ def api_revnotes_save(chain_id):
     if body.get('run_missing'):
         started = revnotes.start(cdir, chain_id, revnotes.missing(cdir, _note_sources(chain_id, single_only=True)))
     return jsonify({'ok': True, **cfg, 'started': started})
+
+
+@app.route('/api/revnote_library')
+def api_revnote_library():
+    """复习笔记的模板库（全局，每个笔记本都能套用）。"""
+    import revnotes
+    return jsonify({'templates': revnotes.library()})
+
+
+@app.route('/api/revnote_library', methods=['POST'])
+def api_revnote_library_save():
+    if DEMO_MODE:
+        return jsonify({'error': 'Not found'}), 404
+    import revnotes
+    body = request.get_json(silent=True) or {}
+    try:
+        tid = revnotes.library_save(body.get('name'), body.get('template'))
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    return jsonify({'ok': True, 'id': tid, 'templates': revnotes.library()})
+
+
+@app.route('/api/revnote_library/<tid>', methods=['DELETE'])
+def api_revnote_library_delete(tid):
+    if DEMO_MODE:
+        return jsonify({'error': 'Not found'}), 404
+    import revnotes
+    if not revnotes.library_delete(tid):
+        return jsonify({'error': 'Not found'}), 404
+    return jsonify({'ok': True, 'templates': revnotes.library()})
 
 
 def _notes_auto(cid):

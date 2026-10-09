@@ -2770,6 +2770,12 @@ body.demo .creator-hide { display: none; }
 .rn-pick #rn-tpl { min-height: 220px; }
 .rn-pick .pod-l { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
 .rn-reset { font-size: 13px; }
+.rn-acts { display: inline-flex; gap: 14px; }
+.rn-lib { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-bottom: 10px; }
+.rn-lib:empty { display: none; }
+.rn-lib select { flex: 1 1 220px; min-width: 0; }
+.rn-lib-new { display: flex; gap: 8px; flex: 1 1 100%; }
+.rn-lib-new input { flex: 1; min-width: 0; }
 .rn-chk { padding: 6px 0; border-radius: var(--r-sm); }
 .rn-chk:hover { background: none; }
 .vs-ep-t { font-size: 15px; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
