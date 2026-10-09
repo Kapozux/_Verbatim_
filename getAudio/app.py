@@ -205,11 +205,131 @@ def _demo_readonly_guard():
     return jsonify({'error': 'This is a read-only demo.'}), 403
 
 
+# ===== 密码登录（借 Open Notebook 的 OPEN_NOTEBOOK_PASSWORD）=====
+# 放到局域网 / 服务器上时设 VERBATIM_PASSWORD：浏览器先到 /login，输对了种一个签名 cookie（30 天）；
+# 脚本 / MCP 用 Authorization: Bearer <密码>。cookie 存的是 HMAC(本机随机密钥, 密码)，不是密码本身；
+# 改了密码旧 cookie 自动作废。同一个地址 10 分钟内输错 5 次就先拦住（429）。
+# 不设（默认）时这一段完全不起作用；GETAUDIO_TOKEN 照旧可用，两样设了哪样都能进。
+_SESSION_COOKIE = 'verbatim_session'
+_LOGIN_WINDOW_S, _LOGIN_MAX_FAILS = 600, 5
+_login_fails = {}                    # 地址 -> [输错的时间]
+_login_lock = threading.Lock()
+
+
+def _password():
+    return (os.environ.get('VERBATIM_PASSWORD') or '').strip()
+
+
+def _session_secret():
+    path = os.path.join(config.DATA_DIR, '.session_secret')
+    try:
+        with open(path, 'rb') as f:
+            key = f.read()
+        if len(key) >= 32:
+            return key
+    except OSError:
+        pass
+    key = os.urandom(32)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, 'wb') as f:
+        f.write(key)
+    return key
+
+
+def _session_value(pw):
+    return hmac.new(_session_secret(), pw.encode('utf-8'), hashlib.sha256).hexdigest()
+
+
+def _password_ok():
+    pw = _password()
+    cookie = request.cookies.get(_SESSION_COOKIE) or ''
+    if cookie and hmac.compare_digest(cookie, _session_value(pw)):
+        return True
+    bearer = request.headers.get('Authorization', '').replace('Bearer ', '', 1).strip()
+    return bool(bearer) and hmac.compare_digest(bearer.encode('utf-8'), pw.encode('utf-8'))
+
+
+def _safe_next(nxt):
+    """登录后跳回哪：只许站内路径（防开放跳转），#/... 的前端路由保留。"""
+    nxt = str(nxt or '/')
+    if not nxt.startswith('/') or nxt.startswith('//') or '\\' in nxt:
+        return '/'
+    return nxt
+
+
+_LOGIN_PAGE = """<!doctype html><html lang="{{ 'zh-CN' if zh else 'en' }}"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>Verbatim</title>
+<style>
+:root { --bg:#f6f4ef; --card:#fff; --fg:#1f1d1a; --muted:#6b665e; --line:#ddd7cc; --acc:#c4623e; --bad:#b3261e; }
+@media (prefers-color-scheme: dark) { :root { --bg:#181715; --card:#22201d; --fg:#ece8e1; --muted:#9a948a; --line:#38342f; --acc:#d9774f; --bad:#f2948a; } }
+* { box-sizing:border-box; } body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
+  background:var(--bg); color:var(--fg); font:15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif; padding:16px; }
+form { width:100%; max-width:340px; background:var(--card); border:1px solid var(--line); border-radius:14px; padding:28px 24px; }
+h1 { font-size:20px; margin:0 0 4px; } p { color:var(--muted); margin:0 0 18px; font-size:14px; }
+input[type=password] { width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:8px; background:transparent; color:var(--fg); font-size:15px; }
+button { margin-top:14px; width:100%; padding:10px; border:0; border-radius:8px; background:var(--acc); color:#fff; font-size:15px; cursor:pointer; }
+.err { color:var(--bad); margin:10px 0 0; font-size:14px; }
+</style></head><body>
+<form method="post" action="/login">
+<h1>Verbatim</h1><p>{{ 'Enter the password to continue.' if not zh else '输入密码继续。' }}</p>
+<input type="password" name="password" autofocus autocomplete="current-password" aria-label="password">
+<input type="hidden" name="next" id="next" value="{{ nxt }}">
+<button type="submit">{{ '进入' if zh else 'Sign in' }}</button>
+{% if err %}<p class="err">{{ err }}</p>{% endif %}
+</form>
+<script>if (location.hash) document.getElementById('next').value = (document.getElementById('next').value.split('#')[0] || '/') + location.hash;</script>
+</body></html>"""
+
+
+def _login_page(err='', code=200):
+    from flask import render_template_string
+    zh = 'zh' in (request.headers.get('Accept-Language') or '')[:5].lower()
+    nxt = _safe_next(request.values.get('next') or '/')
+    return render_template_string(_LOGIN_PAGE, zh=zh, nxt=nxt, err=err), code
+
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if not _password():
+        from flask import redirect
+        return redirect('/')
+    if request.method == 'GET':
+        return _login_page()
+    ip = request.remote_addr or ''
+    now = time.time()
+    with _login_lock:
+        recent = [x for x in _login_fails.get(ip, []) if now - x < _LOGIN_WINDOW_S]
+        _login_fails[ip] = recent
+        if len(recent) >= _LOGIN_MAX_FAILS:
+            return _login_page('Too many wrong passwords. Wait a few minutes and try again.', 429)
+    supplied = (request.form.get('password') or '').strip()
+    if not (supplied and hmac.compare_digest(supplied.encode('utf-8'), _password().encode('utf-8'))):
+        with _login_lock:
+            _login_fails.setdefault(ip, []).append(now)
+        return _login_page('Wrong password.', 401)
+    with _login_lock:
+        _login_fails.pop(ip, None)
+    from flask import redirect
+    resp = redirect(_safe_next(request.form.get('next')))
+    resp.set_cookie(_SESSION_COOKIE, _session_value(_password()), max_age=30 * 24 * 3600,
+                    httponly=True, samesite='Lax', secure=request.is_secure)
+    return resp
+
+
+@app.route('/logout')
+def logout():
+    from flask import redirect
+    resp = redirect('/login' if _password() else '/')
+    resp.delete_cookie(_SESSION_COOKIE)
+    return resp
+
+
 @app.before_request
 def _check_auth():
-    if not config.AUTH_TOKEN:
+    pw = _password()
+    if not config.AUTH_TOKEN and not pw:
         return None
-    if request.path.startswith('/static/'):
+    if request.path.startswith('/static/') or request.path in ('/login', '/logout'):
         return None
 
     supplied = (
@@ -218,8 +338,16 @@ def _check_auth():
         or request.headers.get('Authorization', '').replace('Bearer ', '', 1).strip()
     )
     # 常量时间比较，避免定时侧信道
-    if supplied and hmac.compare_digest(str(supplied), str(config.AUTH_TOKEN)):
+    if config.AUTH_TOKEN and supplied and hmac.compare_digest(str(supplied), str(config.AUTH_TOKEN)):
         return None
+    if pw:
+        if _password_ok():
+            return None
+        if request.method == 'GET' and not request.path.startswith('/api/'):
+            from flask import redirect
+            from urllib.parse import quote
+            return redirect('/login?next=' + quote(request.full_path.rstrip('?'), safe='/?=&'))
+        return jsonify({'error': 'Unauthorized — sign in at /login, or send Authorization: Bearer <password>.'}), 401
     return jsonify({'error': 'Unauthorized — append ?token=YOUR_TOKEN to the URL, or send an Authorization: Bearer header.'}), 401
 
 
