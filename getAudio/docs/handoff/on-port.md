@@ -2,10 +2,10 @@
 
 ## 速览
 
-- **现状**（10-09）：分支 `feature/on-port`（worktree `.claude/worktrees/on-port`），没合进 main、5001 没动。工程项做完 8 件，每件一个本地提交、带测试，全量测试过。
+- **现状**（10-09）：分支 `feature/on-port`（worktree `.claude/worktrees/on-port`），没合进 main、5001 没动。工程项做完 8 件，用户功能做完 4 件（自己的模型、只问这一份、模板库、密码登录 + 接口文档），每件一个本地提交、带测试，全量 51 个测试文件全过。
 - **怎么跑**：`cd .claude/worktrees/on-port/getAudio && ./run_tests.sh`；要看界面用复制出来的数据开别的端口（CLAUDE.md 多窗口第 2 条）。
 - **已知问题**：tasks.db 加了 `kwargs` 列。新代码一启动就会给库加上这一列，之后**旧代码**的 `taskdb.create`（`INSERT ... VALUES` 9 个值、没写列名）会报列数不对。所以合进 main 时 5001 必须一次换成新代码；别的 worktree 不要拿已经加过列的库副本跑旧代码。
-- **下一步**：第 3 项和模型注册表跟重构分支阶段 4、5 是同一块，等用户定怎么排；第 10 项要先占 ADR 号；然后做用户功能（见下面清单）。
+- **下一步**：合进 main 要按 CLAUDE.md 多窗口第 3 条（先问别的窗口、确认没有在跑的任务）；第 3 项和模型注册表用户 10-09 定了先不做（留给重构分支阶段 4、5）；第 10 项（迁移）还没做；更多界面语言没做。
 
 ## 来源
 
@@ -30,9 +30,21 @@
 
 ## 用户功能（ON 有、Verbatim 没有）
 
-本地模型（Ollama）、更多模型商（OpenAI 兼容接口）、可编辑的 transformation、单篇来源对话、更多界面语言、密码登录、OpenAPI 文档。都没做。其中模型相关的会碰全局设置，按 CLAUDE.md 多窗口第 4 条先登记、默认值不变。
+用户 10-09 选了四个，按顺序做完：
+
+| 功能 | 怎么用 | 提交 / 测试 |
+|---|---|---|
+| 自己的模型（OpenAI 兼容：Ollama / LM Studio / OpenAI） | 设置 →「自己的模型」填端点、模型名、key 可空；分析大脑选「自己的模型」；「日常文字也先用它」默认关 | `599cae3` · `tests/test_custom_llm.py`；ADR 0013（选了就不换云端）；本机 Ollama `qwen3-vl:8b` 实测 9.6 秒、记 $0 |
+| 只问这一份来源（ON 的 Source Chat） | 来源栏阅读器栏头「只问这一份」：提问范围只勾它、光标跳到输入框 | `dfd82ae`；复用现成的勾选范围（`scope_pool` 已有测试），界面在浏览器里点过 |
+| 复习笔记的模板库（ON 的全局 transformation） | 「复习笔记」弹框：「从模板库套用…」下拉、「存进模板库」 | `86a3de8` · `tests/test_template_library.py`；存在 `revnote_library.json` |
+| 密码登录 | 设环境变量 `VERBATIM_PASSWORD`：浏览器到 /login，签名 cookie 30 天；脚本用 `Authorization: Bearer <密码>`；10 分钟输错 5 次先拦 | `e9340c8` · `tests/test_password_login.py`；cookie = HMAC(数据目录 `.session_secret`, 密码) |
+| 接口文档 | `/api/openapi.json`、`/api/docs` | `5c3e403` · `tests/test_openapi.py`；ADR 0014（从路由表生成） |
+
+没做：更多界面语言（现在只有中英）。
 
 ## 注意
 
 - 第 1 项：换了 `EMBED_MODEL` 之后，每个笔记本第一次被提问时会在后台整份重算向量，**这一步花钱**（马督工那种 1.8 万段约 $1）。不换模型就不会触发；旧文件按 `gemini-embedding-001` 认。
 - 第 8 项改了问答和工作台的提示词（只在材料没全送时多一句），不影响全部送得下的情况。
+- 新加的全局开关（`CUSTOM_LLM_*`、`VERBATIM_PASSWORD`）默认都是关的，不设就跟以前一样（CLAUDE.md 多窗口第 4 条）。
+- 改了共用文件 `app.py`、`static/i18n.js`、`static/style.css`、`static/study.js`、`templates/index.html`，合进 main 时可能跟别的窗口的改动撞。
