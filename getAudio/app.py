@@ -764,7 +764,14 @@ def run_transcription(task_id, filepath, engine, original_filename, q,
                       model_review=False, offset_sec=0, extra_meta=None,
                       timing=None, net_retry=0, summarize=True):
     """记账归属：这个 worker 线程里所有模型调用（转写、摘要、enrich）都记到 task_id，
-    链条里的转写再带上 chain_id（extra_meta 里由 run_chain 塞入）。"""
+    链条里的转写再带上 chain_id（extra_meta 里由 run_chain 塞入）。
+    入参先存进 tasks.db：重启恢复时原样带上（timing、net_retry 是这一次运行的，不存）。"""
+    try:
+        taskdb.set_kwargs(task_id, {'fallback_whisper': fallback_whisper, 'model_review': model_review,
+                                    'offset_sec': offset_sec, 'extra_meta': extra_meta,
+                                    'summarize': summarize})
+    except Exception as e:  # noqa: BLE001  存不上只是重启恢复时少几项，别挡住转写
+        print(f'[taskdb] {task_id}: could not save kwargs: {e}')
     with usage.scope(ref=task_id, chain=(extra_meta or {}).get('chain_id')):
         return _run_transcription(task_id, filepath, engine, original_filename, q,
                                   speaker_count=speaker_count,
@@ -1482,7 +1489,8 @@ def recover_unfinished_tasks():
             q = queue.Queue()
             tasks[task_id] = q
             engine = row.get('engine')
-            kwargs = chain_ctx.get(task_id) or {'model_review': engine != 'whisper'}
+            kwargs = (taskdb.kwargs_of(row) or chain_ctx.get(task_id)
+                      or {'model_review': engine != 'whisper'})
             submit_transcription(
                 engine, run_transcription, task_id, upload_path,
                 engine, row.get('filename'), q, row.get('speaker_count'), **kwargs,
