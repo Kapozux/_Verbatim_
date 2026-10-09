@@ -98,6 +98,9 @@ const STRINGS = {
         "pj.creatorTitle": "Research a creator",
 
         "pj.openOriginal": "Original file",
+        'src.askOnly': 'Ask only this one',
+        'src.askOnlyTitle': 'Select just this source, so answers come only from it',
+        'src.askOnlyToast': 'Now asking only “{title}”. Select all sources to ask everything again.',
 
         "pj.cardMeta": "{r} recordings · {d} documents",
 
@@ -1632,6 +1635,9 @@ const STRINGS = {
         "pj.creatorTitle": "研究一个博主",
 
         "pj.openOriginal": "原文件",
+        'src.askOnly': '只问这一份',
+        'src.askOnlyTitle': '提问范围只勾这一份来源，回答只从它里面找',
+        'src.askOnlyToast': '现在只问「{title}」。全选来源就回到问全部。',
 
         "pj.cardMeta": "{r} 段录音 · {d} 份文档",
 

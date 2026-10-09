@@ -1861,6 +1861,7 @@ body.demo .creator-hide { display: none; }
 
 /* 左栏里看原文：文档按段落（PDF 按页分隔）、转写按句；出处点进来的那一段高亮 */
 /* 返回键贴在栏顶：从出处跳到原文中间，不用往回滑就能关（上下各吃掉栏的 14px 内边距，盖住滚上来的字） */
+.src-reader-acts { display: inline-flex; align-items: center; gap: 14px; }
 .src-reader-head { display: flex; justify-content: space-between; align-items: center; gap: 10px;
   padding: 14px 0 8px; margin-top: -14px; border-bottom: 1px solid var(--line); margin-bottom: 10px;
   position: sticky; top: -14px; z-index: 3; background: var(--card); }

@@ -110,7 +110,7 @@ function repoCodeHtml(text, first) {
 async function openRepoReader(repoId) {
     const m = await repoGet(repoId);
     if (!m) return;
-    const body = readerOpen(`${m.title} @${(m.commit || '').slice(0, 7)}`, T('repo.nCards', { n: m.cards.length }), '');
+    const body = readerOpen(`${m.title} @${(m.commit || '').slice(0, 7)}`, T('repo.nCards', { n: m.cards.length }), '', repoId);
     if (typeof readerNotes === 'function') readerNotes('repo', repoId);      // 读书笔记（notes.js）
     const byFile = {};
     m.cards.forEach(c => (byFile[c.path] = byFile[c.path] || []).push(c));
