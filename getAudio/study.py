@@ -542,6 +542,19 @@ Return JSON only: {{"items": ["...", "..."]}}
 {text}"""
 
 
+# 材料放不下、只送了一部分时写进提示词（借 Open Notebook 的 source_text_status）：不写明的话，
+# 模型会把「这批里没有」说成「资料里没讲」，提纲对照会把没送进去的条目判成没讲
+PARTIAL_MARK = 'Only part of the material is shown'
+
+
+def _partial_note(corpus, used, pool):
+    srcs, total_srcs = len({c['ep'] for c in used}), len({c['ep'] for c in pool})
+    src = f' (from {srcs} of the {total_srcs} sources)' if srcs < total_srcs else ''
+    return (f'{PARTIAL_MARK}: these are {len(used)} of the {len(pool)} passages{src}; the rest did not fit '
+            f'and were left out. Never claim the sources do not mention something, or that something is not '
+            f'covered, only because it is not among the passages below.\n')
+
+
 def _prompt(corpus, cards, lang, focus, task):
     eps = sorted({c['ep'] for c in cards})
     focus_line = (f'Focus: the user wants this to concentrate on: "{focus}". Prioritise passages about that; '
@@ -553,7 +566,8 @@ def _prompt(corpus, cards, lang, focus, task):
                    + '); each source line names whose it is. Attribute every point to that person and never '
                      'blend different people\'s views into one.\n') if len(people) > 1 else ''
     return HEAD.format(
-        name=corpus['author'] or 'this project', lang=lang, focus=focus_line + (corpus.get('_plan') or ''), people=people_line,
+        name=corpus['author'] or 'this project', lang=lang,
+        focus=focus_line + (corpus.get('_plan') or '') + (corpus.get('_partial') or ''), people=people_line,
         sources='\n'.join(f"{corpus['episodes'][i].get('label')} = {who(corpus['episodes'][i])}{corpus['episodes'][i]['title']}"
                           for i in eps),
         cards='\n'.join(ask._card_line(c, corpus, alias=True) for c in cards)) + task
@@ -647,8 +661,10 @@ def _outline(corpus, pool, lang, focus, outline_src):
             q = str(it)
             for c in ask.hybrid(corpus, ask._terms(q), q, OUTLINE_K, pool=material)[0]:
                 hit[c['id']] = c
+        all_material = material
         material, thinned = _thin(corpus, list(hit.values()) or material, room)
         thinned = True
+        corpus['_partial'] = _partial_note(corpus, material, all_material)
     cards = _ordered(corpus, outline_cards + material)
     cites = citations.Citations().add(corpus, cards)
     ep = corpus['episodes'][oep]
@@ -733,6 +749,8 @@ def start(cdir, chain_id, kind, focus='', n=None, scope=None, outline=None, lang
             else:
                 cards, thinned = _pick(corpus, pool, focus, what={'report': 'report', 'flashcards': 'set of flashcards',
                                                                   'quiz': 'quiz'}.get(kind, 'study material'), info=pinfo, lang=lng)
+                if thinned:
+                    corpus['_partial'] = _partial_note(corpus, cards, pool)
                 if kind == 'report':
                     result, cites = _report(corpus, cards, lng, focus, n, oid, fmt, prompt)
                 else:

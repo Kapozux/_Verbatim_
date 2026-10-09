@@ -422,7 +422,10 @@
                     <div id="src-reader" class="src-reader hidden">
                         <div class="src-reader-head">
                             <button id="src-reader-x" class="cx-link src-reader-back" type="button" data-i18n="nb.backSources">← Sources</button>
-                            <a id="src-reader-orig" class="cx-link hidden" target="_blank" rel="noopener" data-i18n="pj.openOriginal">Original file</a>
+                            <span class="src-reader-acts">
+                                <button id="src-reader-ask" class="cx-link hidden" type="button" data-i18n="src.askOnly" data-i18n-title="src.askOnlyTitle">Ask only this one</button>
+                                <a id="src-reader-orig" class="cx-link hidden" target="_blank" rel="noopener" data-i18n="pj.openOriginal">Original file</a>
+                            </span>
                         </div>
                         <div class="src-reader-title"><b id="src-reader-name"></b><span id="src-reader-sub" class="cx-muted"></span></div>
                         <div id="src-reader-guide" class="src-guide hidden"></div>
@@ -667,6 +670,7 @@
             <option value="kimi" data-i18n="creators.providerKimi">Analyze: Kimi  (your key, or Alibaba)</option>
             <option value="glm" data-i18n="creators.providerGlm">Analyze: GLM  (Alibaba)</option>
             <option value="qwen" data-i18n="creators.providerQwen">Analyze: Qwen  (Alibaba)</option>
+            <option value="custom" data-i18n="creators.providerCustom">Analyze: your own model  (Settings)</option>
             </select></label>
             <label class="nf-field"><span data-i18n="nf.author">Name to use</span>
             <input type="text" id="chain-author" class="search-input chain-small"
@@ -828,6 +832,7 @@
                 <button class="settings-nav-item" data-pane="openrouter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h10l4 5-4 5H4"/><path d="M14 7l6 5-6 5"/></svg><span data-i18n="settings.paneOpenrouter">OpenRouter</span></button>
                 <button class="settings-nav-item" data-pane="deepseek"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13c3-5 9-7 14-4l4-2-1 5c-2 5-8 8-13 6"/><circle cx="15" cy="11" r=".6"/></svg><span data-i18n="settings.paneDeepseek">DeepSeek</span></button>
                 <button class="settings-nav-item" data-pane="kimi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></svg><span data-i18n="settings.paneKimi">Kimi</span></button>
+                <button class="settings-nav-item" data-pane="custom"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8"/><path d="M12 16v4"/></svg><span data-i18n="settings.paneCustom">Your own model</span></button>
                 <button class="settings-nav-item" data-pane="models"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 9h6v6H9z"/></svg><span data-i18n="settings.paneModels">Models</span></button>
                 <button class="settings-nav-item" data-pane="storage"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16v4H4z"/><path d="M4 14h16v4H4z"/><path d="M7 8h.01M7 16h.01"/></svg><span data-i18n="settings.paneStorage">Storage</span></button>
                 <button class="settings-nav-item" data-pane="costs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M14.5 9.5a2.5 2.5 0 0 0-2.5-1.5c-1.4 0-2.5.8-2.5 2s1.1 1.7 2.5 2 2.5.8 2.5 2-1.1 2-2.5 2a2.5 2.5 0 0 1-2.5-1.5"/><path d="M12 6.5v1.5M12 16v1.5"/></svg><span data-i18n="settings.paneCosts">Costs</span></button>
@@ -997,6 +1002,37 @@
                         <div class="settings-test-row">
                             <button type="button" id="test-kimi" class="btn-secondary" data-i18n="settings.testConnection">Test connection</button>
                             <span id="test-kimi-res" class="test-res"></span>
+                        </div>
+                    </section>
+
+                    <!-- 自己的模型（OpenAI 兼容：Ollama / LM Studio / OpenAI……） -->
+                    <section class="settings-pane" data-pane="custom">
+                        <h3 data-i18n="settings.paneCustom">Your own model</h3>
+                        <p class="settings-desc" data-i18n-html="settings.customDesc"></p>
+                        <label class="settings-field">
+                            <span class="settings-label" data-i18n="settings.customBase">Endpoint</span>
+                            <input type="text" id="set-custom-base" class="search-input" placeholder="http://localhost:11434/v1" autocomplete="off">
+                        </label>
+                        <label class="settings-field">
+                            <span class="settings-label" data-i18n="settings.customModel">Model name</span>
+                            <input type="text" id="set-custom-model" class="search-input" placeholder="qwen3:8b" autocomplete="off">
+                        </label>
+                        <label class="settings-field">
+                            <span class="settings-label"><span data-i18n="settings.apiKey">API key</span>
+                                <span class="settings-opt" data-i18n="settings.customKeyOpt">optional · local models don't need one</span>
+                            </span>
+                            <input type="password" id="set-custom-key" class="search-input"
+                                   data-i18n-placeholder="settings.pasteKey" placeholder="paste key…" autocomplete="off">
+                        </label>
+                        <label class="settings-field settings-check">
+                            <input type="checkbox" id="set-custom-everyday">
+                            <span class="settings-label"><span data-i18n="settings.customEveryday">Also use it for everyday text</span>
+                                <span class="settings-opt" data-i18n="settings.customEverydayOpt">questions, summaries, tags, studio · falls back to Gemini when it fails</span>
+                            </span>
+                        </label>
+                        <div class="settings-test-row">
+                            <button type="button" id="test-custom" class="btn-secondary" data-i18n="settings.testConnection">Test connection</button>
+                            <span id="test-custom-res" class="test-res"></span>
                         </div>
                     </section>
 

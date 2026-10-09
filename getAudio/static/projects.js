@@ -133,7 +133,7 @@ async function srcLoad() {
     const sig = (d.channels || []).map(ch => ch.chain_id + ch.stage).join();
     if (srcState.chSig !== undefined && srcState.chSig !== sig && typeof peopleLoad === 'function') peopleLoad();
     srcState.chSig = sig;
-    if (busy) srcState.timer = setTimeout(() => { if (cx.id === id) srcLoad(); }, 4000);
+    if (busy) srcState.timer = cxLater(srcLoad, 4000);
     if (pjOpenAddFor === id) {
         pjOpenAddFor = null;
         if (!n) openAddSources();
@@ -799,7 +799,20 @@ function nbShowPane(p) {
 // 打开阅读器前在哪：关掉时回到那里（窄屏回到原来那一栏，来源清单回到原来滚到的位置）
 let readerFrom = null;
 
-function readerOpen(title, sub, origHref) {
+// 单篇来源对话（借 Open Notebook 的 Source Chat）：阅读器栏头「只问这一份」= 提问范围只勾这一份、
+// 跳到对话框。复用笔记本现成的勾选范围（srcScopeBody），回答只从这一份里找；全选就回到问全部
+function readerAskOnly(sid, title) {
+    if (!srcState.data || !srcAllIds(srcState.data).includes(sid)) return;
+    srcState.sel = new Set([sid]);
+    srcRender();
+    srcSyncCount();
+    if (window.innerWidth < 1080) nbShowPane('main');
+    const q = document.getElementById('cx-q');
+    if (q) q.focus();
+    showToast(T('src.askOnlyToast', { title: title || '' }));
+}
+
+function readerOpen(title, sub, origHref, sid) {
     if (typeof stopReaderMedia === 'function') stopReaderMedia();   // 换一份原文：上一期的视频 / 音频先停
     const box = document.getElementById('src-reader');
     const ex = document.getElementById('chain-explore');
@@ -816,6 +829,10 @@ function readerOpen(title, sub, origHref) {
     const orig = box.querySelector('#src-reader-orig');
     orig.classList.toggle('hidden', !origHref);
     if (origHref) orig.href = origHref;
+    const ask = box.querySelector('#src-reader-ask');
+    const canAsk = !!sid && typeof CAN_ASK === 'function' && CAN_ASK() && srcAllIds(srcState.data).includes(sid);
+    ask.classList.toggle('hidden', !canAsk);
+    ask.onclick = canAsk ? () => readerAskOnly(sid, title) : null;
     box.classList.remove('hidden');
     document.getElementById('chain-explore').classList.remove('src-min');   // 收起着也得展开，不然原文看不见
     document.getElementById('cx-sources').classList.add('hidden');
@@ -874,7 +891,7 @@ async function openSourceReader(docId, passageIndex) {
     }
     const m = d.meta;
     const body = readerOpen(m.title, m.pages ? T('src.pages', { n: m.pages }) : (m.url ? srcHost(m.url) : ''),
-        m.url && m.ext === 'web' ? m.url : m.filename ? `/api/docs/${docId}/original` : '');
+        m.url && m.ext === 'web' ? m.url : m.filename ? `/api/docs/${docId}/original` : '', docId);
     let lastPage = null;
     let lastHead = null;
     body.innerHTML = (d.passages || []).map(p => {
@@ -1095,7 +1112,7 @@ async function openTranscriptViewer(taskId, sec, cite) {
     stopReaderMedia();
     const segs = d.segments || [];
     const segSecs = segs.map(s => parseTimestampToSeconds(s.timestamp || '0:00'));
-    const body = readerOpen(d.ai_title || d.filename || '', d.duration_seconds ? formatDuration(d.duration_seconds) : '', '');
+    const body = readerOpen(d.ai_title || d.filename || '', d.duration_seconds ? formatDuration(d.duration_seconds) : '', '', taskId);
     let hit = null;
     if (sec != null) {
         segSecs.forEach((x, i) => { if (x <= sec + 0.5) hit = i; });

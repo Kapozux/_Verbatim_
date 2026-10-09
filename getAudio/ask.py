@@ -667,12 +667,14 @@ def build_speakers(chain_dir, progress=None):
 # ================= 向量检索（按意思找）=================
 # 关键词检索（BM25）只认字面：问「躺平」，他原话说的是「摆烂」「不想卷了」就找不到。
 # 给每张卡算一个向量，按意思找；两路结果按名次融合（RRF），谁都不单独说了算。
-# 向量存在 embeddings.npz（id / 内容指纹 / float16 矩阵），卡片重抽过（指纹变了）就重算那一张。
+# 向量存在 embeddings.npz（id / 内容指纹 / float16 矩阵 / 模型名 / 维度），卡片重抽过（指纹变了）就重算那一张。
+# 模型名或维度跟现在的对不上（换了 EMBED_MODEL）：整份当作没有、重算——不同模型的向量点积没有意义。
 
-EMBED_MODEL = os.environ.get('EMBED_MODEL') or 'gemini-embedding-001'
+_LEGACY_EMBED_MODEL = 'gemini-embedding-001'   # 记模型名之前写的文件都是它算的
+EMBED_MODEL = os.environ.get('EMBED_MODEL') or _LEGACY_EMBED_MODEL
 EMBED_DIM = 768
 _EMB_FILE = 'embeddings.npz'
-_emb_cache = {}          # path -> (mtime, ids, hashes, mat, index)
+_emb_cache = {}          # path -> (mtime, model, dim, ids, hashes, mat, index)
 _emb_jobs = set()        # 正在后台补向量的链条目录
 
 
@@ -715,16 +717,19 @@ def load_embeddings(chain_dir):
     except OSError:
         return None
     hit = _emb_cache.get(path)
-    if hit and hit[0] == mt:
-        return hit[1:]
-    try:
-        z = np.load(path, allow_pickle=False)
-        ids, hashes, mat = list(z['ids']), list(z['hashes']), z['vecs'].astype(np.float32)
-    except Exception:  # noqa: BLE001  坏文件：当没有，下次重算
-        return None
-    out = (ids, hashes, mat, {i: n for n, i in enumerate(ids)})
-    _emb_cache[path] = (mt,) + out
-    return out
+    if not (hit and hit[0] == mt):
+        try:
+            z = np.load(path, allow_pickle=False)
+            ids, hashes, mat = list(z['ids']), list(z['hashes']), z['vecs'].astype(np.float32)
+            model = str(z['model']) if 'model' in z.files else _LEGACY_EMBED_MODEL
+            dim = int(z['dim']) if 'dim' in z.files else mat.shape[1]
+        except Exception:  # noqa: BLE001  坏文件：当没有，下次重算
+            return None
+        hit = (mt, model, dim, ids, hashes, mat, {i: n for n, i in enumerate(ids)})
+        _emb_cache[path] = hit
+    if hit[1] != EMBED_MODEL or hit[2] != EMBED_DIM or hit[5].shape[1] != EMBED_DIM:
+        return None                   # 别的模型算的：当没有，embed_chain 会整份重算
+    return hit[3:]
 
 
 def embed_chain(chain_dir, progress=None):
@@ -764,7 +769,8 @@ def embed_chain(chain_dir, progress=None):
         if keep:
             np.savez(os.path.join(chain_dir, _EMB_FILE + '.tmp.npz'),
                      ids=np.array([c['id'] for c in keep]), hashes=np.array([c['h'] for c in keep]),
-                     vecs=np.stack([have[c['id']][1] for c in keep]).astype(np.float16))
+                     vecs=np.stack([have[c['id']][1] for c in keep]).astype(np.float16),
+                     model=np.array(EMBED_MODEL), dim=np.array(EMBED_DIM))
             os.replace(os.path.join(chain_dir, _EMB_FILE + '.tmp.npz'), os.path.join(chain_dir, _EMB_FILE))
         return {'embedded': sum(len(b) for b, m in zip(batches, mats) if m is not None),
                 'total': len(cards), 'missing': len(cards) - len(keep)}
@@ -961,6 +967,26 @@ Conversation so far:
 {history}
 
 Latest question (answer in {lang}): {question}"""
+
+# 只送了一部分卡时追加在 not_covered 后面（借 Open Notebook 的 source_text_status）：不写明的话，
+# 模型会把「这批里没有」说成「他从没讲过」
+PARTIAL_MARK = 'Only part of the notebook is shown'
+PARTIAL = {
+    'search': (PARTIAL_MARK + ': these are the {used} of the {total} cards that matched this question best; the '
+               'rest were not given to you. So never say {author} doesn\'t talk about something or count how often '
+               'they say it across all sources: say it doesn\'t come up in what was found.'),
+    'spread': (PARTIAL_MARK + ': these are an even sample of {used} of the {total} cards, spread across the '
+               'sources in time order; the rest were not given to you. Describe trends from this sample, and '
+               'never say {author} doesn\'t talk about something or give totals across all sources.'),
+}
+
+
+def _partial_line(cov, author):
+    tpl = PARTIAL.get(cov.get('mode'))
+    if not tpl or cov.get('cards_used', 0) >= cov.get('pool_cards', 0):
+        return ''
+    return ' ' + tpl.format(used=cov['cards_used'], total=cov['pool_cards'], author=author)
+
 
 NOT_COVERED = {
     # 查了多少张卡界面上每条回答下面都写着，这里不让模型复述（它会把英文的检索说明原样贴进中文回答）
@@ -1232,7 +1258,8 @@ def _prepare(chain_dir, question, mode='about', history=None, topic=None, ui_lan
     lang = _answer_lang(question, ui_lang)
     prompt = ANSWER_PROMPT.format(
         author=who['author'] or 'this creator', subject=_subject(who), mode_rules=MODE_RULES[mode],
-        not_covered=NOT_COVERED[mode].format(author=who['author'] or 'the creator'),
+        not_covered=NOT_COVERED[mode].format(author=who['author'] or 'the creator')
+        + _partial_line(cov, who['author'] or 'the creator'),
         lang=lang, background=_bg_block(who),
         episodes=_episode_lines(corpus, {c['ep'] for c in picked}, full=True,
                                 scope_eps=None if pool is None else {c['ep'] for c in pool}),

@@ -1861,6 +1861,7 @@ body.demo .creator-hide { display: none; }
 
 /* 左栏里看原文：文档按段落（PDF 按页分隔）、转写按句；出处点进来的那一段高亮 */
 /* 返回键贴在栏顶：从出处跳到原文中间，不用往回滑就能关（上下各吃掉栏的 14px 内边距，盖住滚上来的字） */
+.src-reader-acts { display: inline-flex; align-items: center; gap: 14px; }
 .src-reader-head { display: flex; justify-content: space-between; align-items: center; gap: 10px;
   padding: 14px 0 8px; margin-top: -14px; border-bottom: 1px solid var(--line); margin-bottom: 10px;
   position: sticky; top: -14px; z-index: 3; background: var(--card); }
@@ -2769,6 +2770,12 @@ body.demo .creator-hide { display: none; }
 .rn-pick #rn-tpl { min-height: 220px; }
 .rn-pick .pod-l { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
 .rn-reset { font-size: 13px; }
+.rn-acts { display: inline-flex; gap: 14px; }
+.rn-lib { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-bottom: 10px; }
+.rn-lib:empty { display: none; }
+.rn-lib select { flex: 1 1 220px; min-width: 0; }
+.rn-lib-new { display: flex; gap: 8px; flex: 1 1 100%; }
+.rn-lib-new input { flex: 1; min-width: 0; }
 .rn-chk { padding: 6px 0; border-radius: var(--r-sm); }
 .rn-chk:hover { background: none; }
 .vs-ep-t { font-size: 15px; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -98,6 +98,9 @@ const STRINGS = {
         "pj.creatorTitle": "Research a creator",
 
         "pj.openOriginal": "Original file",
+        'src.askOnly': 'Ask only this one',
+        'src.askOnlyTitle': 'Select just this source, so answers come only from it',
+        'src.askOnlyToast': 'Now asking only “{title}”. Select all sources to ask everything again.',
 
         "pj.cardMeta": "{r} recordings · {d} documents",
 
@@ -505,6 +508,7 @@ const STRINGS = {
         'creators.providerOpus46': 'Analyze: Claude Opus 4.6  (OpenRouter · thinking)',
         'creators.providerDeepseek': 'Analyze: DeepSeek  (your key, or Alibaba)',
         'creators.providerKimi': 'Analyze: Kimi  (your key, or Alibaba)',
+        'creators.providerCustom': 'Analyze: your own model  (Settings)',
         'creators.providerGlm': 'Analyze: GLM  (Alibaba)',
         'creators.providerQwen': 'Analyze: Qwen  (Alibaba)',
         'creators.analyze': 'Analyze',
@@ -614,6 +618,13 @@ const STRINGS = {
         'costs.provider.moonshot': 'Kimi (Moonshot)',
         'settings.paneDeepseek': 'DeepSeek',
         'settings.paneKimi': 'Kimi',
+        'settings.paneCustom': 'Your own model',
+        'settings.customDesc': 'Any model with an OpenAI-compatible API: a local one through <strong>Ollama</strong> (<code>http://localhost:11434/v1</code>) or <strong>LM Studio</strong> (<code>http://localhost:1234/v1</code>), or a hosted one such as OpenAI. Pick <strong>your own model</strong> as the analysis model to use it; it never falls back to a cloud model, so local stays local. Local models cost $0 in Costs.',
+        'settings.customBase': 'Endpoint',
+        'settings.customModel': 'Model name',
+        'settings.customKeyOpt': 'optional · local models don’t need one',
+        'settings.customEveryday': 'Also use it for everyday text',
+        'settings.customEverydayOpt': 'questions, summaries, tags, studio · falls back to Gemini when it fails · saved with the Save button below',
         'settings.deepseekDesc': 'Your own key from the official DeepSeek platform. With it, the <strong>DeepSeek</strong> analysis option calls DeepSeek directly instead of through Alibaba Cloud, and summaries, Q&amp;A and tags fall back to it when there is no Alibaba Cloud key or it runs out of credit. Content about Chinese politics is never sent to it; that stays on Gemini.',
         'settings.kimiDesc': 'Your own key from the official Moonshot (Kimi) platform. With it, the <strong>Kimi</strong> analysis option calls Kimi directly instead of through Alibaba Cloud.',
         'settings.modelFast': 'Fast model (cards, cheap tasks; blank = default)',
@@ -790,6 +801,7 @@ const STRINGS = {
 
         'brain.gemini': 'Gemini',
         'brain.deepseek': 'DeepSeek',
+        'brain.custom': 'Your own model',
         'brain.kimi': 'Kimi',
         'brain.glm': 'GLM',
         'brain.qwen': 'Qwen',
@@ -811,6 +823,13 @@ const STRINGS = {
         'videoStatus.done': 'Transcribed',
         'videoStatus.failed': 'Failed',
         'videoStatus.download_failed': 'Download failed',
+        'dlErr.not_found': 'The video is private, removed, or the link is wrong. Open it in a browser to check.',
+        'dlErr.login': 'This video needs a signed-in account (members-only, age-restricted or paid). Download it yourself and upload the file.',
+        'dlErr.blocked': 'The site is refusing requests right now (rate limit or bot check). Wait a while and retry.',
+        'dlErr.geo': "This video isn't available from your region. Download it another way and upload the file.",
+        'dlErr.unsupported': "This site or kind of link isn't supported. Download the file yourself and upload it.",
+        'dlErr.network': 'Network problem. Check your connection or proxy and retry.',
+        'dlErr.unknown': 'Unknown reason. Check the link; server.log has the details.',
 
         "lens.roast": "Hot take",
         "lens.craft": "How he makes it",
@@ -874,6 +893,11 @@ const STRINGS = {
         'confirm.chainContinueFull': 'Continue this analysis?\nReuses everything finished; only fills gaps: downloads what is missing, re-transcribes failures, then completes analysis + synthesis, using the settings in the Creators form.\n\nNote: videos content-blocked by Gemini (RECITATION/safety) auto-fall-back to local Whisper; other failures only fall back if Whisper fallback is checked.',
         'confirm.chainStopFull': 'Stop this analysis? Finished transcripts & analyses are kept; it just stops going further.',
         'confirm.chainDeleteFull': 'Delete this creator analysis’s documents? (transcripts stay in the library)',
+        'confirm.impactNotebooks': 'Used as a source in: {names}. It will be removed from them.',
+        'confirm.impactDocsGone': '{n} uploaded document(s) that only this notebook uses will be deleted too.',
+        'confirm.impactDocsKept': '{n} document(s) that other notebooks also use will be kept.',
+        'confirm.impactStudio': '{n} studio output(s) will be deleted.',
+        'confirm.impactCitedBy': 'These notebooks include it as a creator and will lose it: {names}',
         'confirm.chainReanalyzeFull': 'Re-analyze: rerun AI analysis on every transcribed video{verifyExtra}{selfVerifyExtra}, using the analysis model selected in the Creators form. Transcripts untouched. Continue?',
         'confirm.chainReanalyzeVerifyExtra': ' + web fact-check (extra search quota)',
         'confirm.chainReanalyzeSelfVerifyExtra': ' + self-verify (extra calls)',
@@ -947,11 +971,6 @@ const STRINGS = {
         'toast.downloadedSrt': 'Downloaded SRT',
         'toast.someLinksNotExpanded': 'Some links could not be expanded: {message}',
 
-        'rowStatus.downloading': 'Downloading…',
-        'rowStatus.readingLocal': 'Reading local file…',
-        'rowStatus.uploading': 'Uploading…',
-        'rowStatus.transcribing': 'Transcribing {percent}%',
-        'rowStatus.done': 'Done',
         'rowStatus.failedCode': 'Failed ({status})',
         'rowStatus.failedMessage': 'Failed: {message}',
         'rowStatus.uploadFailedCode': 'Upload failed ({status})',
@@ -1226,6 +1245,12 @@ const STRINGS = {
         "rn.desc": "Each source gets notes in this format. Citations open the exact moment in the recording or the paragraph in the document.",
         "rn.tpl": "Template",
         "rn.reset": "Use the default",
+        'rn.libSave': 'Save to library',
+        'rn.libPick': 'Use a template from the library… ({n})',
+        'rn.libDelete': 'Delete from library',
+        'rn.libNamePh': 'Name it, e.g. Chinese class',
+        'rn.libSaveGo': 'Save',
+        'rn.libSaved': 'Saved to the library: {name}. Every notebook can use it.',
         "rn.auto": "Write notes for each new source automatically",
         "rn.autoCost": "Write notes for each new source automatically (about {cost} each)",
         "rn.runMissing": "Also write notes now for the {n} sources that have none (about {cost})",
@@ -1486,7 +1511,6 @@ const STRINGS = {
         'xhs.readReport': 'Read report',
         'xhs.reportTitle': 'Xiaohongshu research report',
 
-        'settings.pasteKey': 'paste key…',
         'settings.savedKeyHint': 'saved {hint} · leave blank to keep',
         'settings.compressing': 'Compressing {done}/{total}… saved {saved}',
         'settings.compressDone': 'Done. Reclaimed {saved}',
@@ -1617,6 +1641,9 @@ const STRINGS = {
         "pj.creatorTitle": "研究一个博主",
 
         "pj.openOriginal": "原文件",
+        'src.askOnly': '只问这一份',
+        'src.askOnlyTitle': '提问范围只勾这一份来源，回答只从它里面找',
+        'src.askOnlyToast': '现在只问「{title}」。全选来源就回到问全部。',
 
         "pj.cardMeta": "{r} 段录音 · {d} 份文档",
 
@@ -2024,6 +2051,7 @@ const STRINGS = {
         'creators.providerOpus46': '分析大脑：Claude Opus 4.6（OpenRouter · 深度思考）',
         'creators.providerDeepseek': '分析大脑：DeepSeek（自己的 key，没有则走阿里云）',
         'creators.providerKimi': '分析大脑：Kimi（自己的 key，没有则走阿里云）',
+        'creators.providerCustom': '分析大脑：自己的模型（在设置里填）',
         'creators.providerGlm': '分析大脑：GLM（阿里云）',
         'creators.providerQwen': '分析大脑：Qwen（阿里云）',
         'creators.analyze': '分析',
@@ -2131,6 +2159,13 @@ const STRINGS = {
         'costs.provider.moonshot': 'Kimi（月之暗面）',
         'settings.paneDeepseek': 'DeepSeek',
         'settings.paneKimi': 'Kimi',
+        'settings.paneCustom': '自己的模型',
+        'settings.customDesc': '任何有 OpenAI 兼容接口的模型：本机用 <strong>Ollama</strong>（<code>http://localhost:11434/v1</code>）或 <strong>LM Studio</strong>（<code>http://localhost:1234/v1</code>）跑的，或者 OpenAI 这类云端的。分析模型选<strong>自己的模型</strong>就用它；它报错时不会改用云端模型，本机的内容不出本机。本机模型在费用页记 $0。',
+        'settings.customBase': '端点',
+        'settings.customModel': '模型名',
+        'settings.customKeyOpt': '可不填 · 本机模型不要 key',
+        'settings.customEveryday': '日常文字也先用它',
+        'settings.customEverydayOpt': '提问、摘要、标签、工作台 · 它出错时改用 Gemini · 点下面的保存才生效',
         'settings.deepseekDesc': 'DeepSeek 官方平台的 key。填了以后，分析模型选 <strong>DeepSeek</strong> 时直接调官方，不经阿里云；摘要、问答、标签这些在没有阿里云 key 或阿里云欠费时也改用它。跟中国政治有关的内容一律不发给它，照旧走 Gemini。',
         'settings.kimiDesc': '月之暗面（Kimi）官方平台的 key。填了以后，分析模型选 <strong>Kimi</strong> 时直接调官方，不经阿里云。',
         'settings.modelFast': '快模型（抽卡、便宜活；空 = 默认）',
@@ -2300,6 +2335,7 @@ const STRINGS = {
 
         'brain.gemini': 'Gemini',
         'brain.deepseek': 'DeepSeek',
+        'brain.custom': '自己的模型',
         'brain.kimi': 'Kimi',
         'brain.glm': 'GLM',
         'brain.qwen': 'Qwen',
@@ -2321,6 +2357,13 @@ const STRINGS = {
         'videoStatus.done': '已转写',
         'videoStatus.failed': '失败',
         'videoStatus.download_failed': '下载失败',
+        'dlErr.not_found': '视频是私密的、被删了，或者链接不对。先在浏览器里打开看看。',
+        'dlErr.login': '这个视频要登录才能看（会员专享、年龄限制或付费）。自己下载下来再上传文件。',
+        'dlErr.blocked': '网站暂时拒绝请求（限流或人机验证）。过一会儿再重试。',
+        'dlErr.geo': '这个视频在你所在的地区看不了。换个办法下载下来再上传文件。',
+        'dlErr.unsupported': '不支持这个网站或这种链接。自己下载文件再上传。',
+        'dlErr.network': '网络出了问题。检查网络或代理后重试。',
+        'dlErr.unknown': '原因不明。检查链接；详情在 server.log 里。',
 
         "lens.roast": "锐评",
         "lens.craft": "内容拆解",
@@ -2336,7 +2379,7 @@ const STRINGS = {
         'rowStatus.queued': '排队中',
         'rowStatus.uploading': '上传中…',
         'rowStatus.downloading': '下载中…',
-        'rowStatus.readingLocal': '读取本地文件…',
+        'rowStatus.readingLocal': '读取本地文件中…',
         'rowStatus.transcribing': '转写中 {percent}%',
         'rowStatus.done': '完成',
         'rowStatus.doneIn': '完成 · {t}',
@@ -2383,6 +2426,11 @@ const STRINGS = {
         'confirm.chainContinueFull': '继续这次分析？\n复用已完成的一切，只补缺失的部分：下载还没下的，重转失败的，再补完分析+合成，用 Creators 表单里的当前设置。\n\n注意：被 Gemini 内容拦截（RECITATION/安全）的视频会自动落到本地 Whisper 兜底；其它失败只有勾了 Whisper 兜底才会落。',
         'confirm.chainStopFull': '停止这次分析？已完成的转写和分析会保留；只是不再继续往下跑。',
         'confirm.chainDeleteFull': '删除这个博主分析产出的文档？（转写稿仍留在资料库里）',
+        'confirm.impactNotebooks': '这些笔记本把它当来源：{names}。删了会从里面拿掉。',
+        'confirm.impactDocsGone': '只有这个笔记本在用的 {n} 份上传文档会一起删掉。',
+        'confirm.impactDocsKept': '别的笔记本也在用的 {n} 份文档会留着。',
+        'confirm.impactStudio': '工作台里的 {n} 份产出会一起删掉。',
+        'confirm.impactCitedBy': '这些笔记本把它当博主引用着，删了会从里面拿掉：{names}',
         'confirm.chainReanalyzeFull': '重新分析：对每个已转写的视频重跑一遍 AI 分析{verifyExtra}{selfVerifyExtra}，用 Creators 表单里选的分析模型。转写稿不受影响。继续吗？',
         'confirm.chainReanalyzeVerifyExtra': '+ 联网核实（额外消耗搜索配额）',
         'confirm.chainReanalyzeSelfVerifyExtra': '+ 自我证伪（额外调用）',
@@ -2456,11 +2504,6 @@ const STRINGS = {
         'toast.downloadedSrt': '已下载 SRT',
         'toast.someLinksNotExpanded': '部分链接展开失败：{message}',
 
-        'rowStatus.downloading': '下载中…',
-        'rowStatus.readingLocal': '读取本地文件中…',
-        'rowStatus.uploading': '上传中…',
-        'rowStatus.transcribing': '转写中 {percent}%',
-        'rowStatus.done': '完成',
         'rowStatus.failedCode': '失败（{status}）',
         'rowStatus.failedMessage': '失败：{message}',
         'rowStatus.uploadFailedCode': '上传失败（{status}）',
@@ -2735,6 +2778,12 @@ const STRINGS = {
         "rn.desc": "每份来源按这个格式出一份复习笔记。出处点了回到录音里的那一秒，或文档里的那一段。",
         "rn.tpl": "模板",
         "rn.reset": "恢复默认",
+        'rn.libSave': '存进模板库',
+        'rn.libPick': '从模板库套用…（{n} 份）',
+        'rn.libDelete': '从库里删掉',
+        'rn.libNamePh': '给模板起个名字，比如「语文课」',
+        'rn.libSaveGo': '存',
+        'rn.libSaved': '已存进模板库：{name}。别的笔记本也能套用。',
         "rn.auto": "加来源时自动出",
         "rn.autoCost": "加来源时自动出（每份约 {cost}）",
         "rn.runMissing": "还没出的 {n} 份现在也出（约 {cost}）",
@@ -2995,7 +3044,6 @@ const STRINGS = {
         'xhs.readReport': '阅读报告',
         'xhs.reportTitle': '小红书调研报告',
 
-        'settings.pasteKey': '粘贴 key…',
         'settings.savedKeyHint': '已保存 {hint} · 留空保留原值',
         'settings.compressing': '压缩中 {done}/{total}… 已省下 {saved}',
         'settings.compressDone': '完成——省下 {saved}',
@@ -3036,8 +3084,14 @@ const STRINGS = {
     },
 };
 
+// 浏览器禁了存储（隐私模式、被拦的站点数据）时一读 localStorage 就抛错；这是第一个加载的脚本，
+// 在顶层抛错会让后面所有脚本跟着 ReferenceError，所以读写都包起来
+function _langPref() {
+    try { return localStorage.getItem('getaudio_ui_lang'); } catch (e) { return null; }
+}
+
 // 演示实例一律英文（给外面的人看），不读本机偏好
-let currentLang = window.VERBATIM_DEMO ? 'en' : (localStorage.getItem('getaudio_ui_lang')
+let currentLang = window.VERBATIM_DEMO ? 'en' : (_langPref()
     || (navigator.language && navigator.language.toLowerCase().startsWith('zh') ? 'zh' : 'en'));
 
 // 命名为 T() 而不是 t()：app.js 里大量循环变量本来就叫 t（列表项/标签/任务……），
@@ -3063,7 +3117,7 @@ function applyStaticI18n(root) {
 
 function setLang(lang) {
     currentLang = (lang === 'zh' && !window.VERBATIM_DEMO) ? 'zh' : 'en';
-    localStorage.setItem('getaudio_ui_lang', currentLang);
+    try { localStorage.setItem('getaudio_ui_lang', currentLang); } catch (e) { /* 存不上：这次会话照样切 */ }
     document.documentElement.lang = currentLang === 'zh' ? 'zh-CN' : 'en';
     applyStaticI18n();
     document.dispatchEvent(new CustomEvent('langchange'));

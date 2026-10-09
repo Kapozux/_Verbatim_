@@ -1086,7 +1086,7 @@ function buildHistoryCard(entry) {
     delBtn.textContent = T('common.delete');
     delBtn.addEventListener('click', async () => {
         const label = entry.ai_title || entry.filename;
-        if (!confirm(T('confirm.deleteHistory', { label }))) return;
+        if (!confirm(T('confirm.deleteHistory', { label }) + await deleteImpact(`/api/history/${entry.id}/delete_preview`))) return;
         try {
             const resp = await fetch(`/api/history/${entry.id}`, { method: 'DELETE' });
             if (!resp.ok) {
@@ -2329,7 +2329,7 @@ async function refreshChainDetail() {
                </label>` : '';
         return `<div class="vg-card ${clickable ? 'vg-clickable' : ''} ${mergeCart.has(v.task_id) ? 'vg-picked' : ''}"${onclick}>
             <div class="vg-thumb-wrap">${thumb}${overlay}${pick}</div>
-            <div class="vg-badge ${st.cls}">${st.label}${engBadge}</div>
+            <div class="vg-badge ${st.cls}"${v.download_error ? ` title="${escapeHtml(T('dlErr.' + v.download_error))}"` : ''}>${st.label}${engBadge}</div>
             <div class="vg-title" title="${escapeHtml(v.title || '')}">${escapeHtml(v.title || '')}</div>
         </div>`;
     }).join('') || `<p class="history-empty">${T('chainDetail.resolving')}</p>`;
@@ -2496,8 +2496,22 @@ async function stopChain(chainId, ev) {
     loadChains();
 }
 
+// 删除前先问后端会牵连什么（借 Open Notebook 的删除预览），拼成确认框里的几行；问不到就只显示原来那句
+async function deleteImpact(url) {
+    let p;
+    try { p = await (await fetch(url)).json(); } catch { return ''; }
+    const names = list => list.map(x => x.name || '—').join('、');
+    const lines = [];
+    if ((p.notebooks || []).length) lines.push(T('confirm.impactNotebooks', { names: names(p.notebooks) }));
+    if (p.docs_deleted) lines.push(T('confirm.impactDocsGone', { n: p.docs_deleted }));
+    if (p.docs_kept) lines.push(T('confirm.impactDocsKept', { n: p.docs_kept }));
+    if (p.studio_outputs) lines.push(T('confirm.impactStudio', { n: p.studio_outputs }));
+    if ((p.cited_by || []).length) lines.push(T('confirm.impactCitedBy', { names: names(p.cited_by) }));
+    return lines.length ? '\n\n' + lines.map(l => '• ' + l).join('\n') : '';
+}
+
 async function deleteChain(chainId, fromDetail) {
-    if (!confirm(T('confirm.chainDeleteFull'))) return;
+    if (!confirm(T('confirm.chainDeleteFull') + await deleteImpact(`/api/chain/${chainId}/delete_preview`))) return;
     await fetch(`/api/chain/${chainId}`, { method: 'DELETE' });
     if (fromDetail) closeChainDetail();
     loadChains();
@@ -3398,6 +3412,8 @@ const setOpenrouterKey = document.getElementById('set-openrouter-key');
 const SET_COMPAT = [
     { key: 'deepseek', keyField: 'deepseek_key', models: [['set-deepseek-model', 'deepseek_model'], ['set-deepseek-pro-model', 'deepseek_pro_model']] },
     { key: 'kimi', keyField: 'kimi_key', models: [['set-kimi-model', 'kimi_model']] },
+    // 自己的模型（OpenAI 兼容）：端点和模型名都当「模型字段」存（非秘密、可清空）
+    { key: 'custom', keyField: 'custom_key', models: [['set-custom-base', 'custom_base_url'], ['set-custom-model', 'custom_model']] },
 ];
 const settingsMsg = document.getElementById('settings-msg');
 
@@ -3431,6 +3447,7 @@ async function openSettings(pane) {
         document.getElementById('set-gemini-analysis').value = s.gemini_analysis_model || '';
         document.getElementById('set-gemini-extract').value = s.gemini_extract_model || '';
         document.getElementById('set-keep-audio').checked = s.keep_audio === '1';
+        document.getElementById('set-custom-everyday').checked = s.custom_everyday === '1';
         document.getElementById('set-backup-dir').value = s.backup_dir || '';
     } catch { /* 打开即可，拉取失败不阻塞 */ }
     document.getElementById('test-gemini-res').textContent = '';
@@ -3757,6 +3774,7 @@ document.getElementById('settings-save').addEventListener('click', async () => {
         gemini_analysis_model: document.getElementById('set-gemini-analysis').value.trim(),
         gemini_extract_model: document.getElementById('set-gemini-extract').value.trim(),
         keep_audio: document.getElementById('set-keep-audio').checked ? '1' : '',
+        custom_everyday: document.getElementById('set-custom-everyday').checked ? '1' : '',
         backup_dir: document.getElementById('set-backup-dir').value.trim(),
     };
     if (setGeminiKey.value.trim()) body.gemini_key = setGeminiKey.value.trim();
@@ -3816,6 +3834,8 @@ function applyRoute() {
         .split('/').map(decodeURIComponent);
     // 离开转写详情（返回、侧栏、后退）时把播放器停掉，别在后台继续放
     if (parts[0] !== 'detail' && detailAudioPlayer) detailAudioPlayer.pause();
+    // 离开笔记本页：笔记本里的轮询一并停掉（回来时 openChainDetail 会重新打开、重新开始）
+    if (!(parts[0] === 'chain' && parts[1] && parts[2] !== 'doc') && typeof notebookLeave === 'function') notebookLeave();
     // 演示里转写 / 小红书两个入口收起来了（会花钱），直接落到博主页
     if (IS_DEMO && parts[0] === 'tab' && ['transcribe', 'xhs'].includes(parts[1])) {
         navigate('tab/creators', { replace: true });

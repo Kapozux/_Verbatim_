@@ -8,6 +8,7 @@
 不再像纯内存 tasks 字典那样凭空消失。
 """
 
+import json
 import os
 import sqlite3
 import threading
@@ -48,6 +49,10 @@ def init():
                 updated_at    TEXT
             )
         ''')
+        # 后加的列：完整入参（JSON）。老库补上这一列，老行是 NULL，恢复时按旧办法猜
+        cols = {r[1] for r in c.execute('PRAGMA table_info(tasks)')}
+        if 'kwargs' not in cols:
+            c.execute('ALTER TABLE tasks ADD COLUMN kwargs TEXT')
 
 
 def _now():
@@ -57,7 +62,8 @@ def _now():
 def create(task_id, filename, engine, speaker_count, upload_path):
     with _write_lock, _conn() as c:
         c.execute(
-            'INSERT OR REPLACE INTO tasks VALUES (?,?,?,?,?,?,?,?,?)',
+            'INSERT OR REPLACE INTO tasks (id, filename, engine, speaker_count, upload_path,'
+            ' status, error, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)',
             (task_id, filename, engine, speaker_count, upload_path,
              'pending', None, _now(), _now()),
         )
@@ -92,6 +98,29 @@ def set_engine(task_id, engine):
             'UPDATE tasks SET engine=?, updated_at=? WHERE id=?',
             (engine, _now(), task_id),
         )
+
+
+def set_kwargs(task_id, kwargs):
+    """转写的完整入参（extra_meta、summarize……）。重启恢复时原样带上，不然 source_url、
+    project_id、upload_date 这些只在内存里的东西一重启就丢。"""
+    with _write_lock, _conn() as c:
+        c.execute('UPDATE tasks SET kwargs=?, updated_at=? WHERE id=?',
+                  (json.dumps(kwargs, ensure_ascii=False, default=str), _now(), task_id))
+
+
+def kwargs_of(row):
+    """→ 存下的入参 dict；老行 / 坏数据 → None。"""
+    try:
+        v = json.loads(row.get('kwargs') or 'null')
+    except ValueError:
+        return None
+    return v if isinstance(v, dict) else None
+
+
+def delete(task_id):
+    """转写删了：这一行也删，免得重启恢复、统计时还看到它。"""
+    with _write_lock, _conn() as c:
+        c.execute('DELETE FROM tasks WHERE id=?', (task_id,))
 
 
 def unfinished():

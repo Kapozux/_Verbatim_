@@ -75,6 +75,11 @@ _SETTING_ENV = {
     'deepseek_model': 'DEEPSEEK_MODEL',
     'deepseek_pro_model': 'DEEPSEEK_PRO_MODEL',
     'kimi_model': 'KIMI_MODEL',
+    # 用户自己的模型（OpenAI 兼容：Ollama / LM Studio / OpenAI……）
+    'custom_key': 'CUSTOM_LLM_KEY',
+    'custom_base_url': 'CUSTOM_LLM_BASE',
+    'custom_model': 'CUSTOM_LLM_MODEL',
+    'custom_everyday': 'CUSTOM_LLM_ROUTE',      # '1' = 问答 / 摘要等日常文字也先用它
     # Models（非秘密，运行时读 env，保存即生效）
     'whisper_model': 'WHISPER_MODEL_SIZE',
     'gemini_transcribe_model': 'GEMINI_TRANSCRIBE_MODEL',
@@ -89,8 +94,9 @@ _SETTING_ENV = {
 # 非秘密、可清空（空 = 回默认）的设置字段
 _PLAIN_FIELDS = ('gemini_base_url', 'whisper_model', 'gemini_transcribe_model',
                  'gemini_analysis_model', 'gemini_extract_model', 'keep_audio', 'backup_dir',
-                 'deepseek_model', 'deepseek_pro_model', 'kimi_model')
-_KEY_FIELDS = ('gemini_key', 'dashscope_key', 'openrouter_key', 'deepseek_key', 'kimi_key')
+                 'deepseek_model', 'deepseek_pro_model', 'kimi_model',
+                 'custom_base_url', 'custom_model', 'custom_everyday')
+_KEY_FIELDS = ('gemini_key', 'dashscope_key', 'openrouter_key', 'deepseek_key', 'kimi_key', 'custom_key')
 
 
 def _keep_audio():
@@ -199,11 +205,131 @@ def _demo_readonly_guard():
     return jsonify({'error': 'This is a read-only demo.'}), 403
 
 
+# ===== 密码登录（借 Open Notebook 的 OPEN_NOTEBOOK_PASSWORD）=====
+# 放到局域网 / 服务器上时设 VERBATIM_PASSWORD：浏览器先到 /login，输对了种一个签名 cookie（30 天）；
+# 脚本 / MCP 用 Authorization: Bearer <密码>。cookie 存的是 HMAC(本机随机密钥, 密码)，不是密码本身；
+# 改了密码旧 cookie 自动作废。同一个地址 10 分钟内输错 5 次就先拦住（429）。
+# 不设（默认）时这一段完全不起作用；GETAUDIO_TOKEN 照旧可用，两样设了哪样都能进。
+_SESSION_COOKIE = 'verbatim_session'
+_LOGIN_WINDOW_S, _LOGIN_MAX_FAILS = 600, 5
+_login_fails = {}                    # 地址 -> [输错的时间]
+_login_lock = threading.Lock()
+
+
+def _password():
+    return (os.environ.get('VERBATIM_PASSWORD') or '').strip()
+
+
+def _session_secret():
+    path = os.path.join(config.DATA_DIR, '.session_secret')
+    try:
+        with open(path, 'rb') as f:
+            key = f.read()
+        if len(key) >= 32:
+            return key
+    except OSError:
+        pass
+    key = os.urandom(32)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, 'wb') as f:
+        f.write(key)
+    return key
+
+
+def _session_value(pw):
+    return hmac.new(_session_secret(), pw.encode('utf-8'), hashlib.sha256).hexdigest()
+
+
+def _password_ok():
+    pw = _password()
+    cookie = request.cookies.get(_SESSION_COOKIE) or ''
+    if cookie and hmac.compare_digest(cookie, _session_value(pw)):
+        return True
+    bearer = request.headers.get('Authorization', '').replace('Bearer ', '', 1).strip()
+    return bool(bearer) and hmac.compare_digest(bearer.encode('utf-8'), pw.encode('utf-8'))
+
+
+def _safe_next(nxt):
+    """登录后跳回哪：只许站内路径（防开放跳转），#/... 的前端路由保留。"""
+    nxt = str(nxt or '/')
+    if not nxt.startswith('/') or nxt.startswith('//') or '\\' in nxt:
+        return '/'
+    return nxt
+
+
+_LOGIN_PAGE = """<!doctype html><html lang="{{ 'zh-CN' if zh else 'en' }}"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>Verbatim</title>
+<style>
+:root { --bg:#f6f4ef; --card:#fff; --fg:#1f1d1a; --muted:#6b665e; --line:#ddd7cc; --acc:#c4623e; --bad:#b3261e; }
+@media (prefers-color-scheme: dark) { :root { --bg:#181715; --card:#22201d; --fg:#ece8e1; --muted:#9a948a; --line:#38342f; --acc:#d9774f; --bad:#f2948a; } }
+* { box-sizing:border-box; } body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
+  background:var(--bg); color:var(--fg); font:15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif; padding:16px; }
+form { width:100%; max-width:340px; background:var(--card); border:1px solid var(--line); border-radius:14px; padding:28px 24px; }
+h1 { font-size:20px; margin:0 0 4px; } p { color:var(--muted); margin:0 0 18px; font-size:14px; }
+input[type=password] { width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:8px; background:transparent; color:var(--fg); font-size:15px; }
+button { margin-top:14px; width:100%; padding:10px; border:0; border-radius:8px; background:var(--acc); color:#fff; font-size:15px; cursor:pointer; }
+.err { color:var(--bad); margin:10px 0 0; font-size:14px; }
+</style></head><body>
+<form method="post" action="/login">
+<h1>Verbatim</h1><p>{{ 'Enter the password to continue.' if not zh else '输入密码继续。' }}</p>
+<input type="password" name="password" autofocus autocomplete="current-password" aria-label="password">
+<input type="hidden" name="next" id="next" value="{{ nxt }}">
+<button type="submit">{{ '进入' if zh else 'Sign in' }}</button>
+{% if err %}<p class="err">{{ err }}</p>{% endif %}
+</form>
+<script>if (location.hash) document.getElementById('next').value = (document.getElementById('next').value.split('#')[0] || '/') + location.hash;</script>
+</body></html>"""
+
+
+def _login_page(err='', code=200):
+    from flask import render_template_string
+    zh = 'zh' in (request.headers.get('Accept-Language') or '')[:5].lower()
+    nxt = _safe_next(request.values.get('next') or '/')
+    return render_template_string(_LOGIN_PAGE, zh=zh, nxt=nxt, err=err), code
+
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if not _password():
+        from flask import redirect
+        return redirect('/')
+    if request.method == 'GET':
+        return _login_page()
+    ip = request.remote_addr or ''
+    now = time.time()
+    with _login_lock:
+        recent = [x for x in _login_fails.get(ip, []) if now - x < _LOGIN_WINDOW_S]
+        _login_fails[ip] = recent
+        if len(recent) >= _LOGIN_MAX_FAILS:
+            return _login_page('Too many wrong passwords. Wait a few minutes and try again.', 429)
+    supplied = (request.form.get('password') or '').strip()
+    if not (supplied and hmac.compare_digest(supplied.encode('utf-8'), _password().encode('utf-8'))):
+        with _login_lock:
+            _login_fails.setdefault(ip, []).append(now)
+        return _login_page('Wrong password.', 401)
+    with _login_lock:
+        _login_fails.pop(ip, None)
+    from flask import redirect
+    resp = redirect(_safe_next(request.form.get('next')))
+    resp.set_cookie(_SESSION_COOKIE, _session_value(_password()), max_age=30 * 24 * 3600,
+                    httponly=True, samesite='Lax', secure=request.is_secure)
+    return resp
+
+
+@app.route('/logout')
+def logout():
+    from flask import redirect
+    resp = redirect('/login' if _password() else '/')
+    resp.delete_cookie(_SESSION_COOKIE)
+    return resp
+
+
 @app.before_request
 def _check_auth():
-    if not config.AUTH_TOKEN:
+    pw = _password()
+    if not config.AUTH_TOKEN and not pw:
         return None
-    if request.path.startswith('/static/'):
+    if request.path.startswith('/static/') or request.path in ('/login', '/logout'):
         return None
 
     supplied = (
@@ -212,8 +338,16 @@ def _check_auth():
         or request.headers.get('Authorization', '').replace('Bearer ', '', 1).strip()
     )
     # 常量时间比较，避免定时侧信道
-    if supplied and hmac.compare_digest(str(supplied), str(config.AUTH_TOKEN)):
+    if config.AUTH_TOKEN and supplied and hmac.compare_digest(str(supplied), str(config.AUTH_TOKEN)):
         return None
+    if pw:
+        if _password_ok():
+            return None
+        if request.method == 'GET' and not request.path.startswith('/api/'):
+            from flask import redirect
+            from urllib.parse import quote
+            return redirect('/login?next=' + quote(request.full_path.rstrip('?'), safe='/?=&'))
+        return jsonify({'error': 'Unauthorized — sign in at /login, or send Authorization: Bearer <password>.'}), 401
     return jsonify({'error': 'Unauthorized — append ?token=YOUR_TOKEN to the URL, or send an Authorization: Bearer header.'}), 401
 
 
@@ -322,6 +456,33 @@ def probe_audio_duration_seconds(filepath):
         return float(result.stdout.strip())
     except (subprocess.SubprocessError, ValueError):
         return None
+
+
+def preflight_media(path):
+    """上传 / 本机路径进队列之前看一眼内容（借 Open Notebook 的 _assert_file_supported）：
+    空文件、ffprobe 读不出来的（坏文件、改了后缀的文档）、没有音轨的（屏幕录制）当场拒收，
+    别等进了引擎池、占着线程才失败。→ None 表示可以转，否则是给用户看的原因。
+    没装 ffprobe / 探测超时：不拦（交给后面的流水线照旧处理）。"""
+    try:
+        if os.path.getsize(path) == 0:
+            return 'The file is empty.'
+    except OSError as e:
+        return f'Cannot read the file: {e}'
+    ffprobe_bin = resolve_ffprobe_binary()
+    if not os.path.exists(ffprobe_bin):
+        return None
+    try:
+        pr = subprocess.run([ffprobe_bin, '-v', 'error', '-show_entries', 'stream=codec_type',
+                             '-of', 'csv=p=0', path], capture_output=True, text=True, timeout=30)
+    except (subprocess.SubprocessError, OSError):
+        return None
+    if pr.returncode != 0:
+        ext = path.rsplit('.', 1)[-1].lower() if '.' in os.path.basename(path) else ''
+        return ("This file can't be read as audio or video. It may be damaged, or not really a "
+                + (f'.{ext} ' if ext else '') + 'file.')
+    if 'audio' not in (pr.stdout or ''):
+        return 'This file has no audio track (no sound), so there is nothing to transcribe. Screen recordings often look like this.'
+    return None
 
 
 def extract_audio_from_video(video_path, output_path, compressed=False):
@@ -764,7 +925,14 @@ def run_transcription(task_id, filepath, engine, original_filename, q,
                       model_review=False, offset_sec=0, extra_meta=None,
                       timing=None, net_retry=0, summarize=True):
     """记账归属：这个 worker 线程里所有模型调用（转写、摘要、enrich）都记到 task_id，
-    链条里的转写再带上 chain_id（extra_meta 里由 run_chain 塞入）。"""
+    链条里的转写再带上 chain_id（extra_meta 里由 run_chain 塞入）。
+    入参先存进 tasks.db：重启恢复时原样带上（timing、net_retry 是这一次运行的，不存）。"""
+    try:
+        taskdb.set_kwargs(task_id, {'fallback_whisper': fallback_whisper, 'model_review': model_review,
+                                    'offset_sec': offset_sec, 'extra_meta': extra_meta,
+                                    'summarize': summarize})
+    except Exception as e:  # noqa: BLE001  存不上只是重启恢复时少几项，别挡住转写
+        print(f'[taskdb] {task_id}: could not save kwargs: {e}')
     with usage.scope(ref=task_id, chain=(extra_meta or {}).get('chain_id')):
         return _run_transcription(task_id, filepath, engine, original_filename, q,
                                   speaker_count=speaker_count,
@@ -1302,6 +1470,13 @@ def _enqueue_task(file, engine, speaker_count=None, extra_meta=None):
     filename = f"{task_id}.{ext}"
     filepath = os.path.join(config.UPLOAD_FOLDER, filename)
     file.save(filepath)
+    bad = preflight_media(filepath)
+    if bad:
+        try:
+            os.remove(filepath)
+        except OSError:
+            pass
+        return None, bad
 
     # 先落库再入队：服务中途重启也能从 DB 找回这个任务
     taskdb.create(task_id, file.filename, engine, speaker_count, filepath)
@@ -1375,6 +1550,9 @@ def _enqueue_local_task(path, engine, speaker_count=None):
                       'Verbatim in System Settings → Privacy & Security.')
     except OSError as e:
         return None, f'Cannot read the file: {e}'
+    bad = preflight_media(path)
+    if bad:
+        return None, bad
 
     task_id = str(uuid.uuid4())
     ext = path.rsplit('.', 1)[1].lower() if '.' in path else 'mp3'
@@ -1482,7 +1660,8 @@ def recover_unfinished_tasks():
             q = queue.Queue()
             tasks[task_id] = q
             engine = row.get('engine')
-            kwargs = chain_ctx.get(task_id) or {'model_review': engine != 'whisper'}
+            kwargs = (taskdb.kwargs_of(row) or chain_ctx.get(task_id)
+                      or {'model_review': engine != 'whisper'})
             submit_transcription(
                 engine, run_transcription, task_id, upload_path,
                 engine, row.get('filename'), q, row.get('speaker_count'), **kwargs,
@@ -1607,9 +1786,10 @@ def _download_then_transcribe(task_id, url, engine, q, section=None, offset_sec=
         item = download_one({'video_url': url}, dl_dir, section=section)
         timing['download_s'] = round(time.monotonic() - t0, 1)
         if not item or not item.get('path') or not os.path.isfile(item['path']):
-            taskdb.set_status(task_id, 'failed',
-                              error='Download failed — bad link, private/removed video, or geo-blocked.')
-            q.put(json.dumps({'type': 'error', 'message': 'Download failed — check the link.'}))
+            import downloader as _dl
+            why = _dl.DOWNLOAD_ERRORS[_dl.last_download_error() or 'unknown']
+            taskdb.set_status(task_id, 'failed', error=why)
+            q.put(json.dumps({'type': 'error', 'message': why}))
             return
         title = item.get('title') or url
         # 音频挪出 dl_dir（finally 会删它）：云引擎遇网络错时 worker 会用同一个文件
@@ -2042,6 +2222,33 @@ def api_history_audio(task_id):
     return resp
 
 
+def _notebook_regs():
+    """→ [(笔记本 id, 名字, 登记表)]：所有有 sources.json 的笔记本。"""
+    out = []
+    try:
+        names = os.listdir(CHAINS_DIR)
+    except OSError:
+        return out
+    for cid in sorted(names):
+        if not _CHAIN_ID_RE.match(cid) or not os.path.isfile(_reg_path(cid)):
+            continue
+        try:
+            name = _read_chain(cid).get('author') or ''
+        except Exception:  # noqa: BLE001
+            name = ''
+        out.append((cid, name, _reg(cid)))
+    return out
+
+
+@app.route('/api/history/<task_id>/delete_preview')
+def api_history_delete_preview(task_id):
+    """删之前先看：哪些笔记本把这条转写当来源（删了会从它们里面拿掉）。"""
+    if not _is_valid_task_id(task_id):
+        return jsonify({'error': 'Invalid task id'}), 400
+    return jsonify({'notebooks': [{'id': cid, 'name': name} for cid, name, reg in _notebook_regs()
+                                  if any(r.get('task_id') == task_id for r in reg['recordings'])]})
+
+
 @app.route('/api/history/<task_id>', methods=['DELETE'])
 def api_history_delete(task_id):
     """Delete a saved transcription and its files."""
@@ -2056,6 +2263,17 @@ def api_history_delete(task_id):
     if os.path.isdir(task_dir):
         shutil.rmtree(task_dir, ignore_errors=True)
         library.changed(task_id)
+        # 级联：笔记本登记表里还挂着它的话，来源栏会把它当成「转写中」、一直轮询。
+        # 博主频道里的期不动（那是频道的一部分，chain.json 里的 task_id 留着，下次同步才不会重转、重花钱）
+        with _chain_write_lock:
+            for cid, _name, reg in _notebook_regs():
+                if not any(r.get('task_id') == task_id for r in reg['recordings']):
+                    continue
+                reg['recordings'] = [r for r in reg['recordings'] if r.get('task_id') != task_id]
+                for f in reg.get('folders') or []:
+                    f['items'] = [x for x in f.get('items') or [] if x != task_id]
+                _reg_save(cid, reg)
+        taskdb.delete(task_id)
         return jsonify({'ok': True})
     return jsonify({'error': 'Not found'}), 404
 
@@ -3025,7 +3243,9 @@ def _run_chain(state):
                 return
 
             if not item:
+                import downloader as _dl
                 v['status'] = 'download_failed'
+                v['download_error'] = _dl.last_download_error() or 'unknown'     # 界面按类给提示
                 save()
                 return
             # 下完立刻建转写任务（复用引擎池/信号量/taskdb/历史），不等其它视频
@@ -4854,6 +5074,7 @@ def api_revnotes_get(chain_id):
     each = round(sum(ests) / len(ests), 4) if ests else 0.0
     lang = 'zh' if (request.args.get('lang') or 'zh').startswith('zh') else 'en'
     return jsonify({**revnotes.config(cdir), 'default_template': revnotes.DEFAULT_TEMPLATE[lang],
+                    'library': revnotes.library(),
                     'made': len(revnotes.made(cdir)), 'missing': [{'kind': k, 'id': sid, 'title': t} for k, sid, t in miss],
                     'est_each_usd': each, 'est_missing_usd': round(each * len(miss), 4)})
 
@@ -4874,6 +5095,36 @@ def api_revnotes_save(chain_id):
     if body.get('run_missing'):
         started = revnotes.start(cdir, chain_id, revnotes.missing(cdir, _note_sources(chain_id, single_only=True)))
     return jsonify({'ok': True, **cfg, 'started': started})
+
+
+@app.route('/api/revnote_library')
+def api_revnote_library():
+    """复习笔记的模板库（全局，每个笔记本都能套用）。"""
+    import revnotes
+    return jsonify({'templates': revnotes.library()})
+
+
+@app.route('/api/revnote_library', methods=['POST'])
+def api_revnote_library_save():
+    if DEMO_MODE:
+        return jsonify({'error': 'Not found'}), 404
+    import revnotes
+    body = request.get_json(silent=True) or {}
+    try:
+        tid = revnotes.library_save(body.get('name'), body.get('template'))
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    return jsonify({'ok': True, 'id': tid, 'templates': revnotes.library()})
+
+
+@app.route('/api/revnote_library/<tid>', methods=['DELETE'])
+def api_revnote_library_delete(tid):
+    if DEMO_MODE:
+        return jsonify({'error': 'Not found'}), 404
+    import revnotes
+    if not revnotes.library_delete(tid):
+        return jsonify({'error': 'Not found'}), 404
+    return jsonify({'ok': True, 'templates': revnotes.library()})
 
 
 def _notes_auto(cid):
@@ -6771,7 +7022,9 @@ def _retranscribe_video(chain_id, index, target, engine):
         with _chain_download_sem:
             item = download_one(target, dl_dir)
         if not item:
-            _update_video(chain_id, index, {'status': 'download_failed'})
+            import downloader as _dl
+            _update_video(chain_id, index, {'status': 'download_failed',
+                                            'download_error': _dl.last_download_error() or 'unknown'})
             return
 
         task_id = str(uuid.uuid4())
@@ -6854,6 +7107,34 @@ def api_chain_retranscribe(chain_id, index):
     return jsonify({'ok': True})
 
 
+def _orphan_split(doc_ids, leaving):
+    """→ (会变成没人用的文档, 别的笔记本还在用的文档)。leaving：要删的那个笔记本，不算「在用」。"""
+    import sources
+    doc_ids = [d for d in doc_ids if sources.valid_doc_id(d)]
+    used = set()
+    for cid, _name, reg in _notebook_regs():
+        if cid != leaving:
+            used |= {d.get('doc_id') for d in reg['docs']}
+    return [d for d in doc_ids if d not in used], [d for d in doc_ids if d in used]
+
+
+@app.route('/api/chain/<chain_id>/delete_preview')
+def api_chain_delete_preview(chain_id):
+    """删笔记本 / 博主之前先看（借 Open Notebook 的 get_delete_preview）：哪些文档跟着删、哪些留着、
+    工作台产出几份、哪些别的笔记本把它当博主引用着（删了会从它们里面拿掉）。"""
+    import glob as _glob
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    gone, kept = _orphan_split(_reg_doc_ids(chain_id), chain_id)
+    return jsonify({
+        'docs_deleted': len(gone), 'docs_kept': len(kept),
+        'recordings': len(_reg(chain_id)['recordings']),
+        'studio_outputs': len(_glob.glob(os.path.join(_chain_dir(chain_id), 'studio', '*.json'))),
+        'cited_by': [{'id': cid, 'name': name} for cid, name, reg in _notebook_regs()
+                     if cid != chain_id and any(r.get('chain_id') == chain_id for r in reg['channels'])],
+    })
+
+
 @app.route('/api/chain/<chain_id>', methods=['DELETE'])
 def api_chain_delete(chain_id):
     if not _CHAIN_ID_RE.match(chain_id or ''):
@@ -6871,6 +7152,17 @@ def api_chain_delete(chain_id):
     # 只删链条目录（分析产物）；转写结果仍留在历史里
     shutil.rmtree(cdir, ignore_errors=True)
     _drop_orphan_docs(doc_ids)
+    # 级联：别的笔记本把它当博主引用着的，引用拿掉、字母作废（跟手动「拿掉来源」一样，旧回答的出处不会指到别人身上）
+    with _chain_write_lock:
+        for cid, _name, reg in _notebook_regs():
+            gone = [r for r in reg['channels'] if r.get('chain_id') == chain_id]
+            if not gone:
+                continue
+            reg['retired_tags'] = sorted(set(reg.get('retired_tags') or []) | {r.get('tag') for r in gone if r.get('tag')})
+            reg['channels'] = [r for r in reg['channels'] if r.get('chain_id') != chain_id]
+            for f in reg.get('folders') or []:
+                f['items'] = [x for x in f.get('items') or [] if x != chain_id]
+            _reg_save(cid, reg)
     return jsonify({'ok': True})
 
 
@@ -7109,6 +7401,20 @@ def _mask_key(env_name):
     return True, '••••' + v[-4:] if len(v) >= 4 else '••••'
 
 
+@app.route('/api/openapi.json')
+def api_openapi():
+    """接口文档（OpenAPI 3）：从路由表和 docstring 现生成。"""
+    import openapi
+    return jsonify(openapi.spec(app))
+
+
+@app.route('/api/docs')
+def api_docs():
+    """接口文档页（给人看，不连外网）。"""
+    import openapi
+    return Response(openapi.DOCS_PAGE, mimetype='text/html')
+
+
 @app.route('/api/settings', methods=['GET'])
 def api_settings_get():
     gset, ghint = _mask_key('GEMINI_API_KEY')
@@ -7119,7 +7425,7 @@ def api_settings_get():
         'dashscope': {'set': dset, 'hint': dhint},
         'openrouter': {'set': oset, 'hint': ohint},
     }
-    for name, env in (('deepseek', 'DEEPSEEK_API_KEY'), ('kimi', 'MOONSHOT_API_KEY')):
+    for name, env in (('deepseek', 'DEEPSEEK_API_KEY'), ('kimi', 'MOONSHOT_API_KEY'), ('custom', 'CUSTOM_LLM_KEY')):
         kset, khint = _mask_key(env)
         out[name] = {'set': kset, 'hint': khint}
     # 非秘密字段直接回显供编辑（模型名空 = 用默认）
@@ -7238,7 +7544,7 @@ def api_settings_test():
         except Exception as e:
             return jsonify({'ok': False, 'reason': str(e)[:180]})
 
-    if engine in ('deepseek', 'kimi'):
+    if engine in ('deepseek', 'kimi', 'custom'):
         return jsonify(_test_compat_key(engine, body))
 
     return jsonify({'ok': False, 'reason': 'Unknown engine.'}), 400
@@ -7250,6 +7556,16 @@ def _test_compat_key(engine, body):
         key = (body.get('deepseek_key') or '').strip() or config.deepseek_key()
         base, want = config.DEEPSEEK_COMPAT_BASE, [(body.get('deepseek_model') or '').strip() or config.deepseek_models()[0],
                                                    (body.get('deepseek_pro_model') or '').strip() or config.deepseek_models()[1]]
+    elif engine == 'custom':
+        # 自己的模型：端点 / 模型名用表单里刚填的（没填用存着的）；key 可空（Ollama 不要 key）
+        saved = config.custom_llm() or ('', '', '')
+        base = (body.get('custom_base_url') or '').strip().rstrip('/') or saved[0]
+        key = (body.get('custom_key') or '').strip() or (os.environ.get('CUSTOM_LLM_KEY') or '').strip() or 'none'
+        want = [(body.get('custom_model') or '').strip() or saved[2]]
+        if not base or not want[0]:
+            return {'ok': False, 'reason': 'Enter the endpoint URL and the model name first.'}
+        if not re.match(r'^https?://', base):
+            return {'ok': False, 'reason': 'The endpoint must start with http:// or https://'}
     else:
         key = (body.get('kimi_key') or '').strip() or config.moonshot_key()
         base, want = config.MOONSHOT_COMPAT_BASE, [(body.get('kimi_model') or '').strip() or config.kimi_model()]
@@ -7270,7 +7586,8 @@ def _test_compat_key(engine, body):
         return {'ok': False, 'models': ids,
                 'reason': f'Key works, but this key has no model named {", ".join(missing)}. '
                           f'Available: {", ".join(ids[:12])}'}
-    return {'ok': True, 'models': ids, 'reason': 'Works — key accepted. Models: ' + ', '.join(dict.fromkeys(want))}
+    ok_msg = 'Works — connected. Model: ' if engine == 'custom' else 'Works — key accepted. Models: '
+    return {'ok': True, 'models': ids, 'reason': ok_msg + ', '.join(dict.fromkeys(want))}
 
 
 # ========== 存储 / 音频压缩 ==========

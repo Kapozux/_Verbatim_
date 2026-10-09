@@ -32,7 +32,7 @@ async function vcLoad() {
     if (cx.tab === 'voices') vcRender();
     // 有录音在后台做声纹：隔几秒再看；离开项目就停（cx.id 变了）
     if ((d.missing || []).some(m => m.job && ['queued', 'running'].includes(m.job.state))) {
-        vcState.timer = setTimeout(() => { if (cx.id === id) vcLoad(); }, 6000);
+        vcState.timer = cxLater(vcLoad, 6000);
     }
 }
 

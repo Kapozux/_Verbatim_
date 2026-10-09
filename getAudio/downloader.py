@@ -19,6 +19,7 @@ import time
 import re
 import shutil
 import subprocess
+import threading
 
 from config import YTDLP_LANG, YTDLP_COOKIES_FROM_BROWSER, YTDLP_PROXY, BILI_SESSDATA
 import config
@@ -618,6 +619,52 @@ _FORMAT_ATTEMPTS = ('bestaudio[ext=m4a]/bestaudio/best', 'worstaudio/worst',
                     'bestaudio[ext=m4a]/bestaudio/best')
 
 
+# ---- 下载失败分几类（借 Open Notebook / content-core 的类型化提取错误）----
+# yt-dlp 的原话只进 server.log（里面可能有代理地址、cookie 路径）；给用户看的是这一类该怎么办。
+# 重试也没用的几类（视频没了、要登录、地区限制、不支持的网站）试一次就停，不再白等十几秒。
+DOWNLOAD_ERRORS = {
+    'not_found': 'Download failed: the video is private, removed, or the link is wrong. Open it in a browser to check.',
+    'login': ('Download failed: this video needs a signed-in account (members-only, age-restricted or paid). '
+              'Download it yourself and upload the file.'),
+    'blocked': ('Download failed: the site is refusing requests right now (rate limit or bot check). '
+                'Wait a while and try again.'),
+    'geo': "Download failed: this video isn't available from your region. Download it another way and upload the file.",
+    'unsupported': "Download failed: this site or kind of link isn't supported. Download the file yourself and upload it.",
+    'network': 'Download failed: network problem. Check your connection or proxy and try again.',
+    'unknown': 'Download failed. Check the link; server.log has the details.',
+}
+_PERMANENT = {'not_found', 'login', 'geo', 'unsupported'}
+# 顺序有讲究：「Sign in to confirm you're not a bot」是被拦、不是要登录，排在 login 前面
+_ERROR_PATTERNS = [
+    ('blocked', r"not a bot|HTTP Error (412|429|403)|Too Many Requests|rate.?limit|风控"),
+    ('geo', r"available in your (country|region|location)|geo.?restrict|地区限制|所在地区"),
+    ('login', r"Sign in to confirm your age|members.only|Join this channel|registered users|requires? (a )?login|"
+              r"login required|需要登录|大会员|premium|purchase"),
+    ('not_found', r"Video unavailable|[Pp]rivate video|is private|been removed|does not exist|HTTP Error 404|"
+                  r"no longer available|啥都木有|视频不见了"),
+    ('unsupported', r"Unsupported URL|is not a valid URL"),
+    ('network', r"Unable to download webpage|timed? ?out|Connection (reset|refused|aborted)|"
+                r"nodename nor servname|Name or service not known|Temporary failure in name resolution|"
+                r"Network is unreachable|SSL|EOF occurred"),
+]
+_last = threading.local()
+
+
+def classify_download_error(stderr, timed_out=False):
+    """yt-dlp 的 stderr → DOWNLOAD_ERRORS 里的一类。"""
+    if timed_out:
+        return 'network'
+    for kind, pat in _ERROR_PATTERNS:
+        if re.search(pat, stderr or '', re.I):
+            return kind
+    return 'unknown'
+
+
+def last_download_error():
+    """这个线程上一次 download_one 失败的类别（成功或没下过 → None）。"""
+    return getattr(_last, 'kind', None)
+
+
 def download_one(target, dest_dir, section=None):
     """下载单个目标的音频，返回 {'path','title','video_id','thumbnail'} 或 None。
 
@@ -656,6 +703,7 @@ def download_one(target, dest_dir, section=None):
             target['video_url'],
         ]
 
+    _last.kind = None
     for attempt in range(1, _DOWNLOAD_ATTEMPTS + 1):
         fmt = _FORMAT_ATTEMPTS[(attempt - 1) % len(_FORMAT_ATTEMPTS)]
         cmd = build_cmd(fmt)
@@ -665,6 +713,13 @@ def download_one(target, dest_dir, section=None):
             )
         except subprocess.TimeoutExpired:
             result = None
+        if result is None or result.returncode != 0:
+            err = '' if result is None else (result.stderr or '')
+            _last.kind = classify_download_error(err, timed_out=result is None)
+            print(f"[download] {target.get('video_url')} attempt {attempt}: {_last.kind}: "
+                  f"{err.strip().splitlines()[-1][:300] if err.strip() else 'timeout'}")
+            if _last.kind in _PERMANENT:
+                break                    # 视频没了 / 要登录 / 地区限制：再试也一样，别白等
         if result is not None and result.returncode == 0:
             lines = [ln for ln in result.stdout.strip().splitlines() if ln.strip()]
             if len(lines) >= 3 and os.path.isfile(lines[0]):
@@ -680,6 +735,7 @@ def download_one(target, dest_dir, section=None):
                 upload_date = lines[5].strip() if len(lines) >= 6 else ''
                 if not re.fullmatch(r'\d{8}', upload_date):
                     upload_date = target.get('upload_date', '')
+                _last.kind = None
                 return {
                     'path': lines[0],
                     'title': lines[1] or target.get('title') or 'untitled',
@@ -689,8 +745,10 @@ def download_one(target, dest_dir, section=None):
                     'uploader': uploader,
                     'upload_date': upload_date,
                 }
-        if attempt < _DOWNLOAD_ATTEMPTS:
+        if attempt < _DOWNLOAD_ATTEMPTS and _last.kind not in _PERMANENT:
             time.sleep(4 * attempt)      # 4s, 8s 退避
+        if _last.kind in _PERMANENT:
+            break
     # B站「活动页」视频（入选盛典/榜单等）：普通 /video/BVxxx 页 yt-dlp 解析不了
     # （Unable to extract initial state），但同一支片子的活动页 URL 可以。换它再试一次。
     fest = _bili_festival_url(target.get('video_url'))
