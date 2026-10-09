@@ -1652,9 +1652,10 @@ def _download_then_transcribe(task_id, url, engine, q, section=None, offset_sec=
         item = download_one({'video_url': url}, dl_dir, section=section)
         timing['download_s'] = round(time.monotonic() - t0, 1)
         if not item or not item.get('path') or not os.path.isfile(item['path']):
-            taskdb.set_status(task_id, 'failed',
-                              error='Download failed — bad link, private/removed video, or geo-blocked.')
-            q.put(json.dumps({'type': 'error', 'message': 'Download failed — check the link.'}))
+            import downloader as _dl
+            why = _dl.DOWNLOAD_ERRORS[_dl.last_download_error() or 'unknown']
+            taskdb.set_status(task_id, 'failed', error=why)
+            q.put(json.dumps({'type': 'error', 'message': why}))
             return
         title = item.get('title') or url
         # 音频挪出 dl_dir（finally 会删它）：云引擎遇网络错时 worker 会用同一个文件
@@ -3108,7 +3109,9 @@ def _run_chain(state):
                 return
 
             if not item:
+                import downloader as _dl
                 v['status'] = 'download_failed'
+                v['download_error'] = _dl.last_download_error() or 'unknown'     # 界面按类给提示
                 save()
                 return
             # 下完立刻建转写任务（复用引擎池/信号量/taskdb/历史），不等其它视频
@@ -6854,7 +6857,9 @@ def _retranscribe_video(chain_id, index, target, engine):
         with _chain_download_sem:
             item = download_one(target, dl_dir)
         if not item:
-            _update_video(chain_id, index, {'status': 'download_failed'})
+            import downloader as _dl
+            _update_video(chain_id, index, {'status': 'download_failed',
+                                            'download_error': _dl.last_download_error() or 'unknown'})
             return
 
         task_id = str(uuid.uuid4())

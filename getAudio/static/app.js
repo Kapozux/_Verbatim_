@@ -2329,7 +2329,7 @@ async function refreshChainDetail() {
                </label>` : '';
         return `<div class="vg-card ${clickable ? 'vg-clickable' : ''} ${mergeCart.has(v.task_id) ? 'vg-picked' : ''}"${onclick}>
             <div class="vg-thumb-wrap">${thumb}${overlay}${pick}</div>
-            <div class="vg-badge ${st.cls}">${st.label}${engBadge}</div>
+            <div class="vg-badge ${st.cls}"${v.download_error ? ` title="${escapeHtml(T('dlErr.' + v.download_error))}"` : ''}>${st.label}${engBadge}</div>
             <div class="vg-title" title="${escapeHtml(v.title || '')}">${escapeHtml(v.title || '')}</div>
         </div>`;
     }).join('') || `<p class="history-empty">${T('chainDetail.resolving')}</p>`;
