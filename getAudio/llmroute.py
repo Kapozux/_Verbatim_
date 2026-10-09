@@ -56,13 +56,25 @@ _GENERIC = re.compile('|'.join(map(re.escape, _GEN_ZH)) + r'|\b(?:' + '|'.join(_
 
 _state = {'paused_until': 0.0, 'reason': ''}               # 阿里云那条
 _ds_state = {'paused_until': 0.0, 'reason': ''}            # 官方 DeepSeek 那条
+_cu_state = {'paused_until': 0.0, 'reason': ''}            # 用户自己的模型那条
 _lock = threading.Lock()
 
 
+def _cheap_on():
+    return (os.environ.get('CHEAP_TEXT_ROUTE') or 'on').strip().lower() not in ('off', '0', 'false', 'no')
+
+
 def _routes():
-    """现在能走的便宜路由（没停用的），按顺序。"""
+    """现在能走的路由（没停用的），按顺序：用户自己的模型（开了「日常文字也用它」才有）排第一，
+    然后是便宜路由（CHEAP_TEXT_ROUTE 关了就没有）。"""
     now = time.time()
     out = []
+    c = config.custom_llm() if config.custom_llm_everyday() else None
+    if c and now >= _cu_state['paused_until']:
+        out.append({'name': config.custom_llm_provider(c[0]), 'base': c[0], 'key': c[1] or 'none',
+                    'model': c[2], 'extra': {}, 'state': _cu_state})
+    if not _cheap_on():
+        return out
     if config.dashscope_key() and now >= _state['paused_until']:
         out.append({'name': 'aliyun', 'base': config.ALIYUN_COMPAT_BASE, 'key': config.dashscope_key(),
                     'model': MODEL, 'extra': {'enable_thinking': False}, 'state': _state})
@@ -85,8 +97,6 @@ def china_related(text):
 
 
 def enabled():
-    if (os.environ.get('CHEAP_TEXT_ROUTE') or 'on').strip().lower() in ('off', '0', 'false', 'no'):
-        return False
     return bool(_routes())
 
 
@@ -117,7 +127,7 @@ def text(prompt, purpose):
     for r in _routes():
         try:
             out = _call_openai_compat(prompt, r['model'], r['base'], r['key'], extra_payload=r['extra'] or None,
-                                      label='DeepSeek', purpose=purpose)
+                                      label=r['name'], purpose=purpose)
             if out:
                 return out
         except Exception as e:  # noqa: BLE001

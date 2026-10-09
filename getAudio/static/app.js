@@ -3412,6 +3412,8 @@ const setOpenrouterKey = document.getElementById('set-openrouter-key');
 const SET_COMPAT = [
     { key: 'deepseek', keyField: 'deepseek_key', models: [['set-deepseek-model', 'deepseek_model'], ['set-deepseek-pro-model', 'deepseek_pro_model']] },
     { key: 'kimi', keyField: 'kimi_key', models: [['set-kimi-model', 'kimi_model']] },
+    // 自己的模型（OpenAI 兼容）：端点和模型名都当「模型字段」存（非秘密、可清空）
+    { key: 'custom', keyField: 'custom_key', models: [['set-custom-base', 'custom_base_url'], ['set-custom-model', 'custom_model']] },
 ];
 const settingsMsg = document.getElementById('settings-msg');
 
@@ -3445,6 +3447,7 @@ async function openSettings(pane) {
         document.getElementById('set-gemini-analysis').value = s.gemini_analysis_model || '';
         document.getElementById('set-gemini-extract').value = s.gemini_extract_model || '';
         document.getElementById('set-keep-audio').checked = s.keep_audio === '1';
+        document.getElementById('set-custom-everyday').checked = s.custom_everyday === '1';
         document.getElementById('set-backup-dir').value = s.backup_dir || '';
     } catch { /* 打开即可，拉取失败不阻塞 */ }
     document.getElementById('test-gemini-res').textContent = '';
@@ -3771,6 +3774,7 @@ document.getElementById('settings-save').addEventListener('click', async () => {
         gemini_analysis_model: document.getElementById('set-gemini-analysis').value.trim(),
         gemini_extract_model: document.getElementById('set-gemini-extract').value.trim(),
         keep_audio: document.getElementById('set-keep-audio').checked ? '1' : '',
+        custom_everyday: document.getElementById('set-custom-everyday').checked ? '1' : '',
         backup_dir: document.getElementById('set-backup-dir').value.trim(),
     };
     if (setGeminiKey.value.trim()) body.gemini_key = setGeminiKey.value.trim();

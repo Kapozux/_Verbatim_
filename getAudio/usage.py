@@ -212,6 +212,8 @@ def record(provider, model, purpose, ref=None, chain=None, input_tokens=0, outpu
         ref = ref or ctx.get('ref')
         chain = chain or ctx.get('chain')
         source = None
+        if cost_usd is None and provider == 'local':
+            cost_usd = 0.0                 # 本机跑的模型（Ollama / LM Studio）：不花钱
         if cost_usd is not None:
             source = 'reported'
         else:

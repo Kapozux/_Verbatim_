@@ -386,7 +386,10 @@ def _call_gemini_stream(prompt, model=None, purpose='analysis'):
 
 
 def _provider_of(base_url):
-    """记账用的服务商名：按端点域名认。"""
+    """记账用的服务商名：按端点域名认。用户自己的端点：本机叫 local（记 $0），别处叫 custom。"""
+    c = config.custom_llm()
+    if c and (base_url or '').rstrip('/') == c[0]:
+        return config.custom_llm_provider(c[0])
     for host, name in (('openrouter.ai', 'openrouter'), ('deepseek.com', 'deepseek'), ('moonshot.', 'moonshot')):
         if host in (base_url or ''):
             return name
@@ -444,6 +447,15 @@ def _llm(prompt, provider, model, grounded=False, purpose='analysis'):
 
     国内模型（百炼 / 官方 DeepSeek / Kimi）先发、报错再回 Gemini（10-04 用户：不要预先判断）：审核拦截、超时、接口错
     都是这一次改用 Gemini 同档模型（抽卡、体检用抽取档，其余用合成档），不整期改道。"""
+    if provider == 'custom':
+        # 用户自己的模型：报错就是报错，不偷偷换成云端（选本机模型多半就是为了内容不出本机）
+        c = config.custom_llm()
+        if not c:
+            raise RuntimeError('Your own model is not set up any more (Settings → Your own model).')
+        try:
+            return _call_openai_compat(prompt, model, c[0], c[1] or 'none', label='Your own model', purpose=purpose)
+        except Exception as e:  # noqa: BLE001
+            raise RuntimeError(f'Your own model ({model} at {c[0]}) failed: {str(e)[:200]}') from e
     if provider in _CN_PROVIDERS:
         try:
             return _llm_cn(prompt, provider, model, purpose)

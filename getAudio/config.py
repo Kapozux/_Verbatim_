@@ -191,6 +191,29 @@ def kimi_model():
     return (os.environ.get('KIMI_MODEL') or '').strip() or 'kimi-k2.6'
 
 
+# 用户自己的模型（借 Open Notebook：任意 OpenAI 兼容接口，Ollama / LM Studio / OpenAI / 自建网关……）。
+# Settings 里填端点 + 模型名（key 可空，Ollama 不要 key），每次调用时读 env，保存即生效。
+def custom_llm():
+    """→ (端点, key, 模型名)；没填全返回 None。"""
+    base = (os.environ.get('CUSTOM_LLM_BASE') or '').strip().rstrip('/')
+    model = (os.environ.get('CUSTOM_LLM_MODEL') or '').strip()
+    if not (base and model):
+        return None
+    return base, (os.environ.get('CUSTOM_LLM_KEY') or '').strip(), model
+
+
+def custom_llm_provider(base=None):
+    """记账用的服务商名：本机端点叫 local（记 $0），别的叫 custom（按价格表，没价就是「没定价」）。"""
+    from urllib.parse import urlparse
+    host = (urlparse(base or (custom_llm() or ('',))[0]).hostname or '').lower()
+    return 'local' if host in ('localhost', '127.0.0.1', '::1', '0.0.0.0') or host.endswith('.local') else 'custom'
+
+
+def custom_llm_everyday():
+    """问答 / 摘要 / 标签这些日常文字活也先发给自己的模型（默认关）。"""
+    return (os.environ.get('CUSTOM_LLM_ROUTE') or '').strip() == '1' and custom_llm() is not None
+
+
 ANALYSIS_PRESET_DEFAULT = os.environ.get('ANALYSIS_PRESET') or 'gemini'
 # 预设 → (provider, 抽取模型, 合成模型)
 ANALYSIS_PRESETS = {
@@ -207,10 +230,16 @@ ANALYSIS_PRESETS = {
 
 def resolve_analysis(preset):
     """预设名 → (provider, 抽取模型, 合成模型)。未知则回落 gemini。
+    custom：用户自己的 OpenAI 兼容模型（没配置时回落 gemini）。
 
     运行时读 env（Settings 保存即生效，不用重启）：gemini 预设的两档模型
     可被 GEMINI_EXTRACT_MODEL / GEMINI_ANALYSIS_MODEL 覆盖。
     """
+    if (preset or ANALYSIS_PRESET_DEFAULT) == 'custom':
+        c = custom_llm()
+        if c:
+            return ('custom', c[2], c[2])
+        preset = 'gemini'                          # 端点被清空了：老链条照旧能跑
     p = ANALYSIS_PRESETS.get(preset or ANALYSIS_PRESET_DEFAULT,
                              ANALYSIS_PRESETS['gemini'])
     if p[0] == 'gemini':

@@ -75,6 +75,11 @@ _SETTING_ENV = {
     'deepseek_model': 'DEEPSEEK_MODEL',
     'deepseek_pro_model': 'DEEPSEEK_PRO_MODEL',
     'kimi_model': 'KIMI_MODEL',
+    # 用户自己的模型（OpenAI 兼容：Ollama / LM Studio / OpenAI……）
+    'custom_key': 'CUSTOM_LLM_KEY',
+    'custom_base_url': 'CUSTOM_LLM_BASE',
+    'custom_model': 'CUSTOM_LLM_MODEL',
+    'custom_everyday': 'CUSTOM_LLM_ROUTE',      # '1' = 问答 / 摘要等日常文字也先用它
     # Models（非秘密，运行时读 env，保存即生效）
     'whisper_model': 'WHISPER_MODEL_SIZE',
     'gemini_transcribe_model': 'GEMINI_TRANSCRIBE_MODEL',
@@ -89,8 +94,9 @@ _SETTING_ENV = {
 # 非秘密、可清空（空 = 回默认）的设置字段
 _PLAIN_FIELDS = ('gemini_base_url', 'whisper_model', 'gemini_transcribe_model',
                  'gemini_analysis_model', 'gemini_extract_model', 'keep_audio', 'backup_dir',
-                 'deepseek_model', 'deepseek_pro_model', 'kimi_model')
-_KEY_FIELDS = ('gemini_key', 'dashscope_key', 'openrouter_key', 'deepseek_key', 'kimi_key')
+                 'deepseek_model', 'deepseek_pro_model', 'kimi_model',
+                 'custom_base_url', 'custom_model', 'custom_everyday')
+_KEY_FIELDS = ('gemini_key', 'dashscope_key', 'openrouter_key', 'deepseek_key', 'kimi_key', 'custom_key')
 
 
 def _keep_audio():
@@ -7246,7 +7252,7 @@ def api_settings_get():
         'dashscope': {'set': dset, 'hint': dhint},
         'openrouter': {'set': oset, 'hint': ohint},
     }
-    for name, env in (('deepseek', 'DEEPSEEK_API_KEY'), ('kimi', 'MOONSHOT_API_KEY')):
+    for name, env in (('deepseek', 'DEEPSEEK_API_KEY'), ('kimi', 'MOONSHOT_API_KEY'), ('custom', 'CUSTOM_LLM_KEY')):
         kset, khint = _mask_key(env)
         out[name] = {'set': kset, 'hint': khint}
     # 非秘密字段直接回显供编辑（模型名空 = 用默认）
@@ -7365,7 +7371,7 @@ def api_settings_test():
         except Exception as e:
             return jsonify({'ok': False, 'reason': str(e)[:180]})
 
-    if engine in ('deepseek', 'kimi'):
+    if engine in ('deepseek', 'kimi', 'custom'):
         return jsonify(_test_compat_key(engine, body))
 
     return jsonify({'ok': False, 'reason': 'Unknown engine.'}), 400
@@ -7377,6 +7383,16 @@ def _test_compat_key(engine, body):
         key = (body.get('deepseek_key') or '').strip() or config.deepseek_key()
         base, want = config.DEEPSEEK_COMPAT_BASE, [(body.get('deepseek_model') or '').strip() or config.deepseek_models()[0],
                                                    (body.get('deepseek_pro_model') or '').strip() or config.deepseek_models()[1]]
+    elif engine == 'custom':
+        # 自己的模型：端点 / 模型名用表单里刚填的（没填用存着的）；key 可空（Ollama 不要 key）
+        saved = config.custom_llm() or ('', '', '')
+        base = (body.get('custom_base_url') or '').strip().rstrip('/') or saved[0]
+        key = (body.get('custom_key') or '').strip() or (os.environ.get('CUSTOM_LLM_KEY') or '').strip() or 'none'
+        want = [(body.get('custom_model') or '').strip() or saved[2]]
+        if not base or not want[0]:
+            return {'ok': False, 'reason': 'Enter the endpoint URL and the model name first.'}
+        if not re.match(r'^https?://', base):
+            return {'ok': False, 'reason': 'The endpoint must start with http:// or https://'}
     else:
         key = (body.get('kimi_key') or '').strip() or config.moonshot_key()
         base, want = config.MOONSHOT_COMPAT_BASE, [(body.get('kimi_model') or '').strip() or config.kimi_model()]
@@ -7397,7 +7413,8 @@ def _test_compat_key(engine, body):
         return {'ok': False, 'models': ids,
                 'reason': f'Key works, but this key has no model named {", ".join(missing)}. '
                           f'Available: {", ".join(ids[:12])}'}
-    return {'ok': True, 'models': ids, 'reason': 'Works — key accepted. Models: ' + ', '.join(dict.fromkeys(want))}
+    ok_msg = 'Works — connected. Model: ' if engine == 'custom' else 'Works — key accepted. Models: '
+    return {'ok': True, 'models': ids, 'reason': ok_msg + ', '.join(dict.fromkeys(want))}
 
 
 # ========== 存储 / 音频压缩 ==========
