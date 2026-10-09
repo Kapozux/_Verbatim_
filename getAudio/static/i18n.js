@@ -947,11 +947,6 @@ const STRINGS = {
         'toast.downloadedSrt': 'Downloaded SRT',
         'toast.someLinksNotExpanded': 'Some links could not be expanded: {message}',
 
-        'rowStatus.downloading': 'Downloading…',
-        'rowStatus.readingLocal': 'Reading local file…',
-        'rowStatus.uploading': 'Uploading…',
-        'rowStatus.transcribing': 'Transcribing {percent}%',
-        'rowStatus.done': 'Done',
         'rowStatus.failedCode': 'Failed ({status})',
         'rowStatus.failedMessage': 'Failed: {message}',
         'rowStatus.uploadFailedCode': 'Upload failed ({status})',
@@ -1486,7 +1481,6 @@ const STRINGS = {
         'xhs.readReport': 'Read report',
         'xhs.reportTitle': 'Xiaohongshu research report',
 
-        'settings.pasteKey': 'paste key…',
         'settings.savedKeyHint': 'saved {hint} · leave blank to keep',
         'settings.compressing': 'Compressing {done}/{total}… saved {saved}',
         'settings.compressDone': 'Done. Reclaimed {saved}',
@@ -2336,7 +2330,7 @@ const STRINGS = {
         'rowStatus.queued': '排队中',
         'rowStatus.uploading': '上传中…',
         'rowStatus.downloading': '下载中…',
-        'rowStatus.readingLocal': '读取本地文件…',
+        'rowStatus.readingLocal': '读取本地文件中…',
         'rowStatus.transcribing': '转写中 {percent}%',
         'rowStatus.done': '完成',
         'rowStatus.doneIn': '完成 · {t}',
@@ -2456,11 +2450,6 @@ const STRINGS = {
         'toast.downloadedSrt': '已下载 SRT',
         'toast.someLinksNotExpanded': '部分链接展开失败：{message}',
 
-        'rowStatus.downloading': '下载中…',
-        'rowStatus.readingLocal': '读取本地文件中…',
-        'rowStatus.uploading': '上传中…',
-        'rowStatus.transcribing': '转写中 {percent}%',
-        'rowStatus.done': '完成',
         'rowStatus.failedCode': '失败（{status}）',
         'rowStatus.failedMessage': '失败：{message}',
         'rowStatus.uploadFailedCode': '上传失败（{status}）',
@@ -2995,7 +2984,6 @@ const STRINGS = {
         'xhs.readReport': '阅读报告',
         'xhs.reportTitle': '小红书调研报告',
 
-        'settings.pasteKey': '粘贴 key…',
         'settings.savedKeyHint': '已保存 {hint} · 留空保留原值',
         'settings.compressing': '压缩中 {done}/{total}… 已省下 {saved}',
         'settings.compressDone': '完成——省下 {saved}',
@@ -3036,8 +3024,14 @@ const STRINGS = {
     },
 };
 
+// 浏览器禁了存储（隐私模式、被拦的站点数据）时一读 localStorage 就抛错；这是第一个加载的脚本，
+// 在顶层抛错会让后面所有脚本跟着 ReferenceError，所以读写都包起来
+function _langPref() {
+    try { return localStorage.getItem('getaudio_ui_lang'); } catch (e) { return null; }
+}
+
 // 演示实例一律英文（给外面的人看），不读本机偏好
-let currentLang = window.VERBATIM_DEMO ? 'en' : (localStorage.getItem('getaudio_ui_lang')
+let currentLang = window.VERBATIM_DEMO ? 'en' : (_langPref()
     || (navigator.language && navigator.language.toLowerCase().startsWith('zh') ? 'zh' : 'en'));
 
 // 命名为 T() 而不是 t()：app.js 里大量循环变量本来就叫 t（列表项/标签/任务……），
@@ -3063,7 +3057,7 @@ function applyStaticI18n(root) {
 
 function setLang(lang) {
     currentLang = (lang === 'zh' && !window.VERBATIM_DEMO) ? 'zh' : 'en';
-    localStorage.setItem('getaudio_ui_lang', currentLang);
+    try { localStorage.setItem('getaudio_ui_lang', currentLang); } catch (e) { /* 存不上：这次会话照样切 */ }
     document.documentElement.lang = currentLang === 'zh' ? 'zh-CN' : 'en';
     applyStaticI18n();
     document.dispatchEvent(new CustomEvent('langchange'));
