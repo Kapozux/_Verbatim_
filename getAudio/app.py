@@ -7401,6 +7401,20 @@ def _mask_key(env_name):
     return True, '••••' + v[-4:] if len(v) >= 4 else '••••'
 
 
+@app.route('/api/openapi.json')
+def api_openapi():
+    """接口文档（OpenAPI 3）：从路由表和 docstring 现生成。"""
+    import openapi
+    return jsonify(openapi.spec(app))
+
+
+@app.route('/api/docs')
+def api_docs():
+    """接口文档页（给人看，不连外网）。"""
+    import openapi
+    return Response(openapi.DOCS_PAGE, mimetype='text/html')
+
+
 @app.route('/api/settings', methods=['GET'])
 def api_settings_get():
     gset, ghint = _mask_key('GEMINI_API_KEY')
