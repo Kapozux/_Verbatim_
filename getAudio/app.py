@@ -324,6 +324,33 @@ def probe_audio_duration_seconds(filepath):
         return None
 
 
+def preflight_media(path):
+    """上传 / 本机路径进队列之前看一眼内容（借 Open Notebook 的 _assert_file_supported）：
+    空文件、ffprobe 读不出来的（坏文件、改了后缀的文档）、没有音轨的（屏幕录制）当场拒收，
+    别等进了引擎池、占着线程才失败。→ None 表示可以转，否则是给用户看的原因。
+    没装 ffprobe / 探测超时：不拦（交给后面的流水线照旧处理）。"""
+    try:
+        if os.path.getsize(path) == 0:
+            return 'The file is empty.'
+    except OSError as e:
+        return f'Cannot read the file: {e}'
+    ffprobe_bin = resolve_ffprobe_binary()
+    if not os.path.exists(ffprobe_bin):
+        return None
+    try:
+        pr = subprocess.run([ffprobe_bin, '-v', 'error', '-show_entries', 'stream=codec_type',
+                             '-of', 'csv=p=0', path], capture_output=True, text=True, timeout=30)
+    except (subprocess.SubprocessError, OSError):
+        return None
+    if pr.returncode != 0:
+        ext = path.rsplit('.', 1)[-1].lower() if '.' in os.path.basename(path) else ''
+        return ("This file can't be read as audio or video. It may be damaged, or not really a "
+                + (f'.{ext} ' if ext else '') + 'file.')
+    if 'audio' not in (pr.stdout or ''):
+        return 'This file has no audio track (no sound), so there is nothing to transcribe. Screen recordings often look like this.'
+    return None
+
+
 def extract_audio_from_video(video_path, output_path, compressed=False):
     """从视频抽音轨。compressed=False → 16k 单声道 WAV（本地 Whisper 用，无损）；
     compressed=True → Opus 单声道 16k（云引擎用：一小时 115MB 的 WAV 变成 ~21MB，
@@ -1309,6 +1336,13 @@ def _enqueue_task(file, engine, speaker_count=None, extra_meta=None):
     filename = f"{task_id}.{ext}"
     filepath = os.path.join(config.UPLOAD_FOLDER, filename)
     file.save(filepath)
+    bad = preflight_media(filepath)
+    if bad:
+        try:
+            os.remove(filepath)
+        except OSError:
+            pass
+        return None, bad
 
     # 先落库再入队：服务中途重启也能从 DB 找回这个任务
     taskdb.create(task_id, file.filename, engine, speaker_count, filepath)
@@ -1382,6 +1416,9 @@ def _enqueue_local_task(path, engine, speaker_count=None):
                       'Verbatim in System Settings → Privacy & Security.')
     except OSError as e:
         return None, f'Cannot read the file: {e}'
+    bad = preflight_media(path)
+    if bad:
+        return None, bad
 
     task_id = str(uuid.uuid4())
     ext = path.rsplit('.', 1)[1].lower() if '.' in path else 'mp3'
