@@ -1086,7 +1086,7 @@ function buildHistoryCard(entry) {
     delBtn.textContent = T('common.delete');
     delBtn.addEventListener('click', async () => {
         const label = entry.ai_title || entry.filename;
-        if (!confirm(T('confirm.deleteHistory', { label }))) return;
+        if (!confirm(T('confirm.deleteHistory', { label }) + await deleteImpact(`/api/history/${entry.id}/delete_preview`))) return;
         try {
             const resp = await fetch(`/api/history/${entry.id}`, { method: 'DELETE' });
             if (!resp.ok) {
@@ -2496,8 +2496,22 @@ async function stopChain(chainId, ev) {
     loadChains();
 }
 
+// 删除前先问后端会牵连什么（借 Open Notebook 的删除预览），拼成确认框里的几行；问不到就只显示原来那句
+async function deleteImpact(url) {
+    let p;
+    try { p = await (await fetch(url)).json(); } catch { return ''; }
+    const names = list => list.map(x => x.name || '—').join('、');
+    const lines = [];
+    if ((p.notebooks || []).length) lines.push(T('confirm.impactNotebooks', { names: names(p.notebooks) }));
+    if (p.docs_deleted) lines.push(T('confirm.impactDocsGone', { n: p.docs_deleted }));
+    if (p.docs_kept) lines.push(T('confirm.impactDocsKept', { n: p.docs_kept }));
+    if (p.studio_outputs) lines.push(T('confirm.impactStudio', { n: p.studio_outputs }));
+    if ((p.cited_by || []).length) lines.push(T('confirm.impactCitedBy', { names: names(p.cited_by) }));
+    return lines.length ? '\n\n' + lines.map(l => '• ' + l).join('\n') : '';
+}
+
 async function deleteChain(chainId, fromDetail) {
-    if (!confirm(T('confirm.chainDeleteFull'))) return;
+    if (!confirm(T('confirm.chainDeleteFull') + await deleteImpact(`/api/chain/${chainId}/delete_preview`))) return;
     await fetch(`/api/chain/${chainId}`, { method: 'DELETE' });
     if (fromDetail) closeChainDetail();
     loadChains();

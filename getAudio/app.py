@@ -2087,6 +2087,33 @@ def api_history_audio(task_id):
     return resp
 
 
+def _notebook_regs():
+    """→ [(笔记本 id, 名字, 登记表)]：所有有 sources.json 的笔记本。"""
+    out = []
+    try:
+        names = os.listdir(CHAINS_DIR)
+    except OSError:
+        return out
+    for cid in sorted(names):
+        if not _CHAIN_ID_RE.match(cid) or not os.path.isfile(_reg_path(cid)):
+            continue
+        try:
+            name = _read_chain(cid).get('author') or ''
+        except Exception:  # noqa: BLE001
+            name = ''
+        out.append((cid, name, _reg(cid)))
+    return out
+
+
+@app.route('/api/history/<task_id>/delete_preview')
+def api_history_delete_preview(task_id):
+    """删之前先看：哪些笔记本把这条转写当来源（删了会从它们里面拿掉）。"""
+    if not _is_valid_task_id(task_id):
+        return jsonify({'error': 'Invalid task id'}), 400
+    return jsonify({'notebooks': [{'id': cid, 'name': name} for cid, name, reg in _notebook_regs()
+                                  if any(r.get('task_id') == task_id for r in reg['recordings'])]})
+
+
 @app.route('/api/history/<task_id>', methods=['DELETE'])
 def api_history_delete(task_id):
     """Delete a saved transcription and its files."""
@@ -2101,6 +2128,17 @@ def api_history_delete(task_id):
     if os.path.isdir(task_dir):
         shutil.rmtree(task_dir, ignore_errors=True)
         library.changed(task_id)
+        # 级联：笔记本登记表里还挂着它的话，来源栏会把它当成「转写中」、一直轮询。
+        # 博主频道里的期不动（那是频道的一部分，chain.json 里的 task_id 留着，下次同步才不会重转、重花钱）
+        with _chain_write_lock:
+            for cid, _name, reg in _notebook_regs():
+                if not any(r.get('task_id') == task_id for r in reg['recordings']):
+                    continue
+                reg['recordings'] = [r for r in reg['recordings'] if r.get('task_id') != task_id]
+                for f in reg.get('folders') or []:
+                    f['items'] = [x for x in f.get('items') or [] if x != task_id]
+                _reg_save(cid, reg)
+        taskdb.delete(task_id)
         return jsonify({'ok': True})
     return jsonify({'error': 'Not found'}), 404
 
@@ -6899,6 +6937,34 @@ def api_chain_retranscribe(chain_id, index):
     return jsonify({'ok': True})
 
 
+def _orphan_split(doc_ids, leaving):
+    """→ (会变成没人用的文档, 别的笔记本还在用的文档)。leaving：要删的那个笔记本，不算「在用」。"""
+    import sources
+    doc_ids = [d for d in doc_ids if sources.valid_doc_id(d)]
+    used = set()
+    for cid, _name, reg in _notebook_regs():
+        if cid != leaving:
+            used |= {d.get('doc_id') for d in reg['docs']}
+    return [d for d in doc_ids if d not in used], [d for d in doc_ids if d in used]
+
+
+@app.route('/api/chain/<chain_id>/delete_preview')
+def api_chain_delete_preview(chain_id):
+    """删笔记本 / 博主之前先看（借 Open Notebook 的 get_delete_preview）：哪些文档跟着删、哪些留着、
+    工作台产出几份、哪些别的笔记本把它当博主引用着（删了会从它们里面拿掉）。"""
+    import glob as _glob
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    gone, kept = _orphan_split(_reg_doc_ids(chain_id), chain_id)
+    return jsonify({
+        'docs_deleted': len(gone), 'docs_kept': len(kept),
+        'recordings': len(_reg(chain_id)['recordings']),
+        'studio_outputs': len(_glob.glob(os.path.join(_chain_dir(chain_id), 'studio', '*.json'))),
+        'cited_by': [{'id': cid, 'name': name} for cid, name, reg in _notebook_regs()
+                     if cid != chain_id and any(r.get('chain_id') == chain_id for r in reg['channels'])],
+    })
+
+
 @app.route('/api/chain/<chain_id>', methods=['DELETE'])
 def api_chain_delete(chain_id):
     if not _CHAIN_ID_RE.match(chain_id or ''):
@@ -6916,6 +6982,17 @@ def api_chain_delete(chain_id):
     # 只删链条目录（分析产物）；转写结果仍留在历史里
     shutil.rmtree(cdir, ignore_errors=True)
     _drop_orphan_docs(doc_ids)
+    # 级联：别的笔记本把它当博主引用着的，引用拿掉、字母作废（跟手动「拿掉来源」一样，旧回答的出处不会指到别人身上）
+    with _chain_write_lock:
+        for cid, _name, reg in _notebook_regs():
+            gone = [r for r in reg['channels'] if r.get('chain_id') == chain_id]
+            if not gone:
+                continue
+            reg['retired_tags'] = sorted(set(reg.get('retired_tags') or []) | {r.get('tag') for r in gone if r.get('tag')})
+            reg['channels'] = [r for r in reg['channels'] if r.get('chain_id') != chain_id]
+            for f in reg.get('folders') or []:
+                f['items'] = [x for x in f.get('items') or [] if x != chain_id]
+            _reg_save(cid, reg)
     return jsonify({'ok': True})
 
 

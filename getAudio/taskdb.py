@@ -117,6 +117,12 @@ def kwargs_of(row):
     return v if isinstance(v, dict) else None
 
 
+def delete(task_id):
+    """转写删了：这一行也删，免得重启恢复、统计时还看到它。"""
+    with _write_lock, _conn() as c:
+        c.execute('DELETE FROM tasks WHERE id=?', (task_id,))
+
+
 def unfinished():
     """服务启动时调用：返回所有没跑完的任务行。"""
     with _conn() as c:
