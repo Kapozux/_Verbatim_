@@ -97,7 +97,7 @@ async function stLoad() {
     const cur = stState.cur;
     if (cur && wasRunning.has(cur.id) && stState.items.some(o => o.id === cur.id && o.status !== 'running')) stView(cur.id);
     clearTimeout(stState.timer);
-    if (stState.items.some(o => o.status === 'running')) stState.timer = setTimeout(stLoad, 2500);
+    if (stState.items.some(o => o.status === 'running')) stState.timer = cxLater(stLoad, 2500);
 }
 
 function stMeta(o) {

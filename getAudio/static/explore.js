@@ -24,6 +24,30 @@ function cxClearTimers() {
     cx.timers = {};
 }
 
+// 笔记本里所有「后台在跑，隔几秒再看」的轮询都走这里（借 Open Notebook 的做法：轮询跟着视图走）：
+// 离开这个笔记本（cx.id 变了）就不再跑；标签页在后台时先停，切回前台再接着看。
+function cxLater(fn, ms) {
+    const id = cx.id;
+    return setTimeout(function run() {
+        if (cx.id !== id) return;
+        if (document.hidden) {
+            document.addEventListener('visibilitychange', () => { if (cx.id === id) run(); }, { once: true });
+            return;
+        }
+        fn();
+    }, ms);
+}
+
+// 离开笔记本页（去资料库、转写详情、设置……）：停掉笔记本里的全部轮询。
+// 以前只清了 chainDetailTimer，来源栏、工作台、读书笔记、声纹的轮询还拿着旧 id 一直跑
+function notebookLeave() {
+    cxClearTimers();
+    [typeof srcState !== 'undefined' && srcState, typeof stState !== 'undefined' && stState,
+     typeof ntState !== 'undefined' && ntState, typeof vcState !== 'undefined' && vcState]
+        .forEach(st => { if (st) clearTimeout(st.timer); });
+    cx.id = null;
+}
+
 // ----- 入口 1：打开项目（app.js openChainDetail）——先复位，中间默认是问答，Studio 里哪些能用等数据到了再定 -----
 function exploreOpen(id) {
     cxClearTimers();
@@ -337,7 +361,7 @@ async function subLoad(id) {
     } catch { return; }
     subRender();
     digestRender(cx.sub.digest);
-    if (cx.sub.running) cx.timers.sub = setTimeout(() => subLoad(id), 8000);
+    if (cx.sub.running) cx.timers.sub = cxLater(() => subLoad(id), 8000);
 }
 
 function subRender() {
@@ -379,7 +403,7 @@ function subRender() {
     if (q('#sub-now')) q('#sub-now').onclick = async () => {
         await post({ run_now: true });
         cx.sub.running = true; subRender();
-        cx.timers.sub = setTimeout(() => subLoad(id), 8000);
+        cx.timers.sub = cxLater(() => subLoad(id), 8000);
     };
     if (q('#sub-freq')) q('#sub-freq').onchange = async e => {
         await post({ interval_h: +e.target.value });
@@ -606,9 +630,9 @@ async function readGenerate(lens, force) {
                     return;
                 }
             } catch { /* 抖动忽略 */ }
-            cx.timers.lens = setTimeout(poll, 3000);
+            cx.timers.lens = cxLater(poll, 3000);
         };
-        cx.timers.lens = setTimeout(poll, 3000);
+        cx.timers.lens = cxLater(poll, 3000);
     } catch {
         if (status) status.textContent = T('chainDetail.generationFailedGeneric');
         if (typeof stLensBusy === 'function') stLensBusy(key, false);
@@ -1271,13 +1295,13 @@ async function topicsLoad() {
     if (prog && (job || djob) && topicsState.data && topicsState.data.tagged) {
         prog.textContent = job ? T('tp.tagging', { a: job.done, b: job.total || '…' })
             : T('tp.fetchingDates', { a: djob.done, b: djob.total || '…' });
-        cx.timers.topics = setTimeout(topicsLoad, 5000);
+        cx.timers.topics = cxLater(topicsLoad, 5000);
         return;
     }
     const wasRunning = topicsState.data && topicsState.data.running;
     topicsState.data = d;
     d.running = !!(job || djob);
-    if (job || djob) cx.timers.topics = setTimeout(topicsLoad, 5000);
+    if (job || djob) cx.timers.topics = cxLater(topicsLoad, 5000);
     if (wasRunning || !topicsState.cards) topicsState.cards = {};
 
     if (!d.tagged) {
@@ -1342,7 +1366,7 @@ async function beliefsLoad() {
     if (cxPid() !== id || !document.getElementById('tp-beliefs')) return;
     clearTimeout(cx.timers.beliefs);
     const job = d.job && d.job.status === 'running' ? d.job : null;
-    if (job) cx.timers.beliefs = setTimeout(beliefsLoad, 4000);
+    if (job) cx.timers.beliefs = cxLater(beliefsLoad, 4000);
     const est = d.estimate || {};
     const err = d.job && d.job.status === 'error' ? `<p class="cx-err">${escapeHtml(d.job.error)}</p>` : '';
     const btn = (label) => window.VERBATIM_DEMO || job ? '' :

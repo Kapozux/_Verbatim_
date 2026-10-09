@@ -3816,6 +3816,8 @@ function applyRoute() {
         .split('/').map(decodeURIComponent);
     // 离开转写详情（返回、侧栏、后退）时把播放器停掉，别在后台继续放
     if (parts[0] !== 'detail' && detailAudioPlayer) detailAudioPlayer.pause();
+    // 离开笔记本页：笔记本里的轮询一并停掉（回来时 openChainDetail 会重新打开、重新开始）
+    if (!(parts[0] === 'chain' && parts[1] && parts[2] !== 'doc') && typeof notebookLeave === 'function') notebookLeave();
     // 演示里转写 / 小红书两个入口收起来了（会花钱），直接落到博主页
     if (IS_DEMO && parts[0] === 'tab' && ['transcribe', 'xhs'].includes(parts[1])) {
         navigate('tab/creators', { replace: true });

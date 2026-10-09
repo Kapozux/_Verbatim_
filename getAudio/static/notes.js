@@ -20,7 +20,7 @@ async function ntLoad() {
         try { ntState.est = (await (await fetch(`/api/chain/${id}/notes?estimate=1`)).json()).estimate_usd; } catch { ntState.est = null; }
     }
     ntRender();
-    if (d.reading) ntState.timer = setTimeout(() => { if (cx.id === id) ntLoad(); }, 3000);
+    if (d.reading) ntState.timer = cxLater(ntLoad, 3000);
 }
 
 function ntSrcRowHtml() {

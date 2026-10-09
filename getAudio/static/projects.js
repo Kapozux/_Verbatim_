@@ -133,7 +133,7 @@ async function srcLoad() {
     const sig = (d.channels || []).map(ch => ch.chain_id + ch.stage).join();
     if (srcState.chSig !== undefined && srcState.chSig !== sig && typeof peopleLoad === 'function') peopleLoad();
     srcState.chSig = sig;
-    if (busy) srcState.timer = setTimeout(() => { if (cx.id === id) srcLoad(); }, 4000);
+    if (busy) srcState.timer = cxLater(srcLoad, 4000);
     if (pjOpenAddFor === id) {
         pjOpenAddFor = null;
         if (!n) openAddSources();
