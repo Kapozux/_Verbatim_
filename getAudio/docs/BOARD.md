@@ -99,7 +99,9 @@
 | 0010 | 每份来源一份读书笔记，工作台产出从笔记出发 | 分支 feature/notebook-fixes |
 | 0011 | 长播客按章节写 | 分支 feature/long-podcast |
 | 0012 | 出处时间点走逐词时间轴（YouTube 字幕 / Qwen / 本机 Whisper 对齐），不估算 | 分支 feature/cite-cards |
-| 0013 | （下一个可用） | |
+| 0013 | 用户自己的模型（OpenAI 兼容 / Ollama）选了就不偷偷换云端 | 分支 feature/on-port |
+| 0014 | 接口文档从路由表和 docstring 现生成，不手写 schema | 分支 feature/on-port |
+| 0015 | （下一个可用） | |
 
 ## 最近做完（10-02 ~ 10-03）
 
