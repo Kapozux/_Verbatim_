@@ -28,4 +28,13 @@ t.check('时政词 ≥2 次的期改走 Gemini 抽取档', analyze._route_episod
 t.check('只出现 1 次不改', analyze._route_episode(p, m, CS + '顺便提一句新疆。', 'deepseek_guard') == (p, m))
 t.check('普通 deepseek 预设不预判', analyze._route_episode(p, m, POL, 'deepseek') == (p, m))
 t.check('Gemini 预设原样', analyze._route_episode(*g[:2], POL, 'gemini') == g[:2])
+
+sent = []
+analyze._call_openai_compat = lambda prompt, model, base, key, extra_payload=None, label='', purpose='': \
+    sent.append((purpose, extra_payload)) or 'ok'
+os.environ['DASHSCOPE_API_KEY'] = 'sk-test'
+for purpose in ('cards', 'review', 'synth'):
+    analyze._llm_cn('x', 'aliyun', 'deepseek-v4-flash-0731', purpose)
+t.check('百炼上抽卡、体检关思考（10-10 实测：卡多了、便宜七倍），写画像照旧', sent == [
+    ('cards', {'enable_thinking': False}), ('review', {'enable_thinking': False}), ('synth', None)], str(sent))
 t.finish()

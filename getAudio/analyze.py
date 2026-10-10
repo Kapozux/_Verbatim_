@@ -487,7 +487,9 @@ def _llm_cn(prompt, provider, model, purpose):
         key = config.dashscope_key()
         if not key:
             raise RuntimeError('DASHSCOPE_API_KEY 未设置（阿里云分析需要）')
-        return _call_openai_compat(prompt, model, ALIYUN_COMPAT_BASE, key,
+        # 抽卡 / 体检是照原文摘：关思考。10-10 立党那期实测卡 20 → 26 张、$0.017 → $0.0025、快好几倍
+        extra = {'enable_thinking': False} if purpose in ('cards', 'review') else None
+        return _call_openai_compat(prompt, model, ALIYUN_COMPAT_BASE, key, extra_payload=extra,
                                    label='阿里云', purpose=purpose)
     if provider == 'deepseek':
         key = config.deepseek_key()
