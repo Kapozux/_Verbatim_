@@ -31,7 +31,7 @@ import usage
 
 PURPOSES = {'ask', 'study', 'tag', 'summary', 'enrich', 'review', 'reflect', 'digest', 'compare',
             'translate', 'speakers', 'beliefs', 'demo', 'notes'}
-MODEL = os.environ.get('CHEAP_TEXT_MODEL') or 'deepseek-v4-flash'
+MODEL = os.environ.get('CHEAP_TEXT_MODEL') or 'deepseek-v4-flash-0731'   # 10-10 百炼下掉了不带日期的 deepseek-v4-flash（404），同一个模型
 GENERIC_MIN = 3
 PAUSE_S = 30 * 60
 

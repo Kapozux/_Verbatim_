@@ -106,6 +106,8 @@
 
 ## 最近做完（10-02 ~ 10-03）
 
+- 10-10 百炼下掉了不带日期的 `deepseek-v4-flash`（404 model_not_found，16:16 后所有省钱路由和 deepseek 预设都悄悄退回 Gemini）：默认改成同一个模型的 `deepseek-v4-flash-0731`（官方 DeepSeek key 那条名字没变）。另加分析预设 `deepseek_guard`（只从接口选）：抽卡走 DeepSeek、时政词 ≥2 次的期走 Gemini，给立党 520 期跑人物画像用；`CHAIN_ANALYSIS_CONCURRENCY` 可用环境变量调，默认仍是 4
+
 - 10-07 复习笔记模板：工作台格子「复习笔记」，笔记本存一份模板，开了「加来源时自动出」就给每份新来源按模板出一份笔记（带出处，跟报告一样能导出）；实测两节《药》课 $0.0027 / $0.0091、24 秒。交接 `docs/handoff/review-notes.md`
 - 10-06 备份补漏：上传的文档原件（_docs，PDF / PPTX，之前一份没备过）、笔记本 studio 里的播客 mp3 / 幻灯片 pptx、声纹和向量 .npz；跨站防护：别的网页不能再让本机 Verbatim 转写花钱，只监听本机时防 DNS 重绑定（`a9617d9`，已上 5001；脚本 / MCP 不受影响）
 

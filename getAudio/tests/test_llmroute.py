@@ -84,7 +84,7 @@ c = analyze._call_gemini(SAFE, purpose='cards')
 d = analyze._call_gemini(SAFE, purpose='ask', grounded=True)
 print('2 通用：', a, b, c, d, '| DeepSeek 调用', calls['ds'])
 ok['generic'] = (a == b == 'DS:ask' and c == d == 'GEM' and len(calls['ds']) == 2
-                 and calls['ds'][0]['model'] == 'deepseek-v4-flash' and calls['ds'][0]['extra'] == {'enable_thinking': False})
+                 and calls['ds'][0]['model'] == llmroute.MODEL and calls['ds'][0]['extra'] == {'enable_thinking': False})
 
 # 3 失败回退：审核拦截只回退这一次；欠费停 30 分钟、这期间不再去试
 reset()
@@ -142,7 +142,7 @@ s3 = ''.join(analyze._call_gemini_stream(HOT, purpose='ask'))
 usage.record = real_record
 print('5 流式：', s1, '|', s2, '|', s3, '| 记账', [(a[:3], k.get('input_tokens'), k.get('output_tokens')) for a, k in recorded][:2])
 ok['stream'] = (s1 == '你好，世界' and s2 == s3 == 'GEM-STREAM'
-                and recorded[0][0][:3] == ('aliyun', 'deepseek-v4-flash', 'ask') and recorded[0][1]['input_tokens'] == 1000)
+                and recorded[0][0][:3] == ('aliyun', llmroute.MODEL, 'ask') and recorded[0][1]['input_tokens'] == 1000)
 
 # 6 摘要 / 补全标签 / 回顾面板都接上了：提到中国的也先走 DeepSeek；DeepSeek 审核拦截才回 Gemini，回 Gemini 时不开思考
 reset()

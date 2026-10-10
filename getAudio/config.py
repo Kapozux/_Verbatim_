@@ -218,9 +218,9 @@ ANALYSIS_PRESET_DEFAULT = os.environ.get('ANALYSIS_PRESET') or 'gemini'
 # 预设 → (provider, 抽取模型, 合成模型)
 ANALYSIS_PRESETS = {
     'gemini':   ('gemini', GEMINI_EXTRACT_MODEL, GEMINI_ANALYSIS_MODEL),
-    'deepseek': ('aliyun', 'deepseek-v4-flash', 'deepseek-v4-pro'),
+    'deepseek': ('aliyun', 'deepseek-v4-flash-0731', 'deepseek-v4-pro'),
     # 同上，但时政词多的期抽卡改走 Gemini（analyze._route_episode）；只从接口选，界面不列
-    'deepseek_guard': ('aliyun', 'deepseek-v4-flash', 'deepseek-v4-pro'),
+    'deepseek_guard': ('aliyun', 'deepseek-v4-flash-0731', 'deepseek-v4-pro'),
     'qwen':     ('aliyun', 'qwen3.7-plus', 'qwen3.7-plus'),
     'kimi':     ('aliyun', 'kimi-k2.6', 'kimi-k2.6'),
     'glm':      ('aliyun', 'glm-5.2', 'glm-5.2'),
