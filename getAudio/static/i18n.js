@@ -801,6 +801,7 @@ const STRINGS = {
 
         'brain.gemini': 'Gemini',
         'brain.deepseek': 'DeepSeek',
+        'brain.deepseek_guard': 'DeepSeek (Gemini for political episodes)',
         'brain.custom': 'Your own model',
         'brain.kimi': 'Kimi',
         'brain.glm': 'GLM',
@@ -2335,6 +2336,7 @@ const STRINGS = {
 
         'brain.gemini': 'Gemini',
         'brain.deepseek': 'DeepSeek',
+        'brain.deepseek_guard': 'DeepSeek（时政期用 Gemini）',
         'brain.custom': '自己的模型',
         'brain.kimi': 'Kimi',
         'brain.glm': 'GLM',

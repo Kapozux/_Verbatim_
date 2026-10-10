@@ -100,7 +100,8 @@ def review_transcript(segments, preset=None, window=180):
         return set()
     provider, extract_model, _ = resolve_analysis(preset)
     provider, extract_model = _route_episode(provider, extract_model,
-                                             ' '.join(str(s.get('text') or '') for s in segments if isinstance(s, dict)))
+                                             ' '.join(str(s.get('text') or '') for s in segments if isinstance(s, dict)),
+                                             preset)
     drop = set()
     for base in range(0, len(segments), window):
         chunk = segments[base:base + window]
@@ -436,8 +437,22 @@ def _call_openai_compat(prompt, model, base_url, api_key, extra_payload=None,
 _CN_PROVIDERS = ('aliyun', 'deepseek', 'moonshot')
 
 
-def _route_episode(provider, extract_model, text):
-    """不再按整期预判（10-04 用户：不要预先判断，国内模型报错了再回 Gemini，见 _llm）。留着这个口子，调用处不用改。"""
+_GUARD_SOFT = {'立党', '立黨', '体制内', '體制內', '人大'}   # 博主自己的名字；职业话题里常见（考公、人民大学）
+GUARD_MIN = 2
+
+
+def _political_hits(text):
+    import llmroute
+    return sum(1 for m in llmroute._POLITICAL.finditer(text or '') if m.group(0) not in _GUARD_SOFT)
+
+
+def _route_episode(provider, extract_model, text, preset=None):
+    """普通国内预设不按整期预判（10-04 用户：国内模型报错了再回 Gemini，见 _llm）。
+    deepseek_guard（10-10 用户给立党 520 期选的）：时政词出现 GUARD_MIN 次以上的期改走 Gemini 抽取档——
+    百炼对这类内容可能拦、也可能悄悄删减，后者看不出来。其余期照旧走 DeepSeek。"""
+    if preset == 'deepseek_guard' and provider in _CN_PROVIDERS and _political_hits(text) >= GUARD_MIN:
+        _, g_extract, _ = resolve_analysis('gemini')
+        return 'gemini', g_extract
     return provider, extract_model
 
 
@@ -699,7 +714,7 @@ def analyze_episode(title, transcript_text, author='该博主', verify=False, pr
         if not ok:
             return unusable_episode(title, reason)
     provider, extract_model, _ = resolve_analysis(preset)
-    provider, extract_model = _route_episode(provider, extract_model, transcript_text)
+    provider, extract_model = _route_episode(provider, extract_model, transcript_text, preset)
     chunks = _split_transcript(transcript_text)
     if len(chunks) > 1:
         data = _extract_cards_chunked(title, chunks, author, provider, extract_model)

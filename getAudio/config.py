@@ -93,7 +93,7 @@ ENGINE_CONCURRENCY = {
 # 链条（URL→下载→转写→分析）的全局限流：所有链条共享，不按每条链条算。
 # 这样开 1 条还是 5 条链，对 YouTube 和 Gemini 的瞬时压力恒定，多开只是排队更长、不会叠加超标。
 CHAIN_DOWNLOAD_CONCURRENCY = 4   # 全部链条同时下载的视频数上限（再高易被 YouTube 限速/风控）
-CHAIN_ANALYSIS_CONCURRENCY = 4   # 全部链条同时进行的逐期分析请求数上限
+CHAIN_ANALYSIS_CONCURRENCY = int(os.environ.get('CHAIN_ANALYSIS_CONCURRENCY') or 4)   # 全部链条同时进行的逐期分析请求数上限；大批走 DeepSeek 时可临时调高
 
 # yt-dlp 元数据语言偏好：拉中文标题，避免 UP 主上传的英文翻译标题被抓到
 YTDLP_LANG = 'zh-CN'
@@ -219,6 +219,8 @@ ANALYSIS_PRESET_DEFAULT = os.environ.get('ANALYSIS_PRESET') or 'gemini'
 ANALYSIS_PRESETS = {
     'gemini':   ('gemini', GEMINI_EXTRACT_MODEL, GEMINI_ANALYSIS_MODEL),
     'deepseek': ('aliyun', 'deepseek-v4-flash', 'deepseek-v4-pro'),
+    # 同上，但时政词多的期抽卡改走 Gemini（analyze._route_episode）；只从接口选，界面不列
+    'deepseek_guard': ('aliyun', 'deepseek-v4-flash', 'deepseek-v4-pro'),
     'qwen':     ('aliyun', 'qwen3.7-plus', 'qwen3.7-plus'),
     'kimi':     ('aliyun', 'kimi-k2.6', 'kimi-k2.6'),
     'glm':      ('aliyun', 'glm-5.2', 'glm-5.2'),
@@ -248,7 +250,7 @@ def resolve_analysis(preset):
                 os.environ.get('GEMINI_ANALYSIS_MODEL') or p[2])
     # DeepSeek / Kimi：用户填了自己的官方 key 就直接走官方，没填照旧走阿里云百炼
     name = preset or ANALYSIS_PRESET_DEFAULT
-    if name == 'deepseek' and deepseek_key():
+    if name in ('deepseek', 'deepseek_guard') and deepseek_key():
         return ('deepseek',) + deepseek_models()
     if name == 'kimi' and moonshot_key():
         return ('moonshot', kimi_model(), kimi_model())
