@@ -871,6 +871,12 @@ def _build_digest(episodes, author, provider, extract_model):
     budget = _digest_budget(provider)
     if len(episodes) <= _BATCH_SIZE:
         return _digest(episodes, budget)
+    cache = _digest_cache_path(episodes, author, provider, extract_model, budget)
+    try:
+        with open(cache, 'r', encoding='utf-8') as f:
+            return f.read()
+    except OSError:
+        pass
     batches = [episodes[i:i + _BATCH_SIZE]
                for i in range(0, len(episodes), _BATCH_SIZE)]
     briefs = fanout(
@@ -878,11 +884,32 @@ def _build_digest(episodes, author, provider, extract_model):
         lambda b: _batch_brief(b, author, provider, extract_model),
         concurrency=_BRIEF_CONCURRENCY,
     )
+    ok = all(briefs)
     briefs = [b for b in briefs if b]
     if briefs:
-        return '\n\n---\n\n'.join(
+        out = '\n\n---\n\n'.join(
             f'## 简报 {i + 1}/{len(briefs)}\n{b}' for i, b in enumerate(briefs))[:budget]
+        if ok:                       # 有一批失败就不存：下次重压能补上
+            try:
+                os.makedirs(os.path.dirname(cache), exist_ok=True)
+                with open(cache + '.tmp', 'w', encoding='utf-8') as f:
+                    f.write(out)
+                os.replace(cache + '.tmp', cache)
+            except OSError:
+                pass
+        return out
     return _digest(episodes, budget)  # 全批失败兜底
+
+
+def _digest_cache_path(episodes, author, provider, model, budget):
+    """压好的简报按「作者 + 模型 + 预算 + 每期卡片」存盘：画像和各个镜头共用，卡片没变就不重压。
+    10-11 立党 528 期：每点一个镜头都重新分 22 批压一遍，5–10 分钟。"""
+    import hashlib
+    h = hashlib.sha256(json.dumps(
+        [author, provider, model, budget, _BATCH_SIZE, BRIEF_PROMPT,
+         [[e.get('title'), e.get('cards'), e.get('metrics')] for e in episodes]],
+        ensure_ascii=False, sort_keys=True, default=str).encode('utf-8')).hexdigest()[:32]
+    return os.path.join(config.RESULTS_FOLDER, '_digest_cache', h + '.md')   # _ 开头：资料库列表和备份都跳过
 
 
 def _usable_split(episodes, attempted=None):
