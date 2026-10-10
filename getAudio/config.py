@@ -221,6 +221,8 @@ ANALYSIS_PRESETS = {
     'deepseek': ('aliyun', 'deepseek-v4-flash-0731', 'deepseek-v4-pro'),
     # 同上，但时政词多的期抽卡改走 Gemini（analyze._route_episode）；只从接口选，界面不列
     'deepseek_guard': ('aliyun', 'deepseek-v4-flash-0731', 'deepseek-v4-pro'),
+    # 同上，走 OpenRouter（10-10 百炼欠费时用户要的）
+    'deepseek_or_guard': ('openrouter', 'deepseek/deepseek-v4-flash', 'deepseek/deepseek-v4-pro'),
     'qwen':     ('aliyun', 'qwen3.7-plus', 'qwen3.7-plus'),
     'kimi':     ('aliyun', 'kimi-k2.6', 'kimi-k2.6'),
     'glm':      ('aliyun', 'glm-5.2', 'glm-5.2'),

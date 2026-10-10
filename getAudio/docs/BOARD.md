@@ -106,6 +106,7 @@
 
 ## 最近做完（10-02 ~ 10-03）
 
+- 10-10 阿里云第三次欠费（立党那条误用 /retry，重抓频道转写了 7 期新视频）：加预设 `deepseek_or_guard`，同样分流但 DeepSeek 走 OpenRouter（抽卡关思考，实测一期 $0.007、30 秒），报错这一次回 Gemini；百炼抽卡 / 体检也关了思考。**链只想补分析用 /reanalyze，/retry 会重抓频道、转写新期**
 - 10-10 百炼下掉了不带日期的 `deepseek-v4-flash`（404 model_not_found，16:16 后所有省钱路由和 deepseek 预设都悄悄退回 Gemini）：默认改成同一个模型的 `deepseek-v4-flash-0731`（官方 DeepSeek key 那条名字没变）。另加分析预设 `deepseek_guard`（只从接口选）：抽卡走 DeepSeek、时政词 ≥2 次的期走 Gemini，给立党 520 期跑人物画像用；`CHAIN_ANALYSIS_CONCURRENCY` 可用环境变量调，默认仍是 4
 
 - 10-07 复习笔记模板：工作台格子「复习笔记」，笔记本存一份模板，开了「加来源时自动出」就给每份新来源按模板出一份笔记（带出处，跟报告一样能导出）；实测两节《药》课 $0.0027 / $0.0091、24 秒。交接 `docs/handoff/review-notes.md`

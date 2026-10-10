@@ -439,6 +439,7 @@ _CN_PROVIDERS = ('aliyun', 'deepseek', 'moonshot')
 
 _GUARD_SOFT = {'立党', '立黨', '体制内', '體制內', '人大'}   # 博主自己的名字；职业话题里常见（考公、人民大学）
 GUARD_MIN = 2
+GUARD_PRESETS = ('deepseek_guard', 'deepseek_or_guard')
 
 
 def _political_hits(text):
@@ -450,10 +451,15 @@ def _route_episode(provider, extract_model, text, preset=None):
     """普通国内预设不按整期预判（10-04 用户：国内模型报错了再回 Gemini，见 _llm）。
     deepseek_guard（10-10 用户给立党 520 期选的）：时政词出现 GUARD_MIN 次以上的期改走 Gemini 抽取档——
     百炼对这类内容可能拦、也可能悄悄删减，后者看不出来。其余期照旧走 DeepSeek。"""
-    if preset == 'deepseek_guard' and provider in _CN_PROVIDERS and _political_hits(text) >= GUARD_MIN:
+    if preset in GUARD_PRESETS and provider != 'gemini' and _political_hits(text) >= GUARD_MIN:
         _, g_extract, _ = resolve_analysis('gemini')
         return 'gemini', g_extract
     return provider, extract_model
+
+
+def _or_deepseek(provider, model):
+    """OpenRouter 上的 DeepSeek：跟国内模型一样报错就这一次回 Gemini（欠费、审核、限流）。"""
+    return provider == 'openrouter' and str(model or '').startswith('deepseek/')
 
 
 def _llm(prompt, provider, model, grounded=False, purpose='analysis'):
@@ -471,8 +477,10 @@ def _llm(prompt, provider, model, grounded=False, purpose='analysis'):
             return _call_openai_compat(prompt, model, c[0], c[1] or 'none', label='Your own model', purpose=purpose)
         except Exception as e:  # noqa: BLE001
             raise RuntimeError(f'Your own model ({model} at {c[0]}) failed: {str(e)[:200]}') from e
-    if provider in _CN_PROVIDERS:
+    if provider in _CN_PROVIDERS or _or_deepseek(provider, model):
         try:
+            if provider == 'openrouter':
+                return _llm_other(prompt, provider, model, grounded, purpose)
             return _llm_cn(prompt, provider, model, purpose)
         except Exception as e:  # noqa: BLE001
             _, g_extract, g_synth = resolve_analysis('gemini')
@@ -509,9 +517,11 @@ def _llm_other(prompt, provider, model, grounded, purpose):
         key = os.environ.get('OPENROUTER_API_KEY', '')
         if not key:
             raise RuntimeError('OPENROUTER_API_KEY 未设置 — 在 Settings → OpenRouter 里填 key')
-        # reasoning: OpenRouter 的统一思考开关；对 Claude 4.6+/5 映射为 adaptive thinking
+        # reasoning: OpenRouter 的统一思考开关；对 Claude 4.6+/5 映射为 adaptive thinking。
+        # DeepSeek 抽卡 / 体检关掉（跟百炼那条一样，照原文摘不用想）
+        think = not (_or_deepseek(provider, model) and purpose in ('cards', 'review'))
         return _call_openai_compat(prompt, model, OPENROUTER_COMPAT_BASE, key,
-                                   extra_payload={'reasoning': {'enabled': True}},
+                                   extra_payload={'reasoning': {'enabled': think}},
                                    label='OpenRouter', purpose=purpose)
     return _call_gemini(prompt, grounded=grounded, model=model, purpose=purpose)
 

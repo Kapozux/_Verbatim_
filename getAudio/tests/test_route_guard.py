@@ -37,4 +37,30 @@ for purpose in ('cards', 'review', 'synth'):
     analyze._llm_cn('x', 'aliyun', 'deepseek-v4-flash-0731', purpose)
 t.check('百炼上抽卡、体检关思考（10-10 实测：卡多了、便宜七倍），写画像照旧', sent == [
     ('cards', {'enable_thinking': False}), ('review', {'enable_thinking': False}), ('synth', None)], str(sent))
+
+# 10-10 百炼欠费，用户：走 OpenRouter 上的 DeepSeek
+t.check('deepseek_or_guard 走 OpenRouter 上的 DeepSeek', config.resolve_analysis('deepseek_or_guard')
+        == ('openrouter', 'deepseek/deepseek-v4-flash', 'deepseek/deepseek-v4-pro'))
+o = config.resolve_analysis('deepseek_or_guard')
+t.check('OpenRouter 那条也按关键词分流', analyze._route_episode(o[0], o[1], POL, 'deepseek_or_guard') == ('gemini', g[1])
+        and analyze._route_episode(o[0], o[1], CS, 'deepseek_or_guard') == o[:2])
+sent.clear()
+os.environ['OPENROUTER_API_KEY'] = 'sk-or-test'
+for purpose in ('cards', 'review', 'synth'):
+    analyze._llm('x', 'openrouter', 'deepseek/deepseek-v4-flash', purpose=purpose)
+analyze._llm('x', 'openrouter', 'anthropic/claude-opus-5', purpose='cards')
+t.check('OpenRouter 上 DeepSeek 抽卡、体检关思考，其余照旧开', [x[1] for x in sent] == [
+    {'reasoning': {'enabled': False}}, {'reasoning': {'enabled': False}}, {'reasoning': {'enabled': True}},
+    {'reasoning': {'enabled': True}}], str(sent))
+gem = []
+analyze._call_gemini = lambda prompt, grounded=False, model=None, purpose='analysis', thinking=None: gem.append((model, purpose)) or 'GEM'
+
+
+def boom(*a, **k):
+    raise RuntimeError('402 insufficient credits')
+
+
+analyze._call_openai_compat = boom
+t.check('OpenRouter 上 DeepSeek 报错：这一次回 Gemini 同档', analyze._llm('x', 'openrouter', 'deepseek/deepseek-v4-flash', purpose='cards')
+        == 'GEM' and gem == [(g[1], 'cards')], str(gem))
 t.finish()
