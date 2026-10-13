@@ -28,3 +28,4 @@
 - 不走：联网核实（grounded）、抽证据卡（`CARDS_ENGINE`，0017）、看图（`_call_gemini_mm`）、用户自己的模型（0013）。
 - 改画像那一步原来记账用途也叫 `verify`，改叫 `revise`，才分得出 Opus 档。`claude_cli.TIMEOUT` 600 → 1200 秒。
 - 联网核实（grounded：画像的事实核查脚注 `factcheck`、预测核验 `predict`）也先给 Claude：Opus（effort medium）+ Claude Code 自带的 `WebSearch` 工具（`--tools WebSearch --allowedTools WebSearch`，只给这一个）。10-13 实测一条预测 14.5 秒、给出判断和来源网址。失败照旧 Gemini + Google 搜索。
+- 看图（`analyze._call_gemini_mm`：视频截帧 `visual`、读书笔记里的图、小红书笔记 `xhs`）也先给 Claude Haiku（`claude_cli.vision`：图片 + 提示词一条消息走 `--input-format stream-json`，不给工具；单张超过约 3.7MB 的不送，一张都送不了就直接 Gemini）。10-13 实测一帧图表 4.1 秒、坐标轴和标注都读对。失败照旧 Gemini。

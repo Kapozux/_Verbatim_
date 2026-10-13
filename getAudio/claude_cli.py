@@ -94,9 +94,10 @@ def _fail(d):
     return RuntimeError(f'Claude: {text[:200] or "empty reply"}')
 
 
-def stream(prompt, purpose='ask', effort='medium', model=MODEL, tools=''):
+def stream(prompt, purpose='ask', effort='medium', model=MODEL, tools='', _stdin=None, _extra=()):
     """边写边 yield。调用方中途 close（用户点了停止）：claude 进程当场关掉，已经出的字照样记账。"""
-    args = _args(effort, model, tools)
+    args = _args(effort, model, tools) + list(_extra)
+    prompt = prompt if _stdin is None else _stdin
     with _sem:
         if _runner:
             d = _runner(args, prompt)
@@ -142,3 +143,12 @@ def stream(prompt, purpose='ask', effort='medium', model=MODEL, tools=''):
 
 def text(prompt, purpose='ask', effort='medium', model=MODEL, tools=''):
     return ''.join(stream(prompt, purpose, effort, model, tools)).strip()
+
+
+def vision(prompt, images, purpose='visual', effort='low', model='claude-haiku-5-5'):
+    """看图：images 是 [(mime, base64)]，和提示词作为一条用户消息从标准输入进去（--input-format stream-json），
+    不给读文件的工具。墨页 10-13 实测 Haiku 读手机拍的作业比 Kimi 准、40 路并发没被限流。"""
+    content = [{'type': 'image', 'source': {'type': 'base64', 'media_type': m, 'data': b}} for m, b in images]
+    content.append({'type': 'text', 'text': prompt})
+    msg = json.dumps({'type': 'user', 'message': {'role': 'user', 'content': content}}) + '\n'
+    return ''.join(stream(prompt, purpose, effort, model, _stdin=msg, _extra=('--input-format', 'stream-json'))).strip()

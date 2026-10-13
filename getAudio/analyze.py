@@ -1111,8 +1111,39 @@ _XHS_IMG_MIME = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg
                  '.webp': 'image/webp', '.heic': 'image/heic'}
 
 
+_CLAUDE_IMG_MAX = 3_750_000      # 字节：Claude 单张图上限约 5MB（base64 之后），超了的这张不送
+
+
+def _claude_vision(prompt, image_paths, purpose):
+    import base64
+    import claude_cli
+    if not claude_cli.text_engine():
+        return None
+    imgs = []
+    for p in (image_paths or [])[:12]:
+        try:
+            if os.path.getsize(p) > _CLAUDE_IMG_MAX:
+                continue
+            with open(p, 'rb') as f:
+                imgs.append((_XHS_IMG_MIME.get(os.path.splitext(p)[1].lower(), 'image/png'),
+                             base64.b64encode(f.read()).decode()))
+        except OSError:
+            continue
+    if image_paths and not imgs:
+        return None                       # 图一张都送不了：交给 Gemini
+    try:
+        return claude_cli.vision(prompt, imgs, purpose=purpose) or None
+    except Exception as e:  # noqa: BLE001
+        print(f'[分析] Claude Code 看图失败（{str(e)[:120]}），这次走 Gemini')
+        return None
+
+
 def _call_gemini_mm(prompt, image_paths, model=None, purpose='xhs'):
-    """多模态 Gemini：文字 + 图片一起送。带模型降级链、重试。返回文本。purpose 是记账用的用途名。"""
+    """多模态 Gemini：文字 + 图片一起送。带模型降级链、重试。返回文本。purpose 是记账用的用途名。
+    TEXT_ENGINE=claude 时先给本机 Claude Haiku 看（10-13 用户：「图片也换吧」），失败才走 Gemini。"""
+    out = _claude_vision(prompt, image_paths, purpose)
+    if out:
+        return out
     api_key = config.gemini_key()
     if not api_key:
         raise RuntimeError('GEMINI_API_KEY 未设置')
