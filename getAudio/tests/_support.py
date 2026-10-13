@@ -68,6 +68,7 @@ def isolate(prefix, cheap_route=False):
     os.environ['TEXT_ENGINE'] = ''
     os.environ['CARDS_ENGINE'] = ''
     os.environ["CLAUDE_GATE"] = ""
+    os.environ["CLAUDE_GATE_CC_DIR"] = os.path.join(tmp, "no-claude-projects")   # 别读真的 ~/.claude
     os.makedirs(os.path.join(tmp, 'results', '_chains'))
     # 本机开着代理（Clash 之类）时，HTTP 客户端会先连 127.0.0.1 的代理、由代理转发出去——
     # 下面的「只许连本机」挡不住这一跳，所以代理变量一律清掉

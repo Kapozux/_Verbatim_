@@ -46,4 +46,40 @@ except Exception:  # noqa: BLE001
     pass
 p = claude_gate.status()['pause']
 t.check('这边撞上限：写进共用的 pause，别的应用也停', p and p[2] == 'verbatim' and p[0] > time.time() + 800, str(p))
+
+# 给人自己留额度：最近 5 小时「三个应用 + 人自己在 Claude Code 里用的」合计到了 LIMIT - KEEP，批量 / 普通的等着，问照常
+import json as _json  # noqa: E402
+cc = os.path.join(TMP, 'ccprojects', '-Users-me-proj')
+os.makedirs(cc)
+os.environ['CLAUDE_GATE_CC_DIR'] = os.path.join(TMP, 'ccprojects')
+sqlite3.connect(claude_gate.path(), isolation_level=None).execute("DELETE FROM meta")
+now_iso = time.strftime('%Y-%m-%dT%H:%M:%S.000Z', time.gmtime())
+with open(os.path.join(cc, 's.jsonl'), 'w') as f:      # 人自己用 Opus：输入 1000 万 token = $40
+    f.write(_json.dumps({'timestamp': now_iso, 'requestId': 'r1', 'message': {'id': 'm1', 'model': 'claude-opus-5-5',
+                                                                              'usage': {'input_tokens': 10_000_000, 'output_tokens': 0}}}) + '\n')
+appdir = os.path.join(TMP, 'ccprojects', '-Users-me--verbatim-claude')      # 应用自己起的会话：不重复算
+os.makedirs(appdir)
+with open(os.path.join(appdir, 'a.jsonl'), 'w') as f:
+    f.write(_json.dumps({'timestamp': now_iso, 'requestId': 'r2', 'message': {'id': 'm2', 'model': 'claude-opus-5-5',
+                                                                              'usage': {'input_tokens': 10_000_000, 'output_tokens': 0}}}) + '\n')
+sqlite3.connect(claude_gate.path(), isolation_level=None).execute('DELETE FROM pause')
+claude_cli.use_runner(runner)
+os.environ['CLAUDE_GATE_LIMIT_5H'] = '140'
+os.environ['CLAUDE_GATE_KEEP'] = '100'
+st = claude_gate.status()
+t.check('读得到人自己的用量、不算应用自己起的会话', round(st['cc_5h']) == 40, str(st['cc_5h']))
+try:
+    with claude_gate.slot('t', 'cards', 'batch', wait=0):
+        got = 'in'
+except claude_gate.Paused:
+    got = 'waited'
+t.check('合计到了 140 - 100：批量等着', got == 'waited')
+with claude_gate.slot('t', 'ask', 'live', wait=0):
+    pass
+t.check('问照常进去', True)
+os.environ['CLAUDE_GATE_LIMIT_5H'] = '200'
+with claude_gate.slot('t', 'cards', 'batch', wait=0):
+    pass
+t.check('没到：批量照常', True)
+
 t.finish()
