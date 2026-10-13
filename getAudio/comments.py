@@ -24,7 +24,6 @@ import time
 
 import config
 
-FILE = 'comments.json'
 LOGIN_FILE = os.path.join(config.DATA_DIR, 'bili_login.local.json')   # 自己续到的登录态，gitignore
 _BV = re.compile(r'(BV[0-9A-Za-z]{10})')
 _EMOTE = re.compile(r'\[[^\[\]]{1,15}\]')
@@ -209,21 +208,32 @@ def fetch(bvid, progress=None, sess=None):
 
 
 # ---------- 存 ----------
+# 按视频存（results/_comments/<BV>.json）：同一个视频在转写页贴链接下的、转写后看的、笔记本里看的是同一份。
+# 下面凡是叫 key 的，可以是期的 task_id，也可以直接是 BV 号（转写页贴链接、还没转写时）。
 
-def _path(tid):
-    return os.path.join(config.RESULTS_FOLDER, tid, FILE)
+def _dir():
+    return os.path.join(config.RESULTS_FOLDER, '_comments')
 
 
-def load(tid):
+def _path(key, suffix='.json'):
+    bv = bvid_for_task(key)
+    return os.path.join(_dir(), bv + suffix) if bv else ''
+
+
+def load(key):
+    p = _path(key)
+    if not p:
+        return None
     try:
-        with open(_path(tid), encoding='utf-8') as f:
+        with open(p, encoding='utf-8') as f:
             return json.load(f)
     except Exception:
         return None
 
 
-def save(tid, data):
-    p = _path(tid)
+def save(key, data):
+    p = _path(key)
+    os.makedirs(_dir(), exist_ok=True)
     tmp = p + '.tmp'
     with open(tmp, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False)
@@ -235,7 +245,7 @@ def summary(data):
     if not data:
         return None
     items = data.get('items') or []
-    return {'count': len(items), 'top': sum(1 for r in items if r['root'] == '0'),
+    return {'count': len(items), 'top': sum(1 for r in items if r['root'] == '0'), 'title': data.get('title', ''),
             'reported': data.get('reported', 0), 'fetched_at': data.get('fetched_at', '')}
 
 
@@ -353,6 +363,11 @@ def parse_digest(text, refs):
 # ---------- 一期的 B 站链接 ----------
 
 def bvid_for_task(tid):
+    """期的 task_id → BV 号；本身就是 BV 号的原样返回。"""
+    if _BV.fullmatch(tid or ''):
+        return tid
+    if not re.fullmatch(r'[0-9A-Za-z_-]{1,80}', tid or ''):
+        return ''
     try:
         with open(os.path.join(config.RESULTS_FOLDER, tid, 'meta.json'), encoding='utf-8') as f:
             meta = json.load(f)
@@ -366,41 +381,55 @@ def bvid_for_task(tid):
 
 import threading                                   # noqa: E402
 
-_jobs = {}                  # tid -> {'have', 'reported', 'error'}；只在本进程里，重启就没了（再点一次就行）
+_jobs = {}                  # BV -> {'have', 'reported', 'error', 'running'}；只在本进程里，重启就没了（再点一次就行）
 _jobs_lock = threading.Lock()
 
 
-def job_state(tid):
+def job_state(key):
     with _jobs_lock:
-        j = _jobs.get(tid)
+        j = _jobs.get(bvid_for_task(key))
         return dict(j) if j else None
 
 
-def _run_fetch(tid, bvid):
+def _run_fetch(bvid):
     def prog(have, reported):
         with _jobs_lock:
-            _jobs[tid].update(have=have, reported=reported)
+            _jobs[bvid].update(have=have, reported=reported)
     try:
-        save(tid, fetch(bvid, progress=prog))
+        save(bvid, fetch(bvid, progress=prog))
         with _jobs_lock:
-            _jobs.pop(tid, None)
+            _jobs.pop(bvid, None)
     except Exception as e:  # noqa: BLE001
         with _jobs_lock:
-            _jobs[tid].update(error=str(e)[:200], running=False)
+            _jobs[bvid].update(error=str(e)[:200], running=False)
 
 
-def start_fetch(tid, run=None):
-    """开始抓一期；已经在抓就不重复。返回 (ok, error)。"""
-    bvid = bvid_for_task(tid)
+def start_fetch(key, run=None):
+    """开始抓一个视频的评论；已经在抓就不重复。返回 (ok, error)。"""
+    bvid = bvid_for_task(key)
     if not bvid:
         return False, 'not_bili'
     with _jobs_lock:
-        j = _jobs.get(tid)
+        j = _jobs.get(bvid)
         if j and j.get('running'):
             return True, None
-        _jobs[tid] = {'have': 0, 'reported': 0, 'error': None, 'running': True}
-    (run or (lambda f: threading.Thread(target=f, daemon=True).start()))(lambda: _run_fetch(tid, bvid))
+        _jobs[bvid] = {'have': 0, 'reported': 0, 'error': None, 'running': True}
+    (run or (lambda f: threading.Thread(target=f, daemon=True).start()))(lambda: _run_fetch(bvid))
     return True, None
+
+
+def resolve(url):
+    """转写页贴的链接 → BV 号。b23.tv 短链跟一次跳转。"""
+    bv = bvid_of(url)
+    if bv or not re.search(r'b23\.tv/', url or ''):
+        return bv
+    if _api:
+        return bvid_of(_api.expand(url))
+    import requests
+    try:
+        return bvid_of(requests.head(url, allow_redirects=True, timeout=10, headers={'User-Agent': 'Mozilla/5.0'}).url)
+    except Exception:
+        return ''
 
 
 # ---------- 工作台「评论区整理」 ----------
@@ -479,49 +508,51 @@ def start_digest(cdir, chain_id, tids, length='medium', focus='', lang='zh', run
     return out
 
 
-# ---------- 转写页：这一期自己的整理（存在 results/<tid>/comments_digest.json）----------
+# ---------- 一个视频自己的总结（转写页贴链接、转写详情页；存在 results/_comments/<BV>.digest.json）----------
 
-DIGEST_FILE = 'comments_digest.json'
-_digesting = set()          # 本进程里在整理的期；重启后残留的 running 当成中断
+_digesting = set()          # 本进程里在总结的 BV；重启后残留的 running 当成中断
 
 
-def load_digest(tid):
+def load_digest(key):
+    p = _path(key, '.digest.json')
     try:
-        with open(os.path.join(config.RESULTS_FOLDER, tid, DIGEST_FILE), encoding='utf-8') as f:
+        with open(p, encoding='utf-8') as f:
             o = json.load(f)
     except Exception:
         return None
-    if o.get('status') == 'running' and tid not in _digesting:
+    if o.get('status') == 'running' and bvid_for_task(key) not in _digesting:
         o.update(status='failed', error='interrupted')
     return o
 
 
-def _save_digest(tid, out):
-    p = os.path.join(config.RESULTS_FOLDER, tid, DIGEST_FILE)
+def _save_digest(key, out):
+    p = _path(key, '.digest.json')
+    os.makedirs(_dir(), exist_ok=True)
     with open(p + '.tmp', 'w', encoding='utf-8') as f:
         json.dump(out, f, ensure_ascii=False)
     os.replace(p + '.tmp', p)
 
 
-def start_episode_digest(tid, length='medium', focus='', lang='zh', run=None):
-    """转写页「整理」：只整理这一期，新的盖掉旧的。在整理就不重复开。"""
+def start_episode_digest(key, length='medium', focus='', lang='zh', run=None):
+    """一个视频的「总结」：新的盖掉旧的。在总结就不重复开。没抓过评论的先抓。"""
     import study
-    tids, length = _clean([tid], length)
+    bv = bvid_for_task(key)
+    tids, length = _clean([key], length)
     with _jobs_lock:
-        if tid in _digesting:
-            return load_digest(tid)
-        _digesting.add(tid)
+        if bv in _digesting:
+            return load_digest(key)
+        _digesting.add(bv)
     out = {'kind': 'comments', 'status': 'running', 'created_at': study._now(), 'tids': tids,
            'length': length, 'focus': str(focus or '')[:300]}
-    if not load(tid):
+    if not load(key):
         out['progress'] = {'stage': 'fetch', 'done': 0, 'total': 1}
-    _save_digest(tid, out)
+    _save_digest(key, out)
 
     def job():
         try:
-            _write(out, tids, length, focus, lang, lambda: _save_digest(tid, out), f'comments:{tid}:{time.time():.0f}')
+            _write(out, tids, length, focus, lang, lambda: _save_digest(key, out), f'comments:{bv}:{time.time():.0f}')
         finally:
             with _jobs_lock:
-                _digesting.discard(tid)
+                _digesting.discard(bv)
     (run or (lambda f: threading.Thread(target=f, daemon=True).start()))(job)
     return out

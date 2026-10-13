@@ -5645,6 +5645,40 @@ def api_comments_fetch(tid):
     return jsonify({'ok': True})
 
 
+@app.route('/api/comments/resolve', methods=['POST'])
+def api_comments_resolve():
+    """转写页贴的链接 → BV 号（b23.tv 短链也行）。不是 B 站视频返回 400。"""
+    import comments
+    bv = comments.resolve(str((request.get_json(silent=True) or {}).get('url') or '')[:500])
+    if not bv:
+        return jsonify({'error': 'not_bili'}), 400
+    d = comments.load(bv)
+    return jsonify({'bvid': bv, 'has': bool(d), 'title': (d or {}).get('title', '')})
+
+
+@app.route('/api/comments/<tid>/csv')
+def api_comments_csv(tid):
+    """「导出 CSV」：一行一条评论，楼在前、回复跟在楼下面（Excel 直接打开不乱码）。"""
+    import csv
+    import io
+    import comments
+    if not _TID_RE.match(tid):
+        return jsonify({'error': 'Not found'}), 404
+    d = comments.load(tid)
+    if not d:
+        return jsonify({'error': 'Not found'}), 404
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(['rpid', 'root', 'user', 'likes', 'time', 'replies', 'text'])
+    for th in comments.threads(d):
+        for r in [th['top']] + th['replies']:
+            w.writerow([r['id'], '' if r['root'] == '0' else r['root'], r['user'], r['like'],
+                        time.strftime('%Y-%m-%d %H:%M', time.localtime(r['ctime'])), r['rcount'] if r['root'] == '0' else '', r['text']])
+    name = f"comments_{d.get('bvid') or tid}.csv"
+    return Response('\ufeff' + buf.getvalue(), mimetype='text/csv',
+                    headers={'Content-Disposition': f'attachment; filename="{name}"'})
+
+
 @app.route('/api/comments/<tid>/estimate')
 def api_comments_estimate(tid):
     import comments

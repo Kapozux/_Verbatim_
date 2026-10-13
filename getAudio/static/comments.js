@@ -23,13 +23,11 @@ async function commentsFetch(tid) {
     const r = await srcPost(`/api/comments/${encodeURIComponent(tid)}/fetch`, { method: 'POST' });
     if (!r) return;
     showToast(T('cm.fetchStarted'));
-    CM_BOXES.forEach(id => {                // 正开着这一期的地方（阅读器、转写页）都刷新
-        const box = document.getElementById(id);
-        if (box && box.dataset.key === tid) commentsBlock(box, tid);
+    // 正开着这个视频的地方（阅读器、转写页、贴链接的弹窗）都刷新
+    document.querySelectorAll('#src-reader-comments, .cm-list-box').forEach(box => {
+        if (box.dataset.key === tid) commentsBlock(box, tid);
     });
 }
-
-const CM_BOXES = ['src-reader-comments', 'detail-cm-list'];
 
 function readerComments(tid, focusId) {
     return commentsBlock(document.getElementById('src-reader-comments'), tid, focusId);
@@ -79,6 +77,7 @@ async function commentsBlock(box, tid, focusId) {
             ${th.replies.length ? `<details class="cm-rs" data-root="${escapeHtml(th.top.id)}"${open ? ' open' : ''}>
                 <summary>${escapeHtml(T('cm.nReplies', { n: th.replies.length }))}</summary>${open ? th.replies.map(reply).join('') : ''}</details>` : ''}</div>`;
     };
+    if (box.dataset.wasOpen == null && box.closest('.cm-modal')) box.dataset.wasOpen = '1';   // 贴链接的弹窗：点的就是「下载评论区」，默认展开
     box.innerHTML = `${err}<details class="cm-box"${focusId || box.dataset.wasOpen ? ' open' : ''}>
         <summary>${escapeHtml(T('cm.inReader', { n: (info.count || 0).toLocaleString(), t: info.fetched_at || '' }))}</summary>
         <div class="cm-tools"><span class="cx-muted">${escapeHtml(T('cm.sorted'))}</span>
@@ -240,87 +239,118 @@ function commentsExportDoc(o, title) {
     return { title, blocks: [{ md: md + (refs ? `\n\n## ${T('cx.sources', { n: cites.length })}\n\n${refs}` : ''), citations: {} }] };
 }
 
-// ---------------- 转写页（资料库里点开的一期）：评论区卡片 ----------------
-// 摘要卡片和转写正文之间；只有 B 站的期才出现。上面是这一期的整理（点「整理」做，跟这一期存在一起），下面是全部评论。
+// ---------------- 一个视频的评论区卡片（转写页贴链接的弹窗、转写详情页共用）----------------
+// 上面一行「总结」：篇幅 + 侧重 + 按钮（价钱写在按钮上）；下面是总结结果；再下面是全部评论（commentsBlock）。
+// key 是期的 task_id 或 BV 号；评论和总结都按视频存，在哪看都是同一份。
+async function commentsCard(root, key) {
+    if (!root) return;
+    if (root.dataset.key !== key) {
+        root.dataset.key = key;
+        root.dataset.len = 'medium';
+        root.innerHTML = `<div class="cm-ctl">
+                <div class="pod-lens cm-lens" role="radiogroup">${CM_LENGTHS.map(l => `<button type="button" class="pod-len" data-l="${l}" role="radio">${escapeHtml(T('cm.len.' + l))}</button>`).join('')}</div>
+                <input type="text" class="search-input cm-focus" maxlength="300" placeholder="${escapeHtml(T('cm.focusPh'))}">
+                <button type="button" class="rd-pick-go primary cm-go">${escapeHtml(T('cm.digest'))}</button>
+                <a class="cx-link cm-csv hidden" download>${escapeHtml(T('cm.csv'))}</a>
+            </div>
+            <div class="cm-dg"></div>
+            <div class="cm-reader cm-list-box"></div>`;
+        const lens = () => root.querySelectorAll('.cm-lens .pod-len').forEach(b => {
+            b.classList.toggle('on', b.dataset.l === root.dataset.len);
+            b.setAttribute('aria-checked', b.dataset.l === root.dataset.len);
+        });
+        root.querySelectorAll('.cm-lens .pod-len').forEach(b => b.addEventListener('click', () => { root.dataset.len = b.dataset.l; lens(); }));
+        lens();
+        root.querySelector('.cm-go').addEventListener('click', () => commentsDigest(root, key));
+        root.querySelector('.cm-ctl').classList.toggle('hidden', !!window.VERBATIM_DEMO);
+        fetch(`/api/comments/${encodeURIComponent(key)}/estimate`).then(r => r.json()).then(est => {
+            if (root.dataset.key !== key) return;
+            const go = root.querySelector('.cm-go');
+            if (est.subscription) go.textContent = T('cm.digestSub');
+            else if (est.usd) go.textContent = T('cm.digestCost', { cost: fmtUsd(Math.max(0.01, est.usd)) });
+        }).catch(() => {});
+    }
+    clearTimeout(root._poll);
+    const list = root.querySelector('.cm-list-box');
+    const d = await commentsBlock(list, key);
+    if (root.dataset.key !== key || !d) return d;
+    const csv = root.querySelector('.cm-csv');
+    csv.classList.toggle('hidden', !d.has);
+    csv.href = `/api/comments/${encodeURIComponent(key)}/csv`;
+    if (d.job && d.job.running) root._poll = setTimeout(() => { if (root.dataset.key === key && root.isConnected) commentsCard(root, key); }, 3000);
+    const dg = d.digest;
+    root.querySelector('.cm-go').disabled = !!(dg && dg.status === 'running');
+    const box = root.querySelector('.cm-dg');
+    if (!dg) { box.innerHTML = ''; }
+    else if (dg.status === 'running') {
+        box.innerHTML = `<div class="cm-line"><span class="st-spin" aria-hidden="true"></span>${escapeHtml(commentsProgress(dg))}</div>`;
+        root._poll = setTimeout(() => { if (root.dataset.key === key && root.isConnected) commentsCard(root, key); }, 2500);
+    } else if (dg.status === 'failed') {
+        box.innerHTML = `<div class="cm-line cx-err">${escapeHtml(dg.error === 'interrupted' ? T('cm.interrupted') : T('cm.digestFailed'))}</div>`;
+    } else {
+        box.innerHTML = `<div class="cm-dg-meta cx-muted">${escapeHtml([String(dg.created_at || '').slice(5, 16), commentsCoverage(dg)].join(' · '))}</div>` + commentsHtml(dg);
+        commentsWire(box, dg, c => commentsBlock(list, key, c.id));
+    }
+    return d;
+}
+
+async function commentsDigest(root, key) {
+    const go = root.querySelector('.cm-go');
+    go.disabled = true;
+    let r;
+    try {
+        r = await (await fetch(`/api/comments/${encodeURIComponent(key)}/digest`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ length: root.dataset.len, focus: root.querySelector('.cm-focus').value.trim(), lang: currentLang }) })).json();
+    } catch (err) { r = { error: String(err) }; }
+    if (r.error) {
+        showToast(r.error === 'bili_login' ? T('cm.noLogin') : r.error);
+        go.disabled = false;
+        return;
+    }
+    commentsCard(root, key);
+}
+
+// 转写详情页（资料库里点开的一期）：摘要下面一张评论区卡片，只有 B 站的期才出现
 async function detailComments(rec) {
     const sec = document.getElementById('detail-comments-section');
     if (!sec) return;
     const tid = rec && rec.id;
-    sec.dataset.key = tid || '';
-    clearTimeout(sec._poll);
     if (!tid || !/bilibili\.com\/video\/|b23\.tv\/|\bBV[0-9A-Za-z]{10}\b/.test(rec.source_url || '')) { sec.classList.add('hidden'); return; }
-    const list = document.getElementById('detail-cm-list');
-    const d = await commentsBlock(list, tid);
-    if (sec.dataset.key !== tid) return;
-    if (!d || !d.bili) { sec.classList.add('hidden'); return; }
     sec.classList.remove('hidden');
-    const go = document.getElementById('detail-cm-go');
-    const dg = d.digest;
-    go.textContent = T(dg && dg.status === 'done' ? 'cm.redigest' : 'cm.digest');
-    go.disabled = !!(dg && dg.status === 'running');
-    go.classList.toggle('hidden', !!window.VERBATIM_DEMO);
-    go.onclick = () => commentsEpisodePicker(tid, rec.ai_title || rec.filename || '');
-    const box = document.getElementById('detail-cm-digest');
-    if (!dg) { box.innerHTML = `<p class="cx-muted cm-hint">${escapeHtml(T('cm.digestHint'))}</p>`; return; }
-    if (dg.status === 'running') {
-        box.innerHTML = `<div class="cm-line"><span class="st-spin" aria-hidden="true"></span>${escapeHtml(commentsProgress(dg))}</div>`;
-        sec._poll = setTimeout(() => { if (sec.dataset.key === tid) detailComments(rec); }, 2500);
-        return;
-    }
-    if (dg.status === 'failed') {
-        box.innerHTML = `<div class="cm-line cx-err">${escapeHtml(dg.error === 'interrupted' ? T('cm.interrupted') : T('cm.digestFailed'))}</div>`;
-        return;
-    }
-    box.innerHTML = `<div class="cm-dg-meta cx-muted">${escapeHtml([String(dg.created_at || '').slice(5, 16), commentsCoverage(dg)].join(' · '))}</div>` + commentsHtml(dg);
-    commentsWire(box, dg, c => commentsBlock(list, tid, c.id));
+    const d = await commentsCard(document.getElementById('detail-cm-card'), tid);
+    if (d && !d.bili) sec.classList.add('hidden');
 }
 
-async function commentsEpisodePicker(tid, title) {
-    const ov = stPickOverlay();
-    const st = { length: 'medium' };
-    ov.innerHTML = `<div class="cx-modal rd-pick vp-pick pod-pick cm-pick" role="dialog" aria-modal="true" aria-labelledby="cm-t">
+// 「转写」页贴的 B 站链接：那一行的「下载评论区」→ 中间弹窗（不转写视频，只抓评论；抓好能总结、导出 CSV）
+async function commentsLinkModal(url) {
+    let r;
+    try { r = await (await fetch('/api/comments/resolve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url }) })).json(); }
+    catch { r = { error: 'net' }; }
+    if (!r.bvid) { showToast(T('cm.notBiliLink')); return; }
+    let ov = document.getElementById('cm-overlay');
+    if (!ov) {
+        ov = document.createElement('div');
+        ov.id = 'cm-overlay';
+        ov.className = 'settings-overlay hidden';
+        document.body.appendChild(ov);
+    }
+    toolOverlay('cm-overlay');
+    ov.innerHTML = `<div class="cx-modal rd-pick cm-modal" role="dialog" aria-modal="true" aria-labelledby="cm-mt">
         <button class="settings-x" type="button" data-close aria-label="${escapeHtml(T('common.close'))}">×</button>
-        <h2 class="cx-modal-title" id="cm-t">${stIcon('comments', 20)}<span>${escapeHtml(T('st.k.comments'))}</span></h2>
-        <p class="cx-muted">${escapeHtml(title)}</p>
-        <form id="cm-form">
-            <div class="pod-f"><span class="pod-l">${escapeHtml(T('cm.length'))}</span><div class="pod-lens" id="cm-lens" role="radiogroup"></div></div>
-            <label class="pod-f"><span class="pod-l">${escapeHtml(T('st.focus'))}</span>
-                <textarea id="cm-focus" rows="2" maxlength="300" placeholder="${escapeHtml(T('cm.focusPh'))}"></textarea></label>
-            <div class="vp-foot"><span class="rd-pick-s" id="cm-msg"></span>
-                <button type="submit" class="rd-pick-go primary" id="cm-go">${T('rd.generate')}</button></div>
-        </form></div>`;
-    const renderLens = () => {
-        const box = ov.querySelector('#cm-lens');
-        box.innerHTML = CM_LENGTHS.map(l => `<button type="button" class="pod-len${st.length === l ? ' on' : ''}" data-l="${l}"
-            role="radio" aria-checked="${st.length === l}">${escapeHtml(T('cm.len.' + l))}</button>`).join('');
-        box.querySelectorAll('.pod-len').forEach(b => b.addEventListener('click', () => { st.length = b.dataset.l; renderLens(); }));
-    };
-    renderLens();
+        <h2 class="cx-modal-title" id="cm-mt">${stIcon('comments', 20)}<span>${escapeHtml(T('cm.title'))}</span></h2>
+        <p class="cx-muted cm-modal-sub">${escapeHtml(r.title || r.bvid)}</p>
+        <div class="cm-card-body"></div></div>`;
     ov.classList.remove('hidden');
-    try {
-        const [est, d] = await Promise.all([fetch(`/api/comments/${encodeURIComponent(tid)}/estimate`).then(r => r.json()),
-            fetch(`/api/comments/${encodeURIComponent(tid)}`).then(r => r.json())]);
-        const go = ov.querySelector('#cm-go');
-        if (est.subscription) go.textContent = T('cm.goSub');
-        else if (est.usd) go.textContent = T('vs.goCost', { cost: fmtUsd(Math.max(0.01, est.usd)) });
-        ov.querySelector('#cm-msg').textContent = d.has ? T('cm.nComments', { n: d.info.count.toLocaleString() }) : T('cm.fetchFirst', { n: 1 });
-    } catch { /* 没估价就不写 */ }
-    ov.querySelector('#cm-form').addEventListener('submit', async e => {
-        e.preventDefault();
-        const go = ov.querySelector('#cm-go');
-        go.disabled = true;
-        let r;
-        try {
-            r = await (await fetch(`/api/comments/${encodeURIComponent(tid)}/digest`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ length: st.length, focus: ov.querySelector('#cm-focus').value.trim(), lang: currentLang }) })).json();
-        } catch (err) { r = { error: String(err) }; }
-        if (r.error) {
-            ov.querySelector('#cm-msg').textContent = r.error === 'bili_login' ? T('cm.noLogin') : r.error;
-            go.disabled = false;
-            return;
-        }
-        ov.classList.add('hidden');
-        showToast(T('cm.digestStarted'));
-        if (typeof detailRecord !== 'undefined' && detailRecord && detailRecord.id === tid) detailComments(detailRecord);
-    });
+    if (!r.has && !window.VERBATIM_DEMO) {                   // 点的就是「下载评论区」：没抓过就直接开始抓
+        await fetch(`/api/comments/${encodeURIComponent(r.bvid)}/fetch`, { method: 'POST' }).then(x => x.json()).then(x => {
+            if (x.error) showToast(x.error === 'bili_login' ? T('cm.noLogin') : x.error);
+        }).catch(() => {});
+    }
+    const body = ov.querySelector('.cm-card-body');
+    const title = async () => {                 // 抓完才知道标题
+        const d = await commentsCard(body, r.bvid);
+        if (d && d.info && d.info.title) ov.querySelector('.cm-modal-sub').textContent = d.info.title;
+        else if (d && d.job && d.job.running && !ov.classList.contains('hidden')) setTimeout(title, 3000);
+    };
+    title();
 }

@@ -2981,12 +2981,20 @@ pre.cc-quote.repo-quote { font-family: var(--mono); font-size: 13px; line-height
 .cm-r { padding: 6px 0 0 10px; border-left: 2px solid var(--line-2); margin-top: 6px; }
 .cm-more { margin-top: 8px; }
 .cx-digest .cx-src .cm-t { font-size: 15px; }
-/* 转写页的评论区卡片 */
+/* 一个视频的评论区卡片（转写详情页、「转写」页贴链接的弹窗）*/
 #detail-comments-section { margin-bottom: 20px; }
-.cm-card-hd { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
-.cm-card-hd h2 { margin: 0; }
-.cm-hint { margin: 8px 0 0; font-size: 14px; }
-.cm-dg-meta { margin: 10px 0 4px; font-size: 13px; }
-.cm-detail-list { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
-.cm-detail-list summary { cursor: pointer; font-size: 14px; font-weight: 500; color: var(--ink-soft); }
-#detail-cm-digest .cx-digest, #detail-cm-digest .md-body { border: none; background: none; padding: 0; margin: 0; box-shadow: none; }
+.cm-ctl { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-top: 10px; }
+.cm-ctl .cm-lens { flex: none; }
+.cm-ctl .cm-focus { flex: 1 1 200px; min-width: 0; }
+.cm-ctl .cm-go { flex: none; }
+.cm-ctl .cm-csv { flex: none; margin-left: auto; }
+.cm-dg:not(:empty) { margin-top: 14px; }
+.cm-dg-meta { margin: 0 0 4px; font-size: 13px; }
+.cm-dg .cx-digest, .cm-dg .md-body { border: none; background: none; padding: 0; margin: 0; box-shadow: none; }
+.cm-list-box { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.cm-list-box summary { cursor: pointer; font-size: 14px; font-weight: 500; color: var(--ink-soft); }
+.cm-modal { width: min(860px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow-y: auto; }
+.cm-modal-sub { margin: 4px 0 0; overflow-wrap: anywhere; }
+.intake-cm { flex: none; border: 1px solid var(--coral-line); background: none; color: var(--coral-deep); border-radius: 999px;
+    padding: 3px 10px; font-size: 13px; cursor: pointer; white-space: nowrap; }
+.intake-cm:hover { background: var(--coral-soft); }

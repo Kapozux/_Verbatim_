@@ -38,6 +38,9 @@ class FakeBili:
         self.calls.append(('browser',))
         return self.browser_value
 
+    def expand(self, url):
+        return 'https://www.bilibili.com/video/BV1vRTT6PEw6?share=1'
+
     def view(self, bvid):
         return {'aid': 42, 'title': '测试视频', 'reply': 28}
 
@@ -192,5 +195,33 @@ o = comments.load_digest(TID3)
 o['status'] = 'running'
 comments._save_digest(TID3, o)
 t.check('转写页：重启后残留的「在整理」当成中断', comments.load_digest(TID3)['status'] == 'failed')
+
+# ---------- 转写页贴链接：不转写，只下载评论区 + 总结（按视频存，跟期共用一份）----------
+r = c.post('/api/comments/resolve', json={'url': 'https://www.bilibili.com/video/BV1s1pY6cEZo/?trackid=x'})
+t.check('贴链接：认出 BV 号，已经抓过的直接说有', r.get_json() == {'bvid': 'BV1s1pY6cEZo', 'has': True, 'title': '测试视频'}, r.get_json())
+t.check('贴链接：b23.tv 短链跟跳转', c.post('/api/comments/resolve', json={'url': 'https://b23.tv/abc'}).get_json().get('bvid') == 'BV1vRTT6PEw6')
+t.check('贴链接：不是 B 站的说不是', c.post('/api/comments/resolve', json={'url': 'https://youtu.be/x'}).status_code == 400)
+j = c.get('/api/comments/BV1s1pY6cEZo').get_json()
+t.check('同一个视频：按 BV 号看到的就是期里抓的那份', j['bili'] and j['has'] and j['info']['count'] == 28)
+BV = 'BV1vRTT6PEw6'
+t.check('没转写的视频也能抓', c.post(f'/api/comments/{BV}/fetch').status_code == 200)
+for _ in range(100):
+    j = c.get(f'/api/comments/{BV}').get_json()
+    if j['has'] and not j['job']:
+        break
+    time.sleep(0.05)
+t.check('按 BV 号抓好', j['has'] and j['info']['count'] == 28)
+r = c.post(f'/api/comments/{BV}/digest', json={'length': 'short'})
+for _ in range(100):
+    dg = c.get(f'/api/comments/{BV}').get_json().get('digest') or {}
+    if dg.get('status') not in (None, 'running'):
+        break
+    time.sleep(0.05)
+t.check('按 BV 号总结', dg.get('status') == 'done' and dg['citations'][0]['tid'] == BV, dg.get('error'))
+r = c.get(f'/api/comments/{BV}/csv')
+body = r.get_data(as_text=True)
+t.check('导出 CSV：带 BOM、表头、楼在回复前面', r.status_code == 200 and body.startswith('\ufeffrpid,root,user')
+        and body.index('以为自己包了个私家车') < body.index('回复0'), body[:120])
+t.check('乱写的 key 不碰文件系统', c.get('/api/comments/..%2F..%2Fetc').status_code == 404)
 
 t.finish()

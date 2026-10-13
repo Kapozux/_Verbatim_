@@ -167,6 +167,16 @@ function buildIntakeRow(r) {
         row.appendChild(sub);
     }
 
+    // B 站视频链接：可以不转写，只下载评论区（comments.js 的弹窗，里面能总结、导出 CSV）
+    if (r.kind === 'link' && /bilibili\.com\/video\/|b23\.tv\//i.test(r.label) && typeof commentsLinkModal === 'function') {
+        const cm = document.createElement('button');
+        cm.type = 'button';
+        cm.className = 'intake-cm';
+        cm.textContent = T('cm.download');
+        cm.addEventListener('click', () => commentsLinkModal(r.label));
+        row.appendChild(cm);
+    }
+
     const del = document.createElement('button');
     del.type = 'button';
     del.className = 'intake-del';
