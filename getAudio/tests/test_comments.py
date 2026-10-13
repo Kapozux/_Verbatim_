@@ -83,13 +83,14 @@ comments.sessdata(force=True)
 
 # ---------- 抓：一级翻完 + 回复翻全 ----------
 seen = []
-d = comments.fetch('BV1s1pY6cEZo', progress=lambda h, n: seen.append((h, n)))
+d = comments.fetch('BV1s1pY6cEZo', progress=lambda have, rep, **k: seen.append((have, rep, k.get('stage'), k.get('i'), k.get('n'))))
 ids = [r['id'] for r in d['items']]
 t.check('一级评论翻到最后一页', {'1', '2', '3'} <= set(ids), ids)
 t.check('第 1 楼 25 条回复全拿到（翻了两页楼中楼）', sum(1 for r in d['items'] if r['root'] == '1') == 25)
 t.check('不重复', len(ids) == len(set(ids)) == 28, len(ids))
 t.check('没回复的楼不去翻楼中楼', not any(c[0] == 'sub' and c[1] in ('2', '3') for c in fake.calls))
-t.check('进度回报带视频报的总数', seen and seen[-1] == (28, 28), seen[-3:])
+t.check('进度回报带视频报的总数', seen and seen[-1][:2] == (28, 28), seen[-3:])
+t.check('进度：先报楼（第几楼 / 上限），再报楼中楼（第几楼 / 要翻的楼数）', seen[0][2:] == ('top', 2, 500) and seen[-1][2:] == ('replies', 1, 1), seen)
 th = comments.threads(d)
 t.check('楼按赞排，回复挂在楼下', th[0]['top']['id'] == '1' and len(th[0]['replies']) == 25 and th[1]['top']['id'] == '3')
 

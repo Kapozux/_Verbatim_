@@ -195,7 +195,7 @@ def fetch(bvid, progress=None, sess=None):
             for y in x.get('replies') or []:
                 add(y)
         if progress:
-            progress(len(rows), reported)
+            progress(len(rows), reported, stage='top', i=min(n_top(), max_top), n=max_top)
         cur = r.get('cursor') or {}
         offset = ((cur.get('pagination_reply') or {}).get('next_offset')) or ''
         if n_top() >= max_top or cur.get('is_end') or not offset:
@@ -203,10 +203,9 @@ def fetch(bvid, progress=None, sess=None):
         _sleep(0.8, 1.5)
 
     pages = -(-2 * max_rep // 20)                   # 每楼最多翻这么多页（楼中楼接口只能按时间翻）
-    for top in [r for r in rows if r['root'] == '0' and r['rcount'] > 0]:
-        have = sum(1 for r in rows if r['root'] == top['id'])
-        if have >= min(top['rcount'], max_rep):
-            continue
+    need = [t for t in rows if t['root'] == '0' and t['rcount'] > 0
+            and sum(1 for r in rows if r['root'] == t['id']) < min(t['rcount'], max_rep)]
+    for k, top in enumerate(need):
         for pn in range(1, pages + 1):
             d = api.sub(aid, top['id'], pn, sess)
             reps = d.get('replies') or []
@@ -216,7 +215,7 @@ def fetch(bvid, progress=None, sess=None):
                 break
             _sleep(0.5, 1.0)
         if progress:
-            progress(len(rows), reported)
+            progress(len(rows), reported, stage='replies', i=k + 1, n=len(need))
         _sleep(0.4, 0.8)
 
     by_root = {}
@@ -445,9 +444,9 @@ def job_state(key):
 
 
 def _run_fetch(bvid, then=None):
-    def prog(have, reported):
+    def prog(have, reported, stage='', i=0, n=0):
         with _jobs_lock:
-            _jobs[bvid].update(have=have, reported=reported)
+            _jobs[bvid].update(have=have, reported=reported, stage=stage, i=i, n=n)
     try:
         save(bvid, fetch(bvid, progress=prog))
         with _jobs_lock:

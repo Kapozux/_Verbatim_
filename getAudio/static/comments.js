@@ -18,6 +18,14 @@ function cmMeta(r) {
     return [r.user, T('cm.likes', { n: r.like }), cmDate(r.ctime)].filter(Boolean).join(' · ');
 }
 
+// 抓的进度：先「第 230 / 500 楼」，再「楼中楼：第 12 / 87 楼」，后面小字写 B 站报的总数（有上限，不会都抓）
+function cmFetchText(job) {
+    const total = job.reported ? ' · ' + T('cm.biliTotal', { n: job.reported.toLocaleString() }) : '';
+    if (job.stage === 'top') return T('cm.fetchTop', { i: job.i.toLocaleString(), n: job.n.toLocaleString() }) + total;
+    if (job.stage === 'replies') return T('cm.fetchReplies', { i: job.i.toLocaleString(), n: job.n.toLocaleString() }) + total;
+    return T('cm.fetchingStart');
+}
+
 // ---------------- 来源栏阅读器：评论区 ----------------
 async function commentsFetch(tid) {
     const r = await srcPost(`/api/comments/${encodeURIComponent(tid)}/fetch`, { method: 'POST' });
@@ -47,8 +55,7 @@ async function commentsBlock(box, tid, focusId) {
     box.classList.remove('hidden');
     const job = d.job;
     if (job && job.running) {
-        box.innerHTML = `<div class="cm-line"><span class="st-spin" aria-hidden="true"></span>${escapeHtml(job.reported
-            ? T('cm.fetching', { n: job.have.toLocaleString(), m: job.reported.toLocaleString() }) : T('cm.fetchingStart'))}</div>`;
+        box.innerHTML = `<div class="cm-line"><span class="st-spin" aria-hidden="true"></span>${escapeHtml(cmFetchText(job))}</div>`;
         box._poll = setTimeout(() => commentsBlock(box, tid, focusId), 2000);
         return d;
     }
@@ -449,7 +456,7 @@ async function cmBatchRun(links) {
     const draw = () => {
         card.innerHTML = `<h2 class="cm-batch-h">${escapeHtml(T('cm.title'))}</h2>` + rows.map((r, i) => {
             const st = !r.bili ? T('cm.bSkip') : r.state === 'dup' ? T('cm.bDup') : r.state === 'wait' ? T('cm.bWait')
-                : r.state === 'run' ? (r.total ? T('cm.fetching', { n: r.have.toLocaleString(), m: r.total.toLocaleString() }) : T('cm.fetchingStart'))
+                : r.state === 'run' ? (r.job ? cmFetchText(r.job) : T('cm.fetchingStart'))
                 : r.state === 'err' ? r.err : [T('cm.nComments', { n: r.count.toLocaleString() }), dgText(r)].filter(Boolean).join(' · ');
             const spin = r.state === 'run' || (r.dg && r.dg.status === 'running');
             const can = r.state === 'done';
@@ -477,7 +484,7 @@ async function cmBatchRun(links) {
             if (st.error) throw new Error(st.error === 'bili_login' ? T('cm.noLogin') : st.error);
             for (;;) {
                 const d = await getJson(`/api/comments/${r.bvid}`);
-                if (d.job && d.job.running) { r.have = d.job.have; r.total = d.job.reported; draw(); await new Promise(ok => setTimeout(ok, 2000)); continue; }
+                if (d.job && d.job.running) { r.job = d.job; draw(); await new Promise(ok => setTimeout(ok, 2000)); continue; }
                 if (d.job && d.job.error) throw new Error(d.job.error === 'bili_login' ? T('cm.noLogin') : T('cm.failed'));
                 r.state = 'done';
                 r.count = (d.info || {}).count || 0;
