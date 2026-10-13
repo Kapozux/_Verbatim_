@@ -3,12 +3,13 @@
 谁在做什么、做到哪、下一步是什么，都在这一张表里。**每个窗口开工先读这张表**，认领一件事就在「谁」里写上自己的窗口名；收工前更新状态和下一步。
 新冒出来的 bug、想法、要用户拍板的事，也先记到这里，不要只写在聊天里或别的交接文档里。规矩见 `getAudio/CLAUDE.md`「多窗口一起开发」。
 
-最后更新：2026-10-09
+最后更新：2026-10-13
 
 ## 正在做
 
 | 事 | 谁 | 在哪 | 状态 |
 |---|---|---|---|
+| 问证据卡交给本机 Claude Code 写（`ASK_ENGINE=claude`，默认不开；用户 10-13 要的，抽卡仍用 DeepSeek / Gemini） | claude-ask 窗口（kapozux-b9） | worktree `.claude/worktrees/claude-ask`，分支 feature/claude-ask | 10-13：54 个测试文件全过；实测 4.8 秒出字、12.5 秒写完。用户点头在自己的 `.env` 打开。交接 `docs/handoff/claude-ask.md`，ADR 0015 |
 | 来源标签（照 NotebookLM：按主题自动分组、一个来源一个标签、排序：最近 / 标题 / 类型），取代文件夹 | getaudio-fa | main（10-05 合进、5001 已重启） | 已本地提交、测试全过；IB 计算机科学实测 19 份 → 7 组，$0.0003、2.6 秒 |
 | 点出处就地看原视频 / 听原音（YouTube / B 站嵌播放器从那一秒开始）+ README GIF + YC 演示 | cite-video 窗口 | main（10-04 合进、5001 已重启） | 上线。README GIF 在 `docs/media/verbatim-cite.gif`（18 秒，4.7 MB；另有 mp4）；YC 演示：等用户定（见「等用户拍板」）。交接 `docs/handoff/cite-video.md` |
 | gemini35 段落时间不可信（短文件中位数只有真实的 0.337，转 16k 再送也一样，不是格式问题）| gemini35-time 窗口 | worktree `.claude/worktrees/gemini35-time`，分支 fix/gemini35-timeline（已合进 main、5001 已重启） | 10-05 停：本机 Whisper 回补到 848/1031 电脑太卡，用户决定不补旧期、也不花钱补；新 Gemini 期仍自动排本机对齐 |
@@ -78,6 +79,7 @@
 | 抽卡模型 `GEMINI_EXTRACT_MODEL` | 默认 `gemini-2.5-flash`（`.env` 里 3.8-flash 那两行已注释掉） | 用户 10-03：3.8-flash 只在 All-In 对账用 |
 | 预测核对模型 / 思考上限 | 跟抽卡同一个模型；`PREDICTION_CHECK_THINKING=1024` | 10-03 实测：8 条结论不变、便宜约 40 倍 |
 | 摘要、标题标签 | `gemini-3.1-flash-lite` | 用户 10-02 |
+| 问证据卡由谁写 `ASK_ENGINE` | 默认空（原来的模型）；作者电脑上 `claude`（本机 Claude Code，Opus 5.5，订阅额度） | 用户 10-13 |
 | 回顾面板、笔记本综述 | 每月最多自动写一次，手动刷新随时可用 | 用户 10-02 |
 | 非中国议题的便宜路由 | `deepseek-v4-flash`（`llmroute.py`），政治词一次即回 Gemini；先走阿里云，填了自己的 DeepSeek key 时阿里云没 key / 欠费就接官方 DeepSeek | 用户 10-01；官方 DeepSeek 兜底 10-03 |
 | 5001 | 不开 `FLASK_DEBUG`（不热重载）；改完后端，没任务在跑时手动重启 | 用户 10-03 |
@@ -99,6 +101,10 @@
 | 0009 | 转写列表和搜索走 SQLite 索引，文件仍是唯一原始数据 | main |
 | 0010 | 每份来源一份读书笔记，工作台产出从笔记出发 | 分支 feature/notebook-fixes |
 | 0011 | 长播客按章节写 | 分支 feature/long-podcast |
+| 0012 | 出处时间按逐词时间轴算 | main |
+| 0013 | 自己的模型选了就不偷偷换云端 | main |
+| 0014 | 接口文档从路由生成 | main |
+| 0015 | 问证据卡可以交给本机 Claude Code 写（ASK_ENGINE=claude） | 分支 feature/claude-ask |
 | 0012 | 出处时间点走逐词时间轴（YouTube 字幕 / Qwen / 本机 Whisper 对齐），不估算 | 分支 feature/cite-cards |
 | 0013 | 用户自己的模型（OpenAI 兼容 / Ollama）选了就不偷偷换云端 | 分支 feature/on-port |
 | 0014 | 接口文档从路由表和 docstring 现生成，不手写 schema | 分支 feature/on-port |

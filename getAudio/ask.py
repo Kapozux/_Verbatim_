@@ -27,6 +27,7 @@ from collections import Counter
 from datetime import datetime
 
 import citations
+import claude_cli
 import config
 import timecode
 import wordtime
@@ -1278,7 +1279,7 @@ def _bg_block(corpus):
             'below don\'t support.\n<<<\n' + bg + '\n>>>\n\n')
 
 
-def _finish(raw, ctx, rewrite=True):
+def _finish(raw, ctx, rewrite=True, model=None):
     """模型原文 → 最终回答：答错语言就改写一遍，删掉编造的出处，挂上出处卡片。
     rewrite=False 用于用户中途停止的半截回答（不再为它多花一次钱）。"""
     if rewrite and _wrong_lang(raw, ctx['lang']):    # 模型跟着卡片的语言答了：便宜地改写一遍
@@ -1290,7 +1291,7 @@ def _finish(raw, ctx, rewrite=True):
     text = cit.clean(raw)
     return {
         'answer': text, 'mode': ctx['mode'], 'dropped_ids': cit.dropped_ids[:20],
-        'citations': cit.used, 'coverage': ctx['cov'], 'dropped_citations': cit.dropped, 'model': ASK_MODEL,
+        'citations': cit.used, 'coverage': ctx['cov'], 'dropped_citations': cit.dropped, 'model': model or ASK_MODEL,
         **({'persona': ctx['persona']} if ctx.get('persona') else {}),
     }
 
@@ -1298,6 +1299,11 @@ def _finish(raw, ctx, rewrite=True):
 def answer(chain_dir, question, mode='about', history=None, topic=None, ui_lang=None, scope=None, persona=None):
     """问一次。topic 给了就只在这个话题的卡里找（立场时间线的「他怎么变的」）。"""
     ctx = _prepare(chain_dir, question, mode, history, topic, ui_lang, scope, persona)
+    if claude_cli.engine():                       # ASK_ENGINE=claude：本机 Claude Code 写；不行就照旧
+        try:
+            return _finish(claude_cli.text(ctx['prompt'], purpose='ask'), ctx, model=claude_cli.MODEL)
+        except Exception:  # noqa: BLE001
+            pass
     return _finish(_llm(ctx['prompt'], purpose='ask'), ctx)
 
 
@@ -1315,14 +1321,25 @@ def answer_stream(chain_dir, question, mode='about', history=None, topic=None, u
     ctx = _prepare(chain_dir, question, mode, history, topic, ui_lang, scope, persona)
     yield {'type': 'ctx', 'ctx': ctx}
     yield {'type': 'stage', 'stage': 'write', 'coverage': ctx['cov']}
-    parts = []
-    for t in _call_gemini_stream(ctx['prompt'], model=ASK_MODEL, purpose='ask'):
-        parts.append(t)
-        yield {'type': 'delta', 'text': t}
+    parts, model = [], None
+    if claude_cli.engine():                       # ASK_ENGINE=claude：本机 Claude Code 写
+        model = claude_cli.MODEL
+        try:
+            for t in claude_cli.stream(ctx['prompt'], purpose='ask'):
+                parts.append(t)
+                yield {'type': 'delta', 'text': t}
+        except Exception:  # noqa: BLE001
+            if parts:                             # 写了一半断了：跟原来的模型中途出错一样往上抛
+                raise
+            model = None                          # 还没出字：照旧用原来的模型
+    if not parts:
+        for t in _call_gemini_stream(ctx['prompt'], model=ASK_MODEL, purpose='ask'):
+            parts.append(t)
+            yield {'type': 'delta', 'text': t}
     raw = ''.join(parts)
     if _wrong_lang(raw, ctx['lang']):      # 先告诉前端在改写，再去改（要几秒）
         yield {'type': 'stage', 'stage': 'rewrite'}
-    yield {'type': 'result', **_finish(raw, ctx)}
+    yield {'type': 'result', **_finish(raw, ctx, model=model)}
 
 
 def finish_partial(raw, ctx):
