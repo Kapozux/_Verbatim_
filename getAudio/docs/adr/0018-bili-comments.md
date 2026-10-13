@@ -28,6 +28,10 @@
 6. **模型**：`ask._llm(purpose='digest')`。`TEXT_ENGINE=claude` 时走 Claude Opus（`digest` 在 OPUS_PURPOSES 里），
    订阅额度 $0；否则 Gemini（`ASK_MODEL`）。
 
+7. **转写页也有**（同日用户：「除了 notebook 以外，在转写里面我也可能要用」）：转写详情页摘要下面一张「评论区」卡片，
+   「整理」只整理这一期，结果存 `results/<task_id>/comments_digest.json`（新的盖掉旧的），不进任何笔记本。整理主体
+   `comments._write()` 跟工作台共用。
+
 ## 没做 / 以后
 
 - 扫码登录：用户不要。

@@ -1265,6 +1265,7 @@ async function openDetailView(taskId, startAt = null) {
         // 博主链默认不出摘要：没有的话给个按钮，想看哪期单独补
         detailSummarizeBtn.classList.toggle('hidden',
             !!(data.summary && data.summary.overview) || !segCount || IS_DEMO);
+        if (typeof detailComments === 'function') detailComments(data);     // B 站的期：评论区卡片（comments.js）
     } catch {
         showToast(T('toast.couldNotLoadRecord'));
         // 冷启动时 URL 里带着失效/已删除的 taskId 会走到这——保底别留白屏，退回资料库。

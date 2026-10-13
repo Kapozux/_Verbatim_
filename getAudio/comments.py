@@ -14,7 +14,6 @@
 不登录时 B 站只给前几条（10-13 实测 3,034 条的视频只拿到 3 条），所以抓之前先确认登录态，
 拿不到就直说，不默默只抓 3 条。
 """
-import asyncio
 import json
 import os
 import random
@@ -139,12 +138,14 @@ class _RealApi:
         return {'aid': d.get('aid'), 'title': d.get('title', ''), 'reply': (d.get('stat') or {}).get('reply', 0)}
 
     def main(self, aid, offset, sess):
+        import asyncio                       # 用到才导入：在请求线程里随手 import comments 不连带 asyncio（几个线程同时首次导入会撞循环导入）
         from bilibili_api import comment
         from bilibili_api.comment import CommentResourceType, OrderType
         return asyncio.run(comment.get_comments_lazy(aid, CommentResourceType.VIDEO, offset=offset,
                                                      order=OrderType.TIME, credential=self._cred(sessdata=sess)))
 
     def sub(self, aid, root, pn, sess):
+        import asyncio
         from bilibili_api import comment
         from bilibili_api.comment import CommentResourceType
         c = comment.Comment(aid, CommentResourceType.VIDEO, int(root), credential=self._cred(sessdata=sess))
@@ -340,7 +341,13 @@ def parse_digest(text, refs):
             out.append(f'〔{order[cid]}〕')
         return ''.join(out)
 
-    return _CITE.sub(repl, text).strip(), cites
+    out, prev = [], ''
+    for line in _CITE.sub(repl, text).strip().split('\n'):
+        if line.lstrip().startswith('>') and prev.lstrip().startswith('>'):
+            out.append('')              # 相邻两行引用是两条原话：中间空一行，不然 Markdown 把它们并成一段
+        out.append(line)
+        prev = line
+    return '\n'.join(out), cites
 
 
 # ---------- 一期的 B 站链接 ----------
@@ -410,52 +417,111 @@ def estimate(tids):
     return round(usage.estimate_cost(ask.ASK_MODEL, min(tokens, ask.est_tokens('评' * _MAX_INPUT)), 3500) or 0, 4), False
 
 
-def start_digest(cdir, chain_id, tids, length='medium', focus='', lang='zh', run=None, titles=None):
-    """后台：没抓过评论的期先抓，再整理成一份。结果存成工作台的一条 kind=comments。"""
+def _write(out, tids, length, focus, lang, save_out, ref, chain=None):
+    """整理的主体（工作台和转写页共用）：没抓的期先抓，再让模型写。结果写回 out；save_out() 每步存一次。"""
     import ask
-    import study
     import usage
-    import uuid
+    try:
+        todo = [t for t in tids if not load(t)]
+        for i, t in enumerate(todo):
+            out['progress'] = {'stage': 'fetch', 'done': i, 'total': len(todo)}
+            save_out()
+            save(t, fetch(bvid_for_task(t)))
+        out['progress'] = {'stage': 'write', 'done': 0, 'total': 1}
+        save_out()
+        data = [(t, load(t)) for t in tids]
+        prompt, refs = build_prompt(data, length, focus, lang)
+        with usage.scope(ref=ref, chain=chain):
+            text = ask._llm(prompt, purpose='digest')
+        md, cites = parse_digest(text or '', refs)
+        if not md:
+            raise RuntimeError('empty')
+        out.update(status='done', result={'md': md}, citations=cites,
+                   n=sum(len(d.get('items') or []) for _, d in data),
+                   title=' / '.join(d.get('title') or '' for _, d in data)[:120])
+        out.pop('progress', None)
+    except Exception as e:  # noqa: BLE001
+        out.update(status='failed', error=str(e)[:300])
+    finally:
+        out['cost_usd'] = (usage.cost_for(ref=ref) or {}).get('cost_usd', 0)
+        save_out()
+
+
+def _clean(tids, length):
     tids = [t for t in dict.fromkeys(tids or []) if bvid_for_task(t)]
     if not tids:
         raise ValueError('no_bili')
-    length = length if length in LENGTHS else 'medium'
+    return tids, (length if length in LENGTHS else 'medium')
+
+
+def start_digest(cdir, chain_id, tids, length='medium', focus='', lang='zh', run=None, titles=None):
+    """工作台「评论区整理」：几期一起整理，结果存成工作台的一条 kind=comments。"""
+    import study
+    import uuid
+    tids, length = _clean(tids, length)
     oid = uuid.uuid4().hex[:12]
     out = {'id': oid, 'kind': 'comments', 'status': 'running', 'created_at': study._now(), 'chain': chain_id,
            'tids': tids, 'length': length, 'focus': str(focus or '')[:300],
            'titles': [str((titles or {}).get(t) or '') for t in tids]}
-    todo = [t for t in tids if not load(t)]
-    if todo:
-        out['progress'] = {'stage': 'fetch', 'done': 0, 'total': len(todo)}
+    if any(not load(t) for t in tids):
+        out['progress'] = {'stage': 'fetch', 'done': 0, 'total': sum(1 for t in tids if not load(t))}
     study._save(cdir, out)
     with study._lock:
         study._running.add(oid)
 
     def job():
         try:
-            for i, t in enumerate(todo):
-                out['progress'] = {'stage': 'fetch', 'done': i, 'total': len(todo)}
-                study._save(cdir, out)
-                save(t, fetch(bvid_for_task(t)))
-            out['progress'] = {'stage': 'write', 'done': 0, 'total': 1}
-            study._save(cdir, out)
-            data = [(t, load(t)) for t in tids]
-            prompt, refs = build_prompt(data, length, focus, lang)
-            with usage.scope(ref='study:' + oid, chain=chain_id):
-                text = ask._llm(prompt, purpose='digest')
-            md, cites = parse_digest(text or '', refs)
-            if not md:
-                raise RuntimeError('empty')
-            out.update(status='done', result={'md': md}, citations=cites,
-                       n=sum(len(d.get('items') or []) for _, d in data),
-                       title=' / '.join(d.get('title') or '' for _, d in data)[:120])
-            out.pop('progress', None)
-        except Exception as e:  # noqa: BLE001
-            out.update(status='failed', error=str(e)[:300])
+            _write(out, tids, length, focus, lang, lambda: study._save(cdir, out), 'study:' + oid, chain_id)
         finally:
-            out['cost_usd'] = (usage.cost_for(ref='study:' + oid) or {}).get('cost_usd', 0)
-            study._save(cdir, out)
             with study._lock:
                 study._running.discard(oid)
+    (run or (lambda f: threading.Thread(target=f, daemon=True).start()))(job)
+    return out
+
+
+# ---------- 转写页：这一期自己的整理（存在 results/<tid>/comments_digest.json）----------
+
+DIGEST_FILE = 'comments_digest.json'
+_digesting = set()          # 本进程里在整理的期；重启后残留的 running 当成中断
+
+
+def load_digest(tid):
+    try:
+        with open(os.path.join(config.RESULTS_FOLDER, tid, DIGEST_FILE), encoding='utf-8') as f:
+            o = json.load(f)
+    except Exception:
+        return None
+    if o.get('status') == 'running' and tid not in _digesting:
+        o.update(status='failed', error='interrupted')
+    return o
+
+
+def _save_digest(tid, out):
+    p = os.path.join(config.RESULTS_FOLDER, tid, DIGEST_FILE)
+    with open(p + '.tmp', 'w', encoding='utf-8') as f:
+        json.dump(out, f, ensure_ascii=False)
+    os.replace(p + '.tmp', p)
+
+
+def start_episode_digest(tid, length='medium', focus='', lang='zh', run=None):
+    """转写页「整理」：只整理这一期，新的盖掉旧的。在整理就不重复开。"""
+    import study
+    tids, length = _clean([tid], length)
+    with _jobs_lock:
+        if tid in _digesting:
+            return load_digest(tid)
+        _digesting.add(tid)
+    out = {'kind': 'comments', 'status': 'running', 'created_at': study._now(), 'tids': tids,
+           'length': length, 'focus': str(focus or '')[:300]}
+    if not load(tid):
+        out['progress'] = {'stage': 'fetch', 'done': 0, 'total': 1}
+    _save_digest(tid, out)
+
+    def job():
+        try:
+            _write(out, tids, length, focus, lang, lambda: _save_digest(tid, out), f'comments:{tid}:{time.time():.0f}')
+        finally:
+            with _jobs_lock:
+                _digesting.discard(tid)
     (run or (lambda f: threading.Thread(target=f, daemon=True).start()))(job)
     return out

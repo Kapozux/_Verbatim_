@@ -9,7 +9,7 @@
 
 | 事 | 谁 | 在哪 | 状态 |
 |---|---|---|---|
-| B 站评论区：每期抓评论（来源栏阅读器里看）+ 工作台「评论区整理」（概述 + 带出处的原话，限字数）；登录 cookie 失效时自动从 Chrome 取新的（用户 10-13：「我啥都不动，它自己就行了」） | comments 窗口 | worktree `.claude/worktrees/comments`，分支 feature/comments | 10-13 做完、本地提交，没合 main。59 个测试文件全过（新增 test_comments 29 项）；5031 实测 BV1s1pY6cEZo：抓 2,699 条约 4 分钟、Claude 整理 $0；1700 / 1000 / 400 × 浅深截图过。等用户点头合进 main。交接 `docs/handoff/comments.md`，ADR 0018 |
+| B 站评论区：每期抓评论（来源栏阅读器里看）+ 工作台「评论区整理」（概述 + 带出处的原话，限字数）；登录 cookie 失效时自动从 Chrome 取新的（用户 10-13：「我啥都不动，它自己就行了」） | comments 窗口 | worktree `.claude/worktrees/comments`，分支 feature/comments | 10-13 做完、本地提交，没合 main。59 个测试文件全过（新增 test_comments 29 项）；5031 实测 BV1s1pY6cEZo：抓 2,699 条约 4 分钟、Claude 整理 $0；1700 / 1000 / 400 × 浅深截图过。同日加了转写详情页的评论区卡片（用户要求），实测单期整理 $0。等用户点头合进 main。交接 `docs/handoff/comments.md`，ADR 0018 |
 | 画像、播客、幻灯片……所有文字活都先给本机 Claude（`TEXT_ENGINE` 扩大范围；用户 10-13：「画像也可以 Claude 吧」） | claude-all 窗口（kapozux-b9） | main（10-13 合进、5001 已重启） | 上线。57 个测试文件全过；实测播客 4.9 秒、画像一句 5.1 秒。见 ADR 0016 补充、`docs/handoff/claude-text.md` |
 | 每期抽证据卡交给本机 Claude Haiku（`CARDS_ENGINE=claude`，默认不开；用户 10-13：「量太大可以 haiku（看性能）」） | claude-cards 窗口（kapozux-b9） | main（10-13 合进、5001 已重启，`.env` 已开 `CARDS_ENGINE=claude`） | 上线。56 个测试文件全过；实测 5 期 Haiku 卡 254 张、原话对得上 99%（DeepSeek 228 张、89%）。交接 `docs/handoff/claude-cards.md`，ADR 0017 |
 | 日常文字活（摘要、标签、回顾……llmroute 的用途）先交给本机 Claude Code（`TEXT_ENGINE=claude`，默认不开；用户 10-13：开销越少越好） | claude-text 窗口（kapozux-b9） | main（10-13 合进、5001 已重启，`.env` 已开 `TEXT_ENGINE=claude`） | 上线。55 个测试文件全过；实测摘要 3.2 秒、Haiku、$0。交接 `docs/handoff/claude-text.md`，ADR 0016 |

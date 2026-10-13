@@ -2981,3 +2981,12 @@ pre.cc-quote.repo-quote { font-family: var(--mono); font-size: 13px; line-height
 .cm-r { padding: 6px 0 0 10px; border-left: 2px solid var(--line-2); margin-top: 6px; }
 .cm-more { margin-top: 8px; }
 .cx-digest .cx-src .cm-t { font-size: 15px; }
+/* 转写页的评论区卡片 */
+#detail-comments-section { margin-bottom: 20px; }
+.cm-card-hd { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.cm-card-hd h2 { margin: 0; }
+.cm-hint { margin: 8px 0 0; font-size: 14px; }
+.cm-dg-meta { margin: 10px 0 4px; font-size: 13px; }
+.cm-detail-list { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.cm-detail-list summary { cursor: pointer; font-size: 14px; font-weight: 500; color: var(--ink-soft); }
+#detail-cm-digest .cx-digest, #detail-cm-digest .md-body { border: none; background: none; padding: 0; margin: 0; box-shadow: none; }

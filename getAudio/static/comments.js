@@ -23,13 +23,21 @@ async function commentsFetch(tid) {
     const r = await srcPost(`/api/comments/${encodeURIComponent(tid)}/fetch`, { method: 'POST' });
     if (!r) return;
     showToast(T('cm.fetchStarted'));
-    const box = document.getElementById('src-reader-comments');
-    if (box && box.dataset.key === tid) readerComments(tid);
+    CM_BOXES.forEach(id => {                // 正开着这一期的地方（阅读器、转写页）都刷新
+        const box = document.getElementById(id);
+        if (box && box.dataset.key === tid) commentsBlock(box, tid);
+    });
 }
 
-async function readerComments(tid, focusId) {
-    const box = document.getElementById('src-reader-comments');
-    if (!box) return;
+const CM_BOXES = ['src-reader-comments', 'detail-cm-list'];
+
+function readerComments(tid, focusId) {
+    return commentsBlock(document.getElementById('src-reader-comments'), tid, focusId);
+}
+
+// 一期的评论区（阅读器和转写页共用）：没抓 → 一行「抓」；在抓 → 进度；抓好 → 折叠的楼列表。返回接口数据。
+async function commentsBlock(box, tid, focusId) {
+    if (!box) return null;
     if (box.dataset.key !== tid) { box.dataset.shown = String(CM_PAGE); box.dataset.open = ''; }
     box.dataset.key = tid;
     clearTimeout(box._poll);
@@ -37,21 +45,21 @@ async function readerComments(tid, focusId) {
     let d;
     try { d = await (await fetch(`/api/comments/${encodeURIComponent(tid)}`)).json(); } catch { return; }
     if (box.dataset.key !== tid || seq !== box._seq) return;
-    if (!d || !d.bili) { box.innerHTML = ''; box.classList.add('hidden'); return; }
+    if (!d || !d.bili) { box.innerHTML = ''; box.classList.add('hidden'); return d; }
     box.classList.remove('hidden');
     const job = d.job;
     if (job && job.running) {
         box.innerHTML = `<div class="cm-line"><span class="st-spin" aria-hidden="true"></span>${escapeHtml(job.reported
             ? T('cm.fetching', { n: job.have.toLocaleString(), m: job.reported.toLocaleString() }) : T('cm.fetchingStart'))}</div>`;
-        box._poll = setTimeout(() => readerComments(tid, focusId), 2000);
-        return;
+        box._poll = setTimeout(() => commentsBlock(box, tid, focusId), 2000);
+        return d;
     }
     const err = job && job.error ? `<div class="cm-line cx-err">${escapeHtml(job.error === 'bili_login' ? T('cm.noLogin') : T('cm.failed'))}</div>` : '';
     if (!d.has) {
         box.innerHTML = `${err}<div class="cm-line">${escapeHtml(T('cm.notYet'))}
             <button type="button" class="cx-link" data-cm="fetch">${escapeHtml(T('cm.fetch'))}</button></div>`;
         box.querySelector('[data-cm="fetch"]').addEventListener('click', () => commentsFetch(tid));
-        return;
+        return d;
     }
     const threads = d.threads || [];
     let shown = Math.max(CM_PAGE, +box.dataset.shown || CM_PAGE);
@@ -82,7 +90,7 @@ async function readerComments(tid, focusId) {
     det.addEventListener('toggle', () => { box.dataset.wasOpen = det.open ? '1' : ''; });
     box.querySelector('[data-cm="fetch"]').addEventListener('click', () => commentsFetch(tid));
     const more = box.querySelector('[data-cm="more"]');
-    if (more) more.addEventListener('click', () => { box.dataset.shown = String(shown + CM_PAGE); readerComments(tid); });
+    if (more) more.addEventListener('click', () => { box.dataset.shown = String(shown + CM_PAGE); commentsBlock(box, tid); });
     box.querySelectorAll('.cm-rs').forEach(rs => rs.addEventListener('toggle', () => {     // 回复点开才画（一楼可能几百条）
         if (rs.open && !rs.querySelector('.cm-r')) {
             const th = threads.find(x => x.top.id === rs.dataset.root);
@@ -96,6 +104,7 @@ async function readerComments(tid, focusId) {
             setTimeout(() => el.scrollIntoView({ block: 'center', behavior: 'smooth' }), 60);
         }
     }
+    return d;
 }
 
 // ---------------- 工作台：评论区整理 ----------------
@@ -209,15 +218,16 @@ function commentsHtml(o) {
         ${cites.length ? `<details class="cx-sources" open><summary>${escapeHtml(T('cx.sources', { n: cites.length }))}</summary>${list}</details>` : ''}</div>`;
 }
 
-function commentsWire(box, o) {
+function commentsWire(box, o, openAt) {
     const cites = o.citations || [];
+    openAt = openAt || (c => openTranscriptViewer(c.tid).then(() => readerComments(c.tid, c.id)));
     const open = n => {
         const c = cites[+n - 1];
         if (!c) return;
         box.querySelectorAll('.cx-src.hl').forEach(x => x.classList.remove('hl'));
         const it = box.querySelector(`.cx-src[data-cmn="${n}"]`);
         if (it) it.classList.add('hl');
-        openTranscriptViewer(c.tid).then(() => readerComments(c.tid, c.id));
+        openAt(c);
     };
     box.querySelectorAll('.cx-cite[data-cmn]').forEach(b => b.addEventListener('click', () => open(b.dataset.cmn)));
     box.querySelectorAll('[data-cm-open]').forEach(b => b.addEventListener('click', () => open(b.dataset.cmOpen)));
@@ -228,4 +238,89 @@ function commentsExportDoc(o, title) {
     const md = String((o.result || {}).md || '').replace(/〔(\d+)〕/g, '[$1]');
     const refs = cites.map(c => `${c.n}. ${c.text.replace(/\s+/g, ' ')} —— ${cmMeta(c)}`).join('\n');
     return { title, blocks: [{ md: md + (refs ? `\n\n## ${T('cx.sources', { n: cites.length })}\n\n${refs}` : ''), citations: {} }] };
+}
+
+// ---------------- 转写页（资料库里点开的一期）：评论区卡片 ----------------
+// 摘要卡片和转写正文之间；只有 B 站的期才出现。上面是这一期的整理（点「整理」做，跟这一期存在一起），下面是全部评论。
+async function detailComments(rec) {
+    const sec = document.getElementById('detail-comments-section');
+    if (!sec) return;
+    const tid = rec && rec.id;
+    sec.dataset.key = tid || '';
+    clearTimeout(sec._poll);
+    if (!tid || !/bilibili\.com\/video\/|b23\.tv\/|\bBV[0-9A-Za-z]{10}\b/.test(rec.source_url || '')) { sec.classList.add('hidden'); return; }
+    const list = document.getElementById('detail-cm-list');
+    const d = await commentsBlock(list, tid);
+    if (sec.dataset.key !== tid) return;
+    if (!d || !d.bili) { sec.classList.add('hidden'); return; }
+    sec.classList.remove('hidden');
+    const go = document.getElementById('detail-cm-go');
+    const dg = d.digest;
+    go.textContent = T(dg && dg.status === 'done' ? 'cm.redigest' : 'cm.digest');
+    go.disabled = !!(dg && dg.status === 'running');
+    go.classList.toggle('hidden', !!window.VERBATIM_DEMO);
+    go.onclick = () => commentsEpisodePicker(tid, rec.ai_title || rec.filename || '');
+    const box = document.getElementById('detail-cm-digest');
+    if (!dg) { box.innerHTML = `<p class="cx-muted cm-hint">${escapeHtml(T('cm.digestHint'))}</p>`; return; }
+    if (dg.status === 'running') {
+        box.innerHTML = `<div class="cm-line"><span class="st-spin" aria-hidden="true"></span>${escapeHtml(commentsProgress(dg))}</div>`;
+        sec._poll = setTimeout(() => { if (sec.dataset.key === tid) detailComments(rec); }, 2500);
+        return;
+    }
+    if (dg.status === 'failed') {
+        box.innerHTML = `<div class="cm-line cx-err">${escapeHtml(dg.error === 'interrupted' ? T('cm.interrupted') : T('cm.digestFailed'))}</div>`;
+        return;
+    }
+    box.innerHTML = `<div class="cm-dg-meta cx-muted">${escapeHtml([String(dg.created_at || '').slice(5, 16), commentsCoverage(dg)].join(' · '))}</div>` + commentsHtml(dg);
+    commentsWire(box, dg, c => commentsBlock(list, tid, c.id));
+}
+
+async function commentsEpisodePicker(tid, title) {
+    const ov = stPickOverlay();
+    const st = { length: 'medium' };
+    ov.innerHTML = `<div class="cx-modal rd-pick vp-pick pod-pick cm-pick" role="dialog" aria-modal="true" aria-labelledby="cm-t">
+        <button class="settings-x" type="button" data-close aria-label="${escapeHtml(T('common.close'))}">×</button>
+        <h2 class="cx-modal-title" id="cm-t">${stIcon('comments', 20)}<span>${escapeHtml(T('st.k.comments'))}</span></h2>
+        <p class="cx-muted">${escapeHtml(title)}</p>
+        <form id="cm-form">
+            <div class="pod-f"><span class="pod-l">${escapeHtml(T('cm.length'))}</span><div class="pod-lens" id="cm-lens" role="radiogroup"></div></div>
+            <label class="pod-f"><span class="pod-l">${escapeHtml(T('st.focus'))}</span>
+                <textarea id="cm-focus" rows="2" maxlength="300" placeholder="${escapeHtml(T('cm.focusPh'))}"></textarea></label>
+            <div class="vp-foot"><span class="rd-pick-s" id="cm-msg"></span>
+                <button type="submit" class="rd-pick-go primary" id="cm-go">${T('rd.generate')}</button></div>
+        </form></div>`;
+    const renderLens = () => {
+        const box = ov.querySelector('#cm-lens');
+        box.innerHTML = CM_LENGTHS.map(l => `<button type="button" class="pod-len${st.length === l ? ' on' : ''}" data-l="${l}"
+            role="radio" aria-checked="${st.length === l}">${escapeHtml(T('cm.len.' + l))}</button>`).join('');
+        box.querySelectorAll('.pod-len').forEach(b => b.addEventListener('click', () => { st.length = b.dataset.l; renderLens(); }));
+    };
+    renderLens();
+    ov.classList.remove('hidden');
+    try {
+        const [est, d] = await Promise.all([fetch(`/api/comments/${encodeURIComponent(tid)}/estimate`).then(r => r.json()),
+            fetch(`/api/comments/${encodeURIComponent(tid)}`).then(r => r.json())]);
+        const go = ov.querySelector('#cm-go');
+        if (est.subscription) go.textContent = T('cm.goSub');
+        else if (est.usd) go.textContent = T('vs.goCost', { cost: fmtUsd(Math.max(0.01, est.usd)) });
+        ov.querySelector('#cm-msg').textContent = d.has ? T('cm.nComments', { n: d.info.count.toLocaleString() }) : T('cm.fetchFirst', { n: 1 });
+    } catch { /* 没估价就不写 */ }
+    ov.querySelector('#cm-form').addEventListener('submit', async e => {
+        e.preventDefault();
+        const go = ov.querySelector('#cm-go');
+        go.disabled = true;
+        let r;
+        try {
+            r = await (await fetch(`/api/comments/${encodeURIComponent(tid)}/digest`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ length: st.length, focus: ov.querySelector('#cm-focus').value.trim(), lang: currentLang }) })).json();
+        } catch (err) { r = { error: String(err) }; }
+        if (r.error) {
+            ov.querySelector('#cm-msg').textContent = r.error === 'bili_login' ? T('cm.noLogin') : r.error;
+            go.disabled = false;
+            return;
+        }
+        ov.classList.add('hidden');
+        showToast(T('cm.digestStarted'));
+        if (typeof detailRecord !== 'undefined' && detailRecord && detailRecord.id === tid) detailComments(detailRecord);
+    });
 }

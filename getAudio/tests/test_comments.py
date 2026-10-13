@@ -97,6 +97,8 @@ t.check('篇幅和侧重写进提示词', '800 字' in prompt and '只看反驳'
 cid = next(k for k, (_, r) in refs.items() if r['id'] == '1')
 md, cites = comments.parse_digest(f'主流观点 > 以为自己包了个私家车 [{cid}] 还有编造的 [c99999]', refs)
 t.check('真编号换成 〔1〕，编造的删掉', '〔1〕' in md and 'c99999' not in md and len(cites) == 1, md)
+two, _ = comments.parse_digest(f'> 甲 [{cid}]\n> 乙 [{cid}]', refs)
+t.check('相邻两条引用分开成两段', two == '> 甲 〔1〕\n\n> 乙 〔1〕', two)
 t.check('出处带用户、赞数、原话', cites[0]['user'] == 'u1' and cites[0]['like'] == 99 and cites[0]['tid'] == 'T1')
 
 # ---------- 接口：笔记本里的一期 ----------
@@ -168,5 +170,27 @@ for _ in range(100):
         break
     time.sleep(0.05)
 t.check('没抓过的期整理时先抓再写', o2['status'] == 'done' and comments.load(TID2) is not None, o2.get('error'))
+
+# ---------- 转写页：这一期自己的整理 ----------
+TID3 = make_transcript(RES, [('00:00:10', 'y')], title='第三期', url='https://www.bilibili.com/video/BV1X2ZFBPEVq')
+t.check('转写页：不是 B 站不能整理', c.post(f'/api/comments/{YT}/digest', json={}).status_code == 400)
+est = c.get(f'/api/comments/{TID3}/estimate').get_json()
+t.check('转写页：估价接口', isinstance(est.get('usd'), (int, float)), est)
+r = c.post(f'/api/comments/{TID3}/digest', json={'length': 'long', 'focus': '只看反驳'})
+t.check('转写页：没抓过也能直接整理（先抓）', r.status_code == 200 and r.get_json()['digest']['status'] == 'running', r.get_json())
+for _ in range(100):
+    j = c.get(f'/api/comments/{TID3}').get_json()
+    if (j.get('digest') or {}).get('status') not in (None, 'running'):
+        break
+    time.sleep(0.05)
+dg = j.get('digest') or {}
+t.check('转写页：整理好跟这一期存在一起', dg.get('status') == 'done' and '〔1〕' in dg['result']['md'] and dg['citations'][0]['tid'] == TID3, dg.get('error'))
+t.check('转写页：评论也一起抓好了', j['has'] and j['info']['count'] == 28)
+t.check('转写页：篇幅和侧重进了提示词', '4000 字' in prompts[-1][1] and '只看反驳' in prompts[-1][1])
+comments._digesting.discard(TID3)
+o = comments.load_digest(TID3)
+o['status'] = 'running'
+comments._save_digest(TID3, o)
+t.check('转写页：重启后残留的「在整理」当成中断', comments.load_digest(TID3)['status'] == 'failed')
 
 t.finish()

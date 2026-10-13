@@ -5626,7 +5626,8 @@ def api_comments(tid):
         return jsonify({'error': 'Not found'}), 404
     d = comments.load(tid)
     body = {'bili': bool(comments.bvid_for_task(tid)), 'has': bool(d), 'info': comments.summary(d),
-            'job': comments.job_state(tid), 'threads': comments.threads(d) if d else []}
+            'job': comments.job_state(tid), 'threads': comments.threads(d) if d else [],
+            'digest': comments.load_digest(tid)}
     return Response(json.dumps(body, ensure_ascii=False), mimetype='application/json')
 
 
@@ -5642,6 +5643,33 @@ def api_comments_fetch(tid):
     if not ok:
         return jsonify({'error': err}), 400
     return jsonify({'ok': True})
+
+
+@app.route('/api/comments/<tid>/estimate')
+def api_comments_estimate(tid):
+    import comments
+    if not _TID_RE.match(tid):
+        return jsonify({'error': 'Not found'}), 404
+    usd, sub = comments.estimate([tid])
+    return jsonify({'usd': usd, 'subscription': sub})
+
+
+@app.route('/api/comments/<tid>/digest', methods=['POST'])
+def api_comments_digest(tid):
+    """转写页「评论区」卡片的「整理」：{length, focus, lang}。只整理这一期，结果跟这一期存在一起；没抓过的先抓。"""
+    import comments
+    if DEMO_MODE:
+        return jsonify({'error': 'Read-only demo'}), 403
+    if not _TID_RE.match(tid):
+        return jsonify({'error': 'Not found'}), 404
+    if not comments.bvid_for_task(tid):
+        return jsonify({'error': 'not_bili'}), 400
+    if not comments.load(tid) and not comments.sessdata():
+        return jsonify({'error': 'bili_login'}), 400
+    data = request.get_json(silent=True) or {}
+    o = comments.start_episode_digest(tid, data.get('length') or 'medium', data.get('focus') or '',
+                                      'en' if data.get('lang') == 'en' else 'zh')
+    return jsonify({'ok': True, 'digest': o})
 
 
 def _comment_rows(chain_id):
