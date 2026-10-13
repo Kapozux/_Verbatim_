@@ -81,6 +81,16 @@ _Avoid_：分组（那是首页上笔记本的合集）、合集、文件夹（�
 代码里：notes、`notes.py`、`notes.json`（放在来源自己的目录里）、unit（块）、`study._notes_plan`。
 _Avoid_：摘要（单说指转写页的 summary）、证据卡（博主分析抽出来的观点卡，更重更贵）
 
+**评论区**：
+一期 B 站视频下面的评论（一级评论叫「楼」，下面的叫「回复」），存在那一期的目录里（`comments.json`），属于来源的一部分；
+在来源栏阅读器里看，来源那一行 ⋯「抓评论区」。见 ADR 0018。
+代码里：`comments.py`、`/api/comments/<task_id>`、楼 = root 为 0 的那条。
+_Avoid_：弹幕（那是视频上飘的字，不是评论）、留言
+
+**评论区整理**：
+工作台的一种产出（kind=`comments`）：评论区在讨论什么的概述 + 一字不改的几条原话，每条原话带出处圆点，点了回到那条评论。
+_Avoid_：评论摘要、舆情分析
+
 **来源概述**：
 阅读器顶上「这份讲什么 + 几个主题」那块（照 NotebookLM 的 Source guide）。转写用转写完就有的摘要；文档第一次打开时写一份，按界面语言存。
 代码里：guide、`sources.write_doc_guide`、`results/_docs/<doc_id>/guide.json`、`/api/sources/guide`。

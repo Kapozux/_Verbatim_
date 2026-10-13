@@ -19,6 +19,7 @@ const ST_PATHS = {
     visual: '<rect x="3" y="4.5" width="18" height="15" rx="2"/><circle cx="8.5" cy="9.5" r="1.6"/><path d="M21 16l-5-5-8.5 8.5"/>',
     podcast: '<path d="M4 15v-3a8 8 0 0 1 16 0v3"/><rect x="3" y="14" width="4.5" height="6.5" rx="1.6"/><rect x="16.5" y="14" width="4.5" height="6.5" rx="1.6"/>',
     slides: '<rect x="3" y="4" width="18" height="12" rx="1.5"/><path d="M12 16v4M8 20h8"/><path d="M7.5 8.5h6M7.5 11.5h9"/>',
+    comments: '<path d="M4 5h11a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1H9l-3.5 3v-3H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z"/><path d="M16 9h4a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-1v2.5L16 17h-4.5"/>',
     compare: '<circle cx="8" cy="8" r="3.2"/><circle cx="16" cy="8" r="3.2"/><path d="M2.5 19.5c.6-3 2.8-5 5.5-5s4.9 2 5.5 5"/><path d="M13.6 15.2c.7-.5 1.5-.7 2.4-.7 2.7 0 4.9 2 5.5 5"/>',
 };
 function stIcon(kind, size = 18) {
@@ -37,6 +38,7 @@ function stTitle(o) {
         return (o.lens ? T('lens.' + o.lens) : T(col ? 'rd.overview' : 'rd.portrait')) + (o.person ? ' · ' + o.person : '');
     }
     if (o.kind === 'note') return o.title || T('st.k.note');
+    if (o.kind === 'comments') return commentsTitle(o);
     if (o.kind === 'view') {             // 谁的立场 / 预测 / 原话
         const who = (cx.people || []).length > 1 ? personName(cxPerson(o.chain)) || o.person : '';
         return T(o.view === 'cards' ? 'cx.tab.cards' : 'cx.tab.' + o.view) + (who ? ' · ' + who : '');
@@ -106,6 +108,7 @@ function stMeta(o) {
         const again = stState.docs.some(d => d.lens === o.lens && d.chain === o.chain);   // 已有一版 = 重新生成；没有 = 第一次生成
         return `<span class="st-spin" aria-hidden="true"></span>${T(again ? 'rd.regenerating' : 'rd.generating')}`;
     }
+    if (o.status === 'running' && o.kind === 'comments') return `<span class="st-spin" aria-hidden="true"></span>${escapeHtml(commentsProgress(o))}`;
     if (o.status === 'running' && o.kind === 'podcast') return `<span class="st-spin" aria-hidden="true"></span>${escapeHtml(podcastMeta(o))}`;
     if (o.status === 'running' && o.progress && o.progress.total > 1) {     // 画面卡一期一期做：写做到第几期
         return `<span class="st-spin" aria-hidden="true"></span>${escapeHtml(T('vs.progress', { i: Math.min(o.progress.done + 1, o.progress.total), n: o.progress.total }))}`;
@@ -117,6 +120,7 @@ function stMeta(o) {
     if (o.kind === 'visual') parts.push(T('vs.nCards', { n: o.n || 0 }));
     if (o.kind === 'podcast' && o.duration) parts.push(podClock(o.duration));
     if (o.kind === 'slides' && o.n_slides) parts.push(T('sl.nPages', { n: o.n_slides }));
+    if (o.kind === 'comments' && o.n) parts.push(T('cm.nComments', { n: o.n.toLocaleString() }));
     if (o.cost_usd) parts.push(fmtUsd(o.cost_usd));
     return escapeHtml(parts.join(' · '));
 }
@@ -172,6 +176,7 @@ function stRenderList() {
         else if (retry && o.kind === 'visual') retry.addEventListener('click', () => visualPicker());
         else if (retry && o.kind === 'podcast') retry.addEventListener('click', () => podcastPicker());
         else if (retry && o.kind === 'slides') retry.addEventListener('click', () => slidesPicker());
+        else if (retry && o.kind === 'comments') retry.addEventListener('click', () => commentsPicker());
         else if (retry) retry.addEventListener('click', () => stGenerate({ kind: o.kind, focus: o.focus, n: o.n,
             scope: o.scope, outline: o.outline_src, format: o.format, prompt: o.prompt }, true));
         const del = el.querySelector('.st-del');
@@ -296,7 +301,7 @@ async function stGenerate(body, quiet) {
 
 function stWire() {
     document.querySelectorAll('#chain-explore .st-tool').forEach(b =>
-        b.addEventListener('click', () => b.dataset.st === 'visual' ? visualPicker() : b.dataset.st === 'revnotes' ? revnotesPicker() : b.dataset.st === 'podcast' ? podcastPicker() : b.dataset.st === 'slides' ? slidesPicker() : stOpenDialog(b.dataset.st)));
+        b.addEventListener('click', () => b.dataset.st === 'visual' ? visualPicker() : b.dataset.st === 'revnotes' ? revnotesPicker() : b.dataset.st === 'podcast' ? podcastPicker() : b.dataset.st === 'slides' ? slidesPicker() : b.dataset.st === 'comments' ? commentsPicker() : stOpenDialog(b.dataset.st)));
     document.getElementById('st-form').addEventListener('submit', async e => {
         e.preventDefault();
         const ov = document.getElementById('st-overlay');
@@ -349,6 +354,7 @@ async function stView(id) {
 function stCoverage(o) {
     const c = o.coverage;
     if (o.kind === 'visual') return o.cost_usd ? fmtUsd(o.cost_usd) : '';
+    if (o.kind === 'comments') return commentsCoverage(o);
     if (!c) return '';
     const bits = [T('st.covSources', { n: c.sources })];
     if (c.thinned && c.plan === 'notes' && (c.themes || []).length) {       // 按读书笔记定的计划
@@ -368,6 +374,7 @@ function stExportDoc(o) {
     if (o.kind === 'visual') return visualExportDoc(o, title);
     if (o.kind === 'podcast') return podcastExportDoc(o, title);
     if (o.kind === 'slides') return slidesExportDoc(o, title);
+    if (o.kind === 'comments') return commentsExportDoc(o, title);
     if (o.kind === 'compare') return { title: `${T('st.k.compare')}：${o.question || ''}`.slice(0, 80), blocks: [{ md: r.answer, citations: cites }] };
     if (o.kind === 'flashcards') {
         return { title, blocks: (r.cards || []).map((c, i) => ({ heading: `${i + 1}. ${c.front}`, md: c.back, citations: cites })) };
@@ -412,9 +419,12 @@ function stRender() {
         body = podcastHtml(o);
     } else if (o.kind === 'slides') {
         body = slidesHtml(o);
+    } else if (o.kind === 'comments') {
+        body = commentsHtml(o);
     }
     box.innerHTML = head + body;
-    wireCitations(box, cites);
+    wireCitations(box, o.kind === 'comments' ? {} : cites);      // 评论的出处是一张列表，圆点由 comments.js 自己接
+    if (o.kind === 'comments') commentsWire(box, o);
     if (o.kind === 'flashcards') stFlashWire(box);
     if (o.kind === 'quiz') stQuizWire(box);
     if (o.kind === 'coverage') stOutlineWire(box);

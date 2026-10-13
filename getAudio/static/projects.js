@@ -212,7 +212,8 @@ function srcRender() {
         </div>`);
         if (open) {
             eps.forEach(v => rows.push(srcRow('video', v.task_id, `<span class="sr-svg" data-k="video">${srcSvg('video')}</span>`, v.title || v.task_id,
-                v.status === 'done' ? '' : T('src.st.converting'), { ready: v.status === 'done', child: true })));
+                v.status === 'done' ? '' : T('src.st.converting'), { ready: v.status === 'done', child: true,
+                    menu: v.status === 'done' && srcIsBili(v.video_url) ? `<button type="button" data-act="comments">${T('cm.fetchMenu')}</button>` : '' })));
         }
     };
     if (d.channel) group(d.channel, d.videos, 'channel', false);
@@ -220,11 +221,11 @@ function srcRender() {
     if (!d.channel) {
         (d.videos || []).filter(v => v.task_id).forEach(v => rows.push(srcRow('video', v.task_id, `<span class="sr-svg" data-k="audio">${srcSvg('audio')}</span>`, v.title || v.task_id,
             v.status === 'done' ? '' : T('src.st.converting'), { ready: v.status === 'done',
-                menu: `<button type="button" data-act="remove">${T('src.remove')}</button>` })));
+                menu: (v.status === 'done' && srcIsBili(v.video_url) ? `<button type="button" data-act="comments">${T('cm.fetchMenu')}</button>` : '') + `<button type="button" data-act="remove">${T('src.remove')}</button>` })));
     }
     (d.recordings || []).forEach(r => rows.push(srcRow('recording', r.task_id, `<span class="sr-svg" data-k="audio">${srcSvg('audio')}</span>`, r.title,
         r.status === 'done' ? '' : T('src.transcribing'), { ready: r.status === 'done',
-            menu: `<button type="button" data-act="remove">${T('src.remove')}</button>` })));
+            menu: (r.bili ? `<button type="button" data-act="comments">${T('cm.fetchMenu')}</button>` : '') + `<button type="button" data-act="remove">${T('src.remove')}</button>` })));
     (d.docs || []).forEach(x => {
         // 网页的域名不占行内位置（左栏窄，标题会被挤没），放在阅读器标题旁边
         const sub = x.status === 'ready' ? (x.pages ? T('src.pages', { n: x.pages }) : '')
@@ -585,6 +586,9 @@ async function srcPost(url, opts) {
     } catch (e) { showToast(String(e)); return null; }
 }
 
+// 这一期是不是 B 站视频（来源行 ⋯ 里才出「抓评论区」）
+function srcIsBili(url) { return /bilibili\.com\/video\/|b23\.tv\/|\bBV[0-9A-Za-z]{10}\b/.test(url || ''); }
+
 async function srcAction(kind, sid, act) {
     const id = srcState.id;
     const d = srcState.data || {};
@@ -603,6 +607,12 @@ async function srcAction(kind, sid, act) {
         const m = row && row.querySelector('.sr-menu');
         if (m) m.open = false;
         if (row) setTimeout(() => srcFolderPick(row, sid), 0);
+        return;
+    }
+    if (act === 'comments') {               // B 站评论区：后台抓，抓完在阅读器里看（comments.js）
+        const m = document.querySelector(`.sr-row[data-sid="${CSS.escape(sid)}"] .sr-menu`);
+        if (m) m.open = false;
+        commentsFetch(sid);
         return;
     }
     if (act === 'retry') {
@@ -820,7 +830,7 @@ function readerOpen(title, sub, origHref, sid) {
     if (box.classList.contains('hidden')) {
         readerFrom = { pane: ex && ex.dataset.nbActive, top: pane ? pane.scrollTop : 0, winY: window.scrollY };
     }
-    ['src-reader-guide', 'src-reader-notes'].forEach(gid => {          // 换一份原文：上一份的概述、笔记先清掉
+    ['src-reader-guide', 'src-reader-notes', 'src-reader-comments'].forEach(gid => {          // 换一份原文：上一份的概述、笔记先清掉
         const g = document.getElementById(gid);
         if (g) { g.innerHTML = ''; g.classList.add('hidden'); g.dataset.key = ''; }
     });
@@ -1138,6 +1148,7 @@ async function openTranscriptViewer(taskId, sec, cite) {
     if (typeof vcDecorateTranscript === 'function') vcDecorateTranscript(body, taskId, segs);   // 每句是谁说的、▶ 听
     readerGuide('task', taskId);
     if (typeof readerNotes === 'function') readerNotes('task', taskId);
+    if (typeof readerComments === 'function') readerComments(taskId);
     readerAlign(taskId, cite);
 }
 

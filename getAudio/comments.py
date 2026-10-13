@@ -399,18 +399,15 @@ def start_fetch(tid, run=None):
 # ---------- 工作台「评论区整理」 ----------
 
 def estimate(tids):
-    """(美元, 是否走 Claude 订阅)。没抓过的期按 2,000 条、每条 40 字估。"""
+    """(美元, 是否走 Claude 订阅)。抓过的按真实提示词算；没抓过的按 2,000 条、每条约 45 个 token 估。"""
     import ask
     import claude_cli
-    chars = 0
-    for tid in tids:
-        d = load(tid)
-        chars += sum(len(r['text']) + 12 for r in d['items']) if d else 2000 * 52
     if claude_cli.text_engine():
         return 0.0, True
     import usage
-    tokens = ask.est_tokens('评' * min(chars, _MAX_INPUT)) + 1500
-    return round(usage.estimate_cost(ask.ASK_MODEL, tokens, 3500) or 0, 4), False
+    have = [(t, d) for t, d in ((t, load(t)) for t in tids) if d]
+    tokens = (ask.est_tokens(build_prompt(have)[0]) if have else 0) + 90_000 * (len(tids) - len(have)) + 1500
+    return round(usage.estimate_cost(ask.ASK_MODEL, min(tokens, ask.est_tokens('评' * _MAX_INPUT)), 3500) or 0, 4), False
 
 
 def start_digest(cdir, chain_id, tids, length='medium', focus='', lang='zh', run=None, titles=None):

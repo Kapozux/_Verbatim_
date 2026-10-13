@@ -4256,6 +4256,7 @@ def _doc_rows(cid):
 
 
 def _rec_rows(cid):
+    import comments
     out = []
     for r in _reg(cid)['recordings']:
         tid = r.get('task_id')
@@ -4263,7 +4264,8 @@ def _rec_rows(cid):
             continue
         done = os.path.isfile(os.path.join(config.RESULTS_FOLDER, tid, 'transcript.json'))
         out.append({'task_id': tid, 'title': _transcript_title(tid) if done else (r.get('title') or tid),
-                    'status': 'done' if done else 'transcribing', 'added_at': r.get('added_at')})
+                    'status': 'done' if done else 'transcribing', 'added_at': r.get('added_at'),
+                    'bili': done and bool(comments.bvid_for_task(tid))})   # ⋯ 里出不出「抓评论区」
     return out
 
 
