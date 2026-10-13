@@ -127,6 +127,7 @@ const STRINGS = {
         "src.textSave": "Add",
 
         "src.st.converting": "Converting",
+        "src.allFailed": "All {n} failed",
 
         "src.st.ready": "Ready",
 
@@ -1737,6 +1738,7 @@ const STRINGS = {
         "src.textSave": "添加",
 
         "src.st.converting": "转换中",
+        "src.allFailed": "{n} 期全失败",
 
         "src.st.ready": "已就绪",
 

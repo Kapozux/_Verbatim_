@@ -169,12 +169,21 @@ function srcHost(url) {
     try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return ''; }
 }
 
+// 一期视频在左栏的小字：失败 / 取消的不能再写「转换中」（10-14：整批 429 失败，左栏挂了一小时「转换中」）
+function srcEpSub(v) {
+    if (v.status === 'done') return '';
+    return ['failed', 'cancelled'].includes(v.status) ? T('src.st.failed') : T('src.st.converting');
+}
+function srcEpCls(v) {
+    return ['failed', 'cancelled'].includes(v.status) ? 'bad' : v.status === 'done' ? '' : 'run';
+}
+
 function srcRow(kind, sid, icon, title, sub, opts = {}) {
     const can = !!opts.ready;
     return `<div class="sr-row${opts.child ? ' sr-child' : ''}" data-kind="${kind}" data-sid="${escapeHtml(sid)}">
         <span class="sr-ic">${icon}</span>
         <button type="button" class="sr-title" ${can ? '' : 'disabled'} title="${escapeHtml(title)}">${escapeHtml(title)}</button>
-        ${sub ? `<span class="sr-sub ${opts.subCls || ''}">${escapeHtml(sub)}</span>` : ''}
+        ${sub ? `<span class="sr-sub ${opts.subCls || ''}"${opts.tip ? ` title="${escapeHtml(opts.tip)}"` : ''}>${escapeHtml(sub)}</span>` : ''}
         ${opts.menu && !window.VERBATIM_DEMO ? `<details class="sr-menu"><summary aria-label="⋯">⋯</summary><div>
             <button type="button" data-act="folder">${T('src.moveToFolder')}</button>${opts.menu}</div></details>` : ''}
         <input type="checkbox" class="sr-check" ${can ? '' : 'disabled'} ${can && srcIsOn(sid) ? 'checked' : ''}
@@ -202,7 +211,7 @@ function srcRender() {
         rows.push(`<div class="sr-row sr-group" data-kind="channel" data-ckey="${escapeHtml(key)}">
             <span class="sr-ic sr-face">${face || `<span class="sr-svg" data-k="channel">${srcSvg('channel')}</span>`}</span>
             <button type="button" class="sr-title sr-fold" aria-expanded="${open}" ${ref ? `title="${escapeHtml(T('src.sharedHint'))}"` : ''}>${escapeHtml(ch.name || ch.url)}</button>
-            <span class="sr-sub${running ? ' run' : ''}">${running && !done.length ? T('src.transcribing') : T('src.nEpisodes', { n: done.length })}</span>
+            <span class="sr-sub${running ? ' run' : eps.length && eps.every(v => ['failed', 'cancelled'].includes(v.status)) ? ' bad' : ''}">${running && !done.length ? T('src.transcribing') : eps.length && eps.every(v => ['failed', 'cancelled'].includes(v.status)) ? T('src.allFailed', { n: eps.length }) : T('src.nEpisodes', { n: done.length })}</span>
             <details class="sr-menu"><summary aria-label="⋯">⋯</summary><div>
                 ${ref ? `<button type="button" data-act="open-creator">${T('src.openCreator')}</button>`
                     : `<button type="button" data-act="episodes">${T('nb.episodes')}</button>`}
@@ -212,7 +221,7 @@ function srcRender() {
         </div>`);
         if (open) {
             eps.forEach(v => rows.push(srcRow('video', v.task_id, `<span class="sr-svg" data-k="video">${srcSvg('video')}</span>`, v.title || v.task_id,
-                v.status === 'done' ? '' : T('src.st.converting'), { ready: v.status === 'done', child: true,
+                srcEpSub(v), { ready: v.status === 'done', child: true, subCls: srcEpCls(v), tip: v.error,
                     menu: v.status === 'done' && srcIsBili(v.video_url) ? `<button type="button" data-act="comments">${T('cm.fetchMenu')}</button>` : '' })));
         }
     };
@@ -220,7 +229,7 @@ function srcRender() {
     (d.channels || []).forEach(ch => group(ch, ch.videos, ch.chain_id, true));
     if (!d.channel) {
         (d.videos || []).filter(v => v.task_id).forEach(v => rows.push(srcRow('video', v.task_id, `<span class="sr-svg" data-k="audio">${srcSvg('audio')}</span>`, v.title || v.task_id,
-            v.status === 'done' ? '' : T('src.st.converting'), { ready: v.status === 'done',
+            srcEpSub(v), { ready: v.status === 'done', subCls: srcEpCls(v), tip: v.error,
                 menu: (v.status === 'done' && srcIsBili(v.video_url) ? `<button type="button" data-act="comments">${T('cm.fetchMenu')}</button>` : '') + `<button type="button" data-act="remove">${T('src.remove')}</button>` })));
     }
     (d.recordings || []).forEach(r => rows.push(srcRow('recording', r.task_id, `<span class="sr-svg" data-k="audio">${srcSvg('audio')}</span>`, r.title,
