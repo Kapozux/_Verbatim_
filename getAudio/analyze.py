@@ -477,6 +477,10 @@ def _llm(prompt, provider, model, grounded=False, purpose='analysis'):
             return _call_openai_compat(prompt, model, c[0], c[1] or 'none', label='Your own model', purpose=purpose)
         except Exception as e:  # noqa: BLE001
             raise RuntimeError(f'Your own model ({model} at {c[0]}) failed: {str(e)[:200]}') from e
+    if purpose == 'cards':
+        out = _claude_cards(prompt)
+        if out:
+            return out
     if provider in _CN_PROVIDERS or _or_deepseek(provider, model):
         try:
             if provider == 'openrouter':
@@ -488,6 +492,24 @@ def _llm(prompt, provider, model, grounded=False, purpose='analysis'):
             return _call_gemini(prompt, grounded=grounded, model=g_extract if purpose in ('cards', 'review') else g_synth,
                                 purpose=purpose)
     return _llm_other(prompt, provider, model, grounded, purpose)
+
+
+# 抽证据卡交给本机 Claude Haiku（CARDS_ENGINE=claude，2026-10-13，ADR 0017）：订阅额度、记 $0。
+# 10-13 实测 5 期（立党 4 期 + 经济课 1 期，同一段转写）：Haiku medium 卡 254 张、原话对得上 99%；
+# 现有 DeepSeek 卡 228 张、89%（它当时读的是体检删过句的转写，对不上的有一部分是这个原因）；Haiku 不审查时政，deepseek_guard 那些期也不用再改走 Gemini（10-10 花了 $33）。
+# 用不了 / 撞上限 / 报错：照旧走原来的模型；用户自己的模型（custom）在上面就返回了，不会走到这里。
+CLAUDE_CARDS_MODEL = 'claude-haiku-5-5'
+
+
+def _claude_cards(prompt):
+    import claude_cli
+    if not claude_cli.cards_engine():
+        return None
+    try:
+        return claude_cli.text(prompt, purpose='cards', effort='medium', model=CLAUDE_CARDS_MODEL) or None
+    except Exception as e:  # noqa: BLE001
+        print(f'[分析] Claude Code 抽卡失败（{str(e)[:120]}），这次照旧走原来的模型')
+        return None
 
 
 def _llm_cn(prompt, provider, model, purpose):

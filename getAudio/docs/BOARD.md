@@ -9,6 +9,7 @@
 
 | 事 | 谁 | 在哪 | 状态 |
 |---|---|---|---|
+| 每期抽证据卡交给本机 Claude Haiku（`CARDS_ENGINE=claude`，默认不开；用户 10-13：「量太大可以 haiku（看性能）」） | claude-cards 窗口（kapozux-b9） | worktree `.claude/worktrees/claude-cards`，分支 feature/claude-cards | 已本地提交，56 个测试文件全过；实测 5 期 Haiku 卡 254 张、原话对得上 99%（DeepSeek 228 张、89%）。等合进 main、在 `.env` 开 `CARDS_ENGINE=claude`。交接 `docs/handoff/claude-cards.md`，ADR 0017 |
 | 日常文字活（摘要、标签、回顾……llmroute 的用途）先交给本机 Claude Code（`TEXT_ENGINE=claude`，默认不开；用户 10-13：开销越少越好） | claude-text 窗口（kapozux-b9） | main（10-13 合进、5001 已重启，`.env` 已开 `TEXT_ENGINE=claude`） | 上线。55 个测试文件全过；实测摘要 3.2 秒、Haiku、$0。交接 `docs/handoff/claude-text.md`，ADR 0016 |
 | 问证据卡交给本机 Claude Code 写（`ASK_ENGINE=claude`，默认不开；用户 10-13 要的，抽卡仍用 DeepSeek / Gemini） | claude-ask 窗口（kapozux-b9） | main（10-13 16:2x 合进、5001 已重启，`.env` 已开 `ASK_ENGINE=claude`） | 上线。54 个测试文件全过；实测 4.8 秒出字、12.5 秒写完，经 5001 问过一次（记 claude-code $0）。下一步见交接 `docs/handoff/claude-ask.md`，ADR 0015 |
 | 来源标签（照 NotebookLM：按主题自动分组、一个来源一个标签、排序：最近 / 标题 / 类型），取代文件夹 | getaudio-fa | main（10-05 合进、5001 已重启） | 已本地提交、测试全过；IB 计算机科学实测 19 份 → 7 组，$0.0003、2.6 秒 |
@@ -108,6 +109,7 @@
 | 0014 | 接口文档从路由生成 | main |
 | 0015 | 问证据卡可以交给本机 Claude Code 写（ASK_ENGINE=claude） | main |
 | 0016 | 日常文字活先交给本机 Claude Code（TEXT_ENGINE=claude，提取用 Haiku、判断用 Opus） | main |
+| 0017 | 每期抽证据卡可以交给本机 Claude Haiku（CARDS_ENGINE=claude） | 分支 feature/claude-cards |
 | 0012 | 出处时间点走逐词时间轴（YouTube 字幕 / Qwen / 本机 Whisper 对齐），不估算 | 分支 feature/cite-cards |
 | 0013 | 用户自己的模型（OpenAI 兼容 / Ollama）选了就不偷偷换云端 | 分支 feature/on-port |
 | 0014 | 接口文档从路由表和 docstring 现生成，不手写 schema | 分支 feature/on-port |

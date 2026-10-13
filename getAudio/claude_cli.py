@@ -58,6 +58,11 @@ def text_engine():
     return (os.environ.get('TEXT_ENGINE') or '').strip().lower() == 'claude' and available()
 
 
+def cards_engine():
+    """每期抽证据卡交不交给 Claude Haiku：CARDS_ENGINE=claude（2026-10-13，ADR 0017）。"""
+    return (os.environ.get('CARDS_ENGINE') or '').strip().lower() == 'claude' and available()
+
+
 def _args(effort, model=MODEL):
     return ['-p', '--model', model, '--effort', effort, '--system-prompt', SYSTEM, '--tools', '',
             '--disable-slash-commands', '--strict-mcp-config', '--setting-sources', '', '--no-session-persistence',

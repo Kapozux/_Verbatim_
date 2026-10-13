@@ -66,6 +66,7 @@ def isolate(prefix, cheap_route=False):
     # （禁外网只拦得住本进程的 socket，拦不住子进程）。要测 Claude 的测试自己设、并用 claude_cli.use_runner 打桩
     os.environ['ASK_ENGINE'] = ''
     os.environ['TEXT_ENGINE'] = ''
+    os.environ['CARDS_ENGINE'] = ''
     os.makedirs(os.path.join(tmp, 'results', '_chains'))
     # 本机开着代理（Clash 之类）时，HTTP 客户端会先连 127.0.0.1 的代理、由代理转发出去——
     # 下面的「只许连本机」挡不住这一跳，所以代理变量一律清掉
