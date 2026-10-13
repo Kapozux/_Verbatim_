@@ -2983,13 +2983,21 @@ pre.cc-quote.repo-quote { font-family: var(--mono); font-size: 13px; line-height
 .cx-digest .cx-src .cm-t { font-size: 15px; }
 /* 一个视频的评论区卡片（转写详情页、「转写」页贴链接的弹窗）*/
 #detail-comments-section { margin-bottom: 20px; }
-.cm-ctl { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-top: 10px; }
-.cm-ctl .cm-lens { flex: none; }
-.cm-ctl .cm-focus { flex: 1 1 200px; min-width: 0; }
-.cm-ctl .cm-go { flex: none; }
-.cm-ctl .cm-csv { flex: none; margin-left: auto; }
+.cm-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; margin-top: 10px; }
+.cm-acts { display: flex; gap: 8px; flex: none; }
+.cm-acts .btn-secondary { padding: 6px 14px; font-size: 13.5px; text-decoration: none; }
+.cm-ctl { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 12px; padding: 12px; border: 1px solid var(--line);
+    border-radius: var(--r-md); background: var(--paper); }
+.cm-ctl .cm-lens { flex: 0 1 auto; }
+.cm-ctl .cm-focus { flex: 1 1 220px; min-width: 0; }
+.cm-ctl-go { display: flex; gap: 8px; margin-left: auto; flex: none; }
 .cm-dg:not(:empty) { margin-top: 14px; }
-.cm-dg-meta { margin: 0 0 4px; font-size: 13px; }
+.cm-dg-meta { font-size: 13px; min-width: 0; }
+.cm-list-box .cm-list { max-height: none; }         /* 弹窗、详情页本身在滚，评论列表别再套一层滚动 */
+/* 勾了「只要评论区」：转写才用的设置先藏起来 */
+#upload-form.cm-only-on .form-group:has(input[name="engine"]),
+#upload-form.cm-only-on .collection-cap,
+#upload-form.cm-only-on #speaker-count-group { display: none; }
 .cm-dg .cx-digest, .cm-dg .md-body { border: none; background: none; padding: 0; margin: 0; box-shadow: none; }
 .cm-list-box { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
 .cm-list-box summary { cursor: pointer; font-size: 14px; font-weight: 500; color: var(--ink-soft); }

@@ -216,7 +216,7 @@ function commentsHtml(o) {
         <div class="cx-src-foot"><span>${escapeHtml(cmMeta(c))}</span>
             <button type="button" class="cx-link" data-cm-open="${c.n}">${escapeHtml(T('cm.openThread'))}</button></div></div>`).join('');
     return `<div class="cx-digest"><div class="md-body st-md">${md}</div>
-        ${cites.length ? `<details class="cx-sources" open><summary>${escapeHtml(T('cx.sources', { n: cites.length }))}</summary>${list}</details>` : ''}</div>`;
+        ${cites.length ? `<details class="cx-sources"><summary>${escapeHtml(T('cx.sources', { n: cites.length }))}</summary>${list}</details>` : ''}</div>`;
 }
 
 function commentsWire(box, o, openAt) {
@@ -227,7 +227,7 @@ function commentsWire(box, o, openAt) {
         if (!c) return;
         box.querySelectorAll('.cx-src.hl').forEach(x => x.classList.remove('hl'));
         const it = box.querySelector(`.cx-src[data-cmn="${n}"]`);
-        if (it) it.classList.add('hl');
+        if (it) { it.classList.add('hl'); it.closest('details').open = true; }
         openAt(c);
     };
     box.querySelectorAll('.cx-cite[data-cmn]').forEach(b => b.addEventListener('click', () => open(b.dataset.cmn)));
@@ -249,11 +249,18 @@ async function commentsCard(root, key) {
     if (root.dataset.key !== key) {
         root.dataset.key = key;
         root.dataset.len = 'medium';
-        root.innerHTML = `<div class="cm-ctl">
-                <div class="pod-lens cm-lens" role="radiogroup">${CM_LENGTHS.map(l => `<button type="button" class="pod-len" data-l="${l}" role="radio">${escapeHtml(T('cm.len.' + l))}</button>`).join('')}</div>
-                <input type="text" class="search-input cm-focus" maxlength="300" placeholder="${escapeHtml(T('cm.focusPh'))}">
-                <button type="button" class="rd-pick-go primary cm-go">${escapeHtml(T('cm.digest'))}</button>
-                <a class="cx-link cm-csv hidden" download>${escapeHtml(T('cm.csv'))}</a>
+        root.dataset.cost = '';
+        root.dataset.redo = '';
+        root.innerHTML = `<div class="cm-head hidden">
+                <span class="cm-dg-meta cx-muted"></span>
+                <span class="cm-acts"><button type="button" class="btn-secondary cm-redo">${escapeHtml(T('cm.redigest'))}</button>
+                    <a class="btn-secondary cm-csv" download>${escapeHtml(T('cm.csv'))}</a></span>
+            </div>
+            <div class="cm-ctl hidden">
+                <div class="pod-lens cm-lens" role="radiogroup">${CM_LENGTHS.map(l => `<button type="button" class="pod-len" data-l="${l}" role="radio">${escapeHtml(T('cm.lenS.' + l))}</button>`).join('')}</div>
+                <input type="text" class="search-input cm-focus" maxlength="300" placeholder="${escapeHtml(T('cm.focusPhS'))}">
+                <span class="cm-ctl-go"><button type="button" class="btn-secondary cm-cancel hidden">${escapeHtml(T('common.cancel'))}</button>
+                    <button type="button" class="rd-pick-go primary cm-go">${escapeHtml(T('cm.digest'))}</button></span>
             </div>
             <div class="cm-dg"></div>
             <div class="cm-reader cm-list-box"></div>`;
@@ -264,38 +271,54 @@ async function commentsCard(root, key) {
         root.querySelectorAll('.cm-lens .pod-len').forEach(b => b.addEventListener('click', () => { root.dataset.len = b.dataset.l; lens(); }));
         lens();
         root.querySelector('.cm-go').addEventListener('click', () => commentsDigest(root, key));
-        root.querySelector('.cm-ctl').classList.toggle('hidden', !!window.VERBATIM_DEMO);
+        root.querySelector('.cm-redo').addEventListener('click', () => { root.dataset.redo = '1'; commentsCard(root, key); });
+        root.querySelector('.cm-cancel').addEventListener('click', () => { root.dataset.redo = ''; commentsCard(root, key); });
         fetch(`/api/comments/${encodeURIComponent(key)}/estimate`).then(r => r.json()).then(est => {
             if (root.dataset.key !== key) return;
-            const go = root.querySelector('.cm-go');
-            if (est.subscription) root.dataset.cost = T('cm.digestSub');
-            else if (est.usd) root.dataset.cost = T('cm.digestCost', { cost: fmtUsd(Math.max(0.01, est.usd)) });
-            if (root.dataset.cost) go.textContent = root.dataset.cost;
+            root.dataset.cost = est.subscription ? T('cm.digestSub') : est.usd ? T('cm.digestCost', { cost: fmtUsd(Math.max(0.01, est.usd)) }) : '';
+            if (root.dataset.cost) root.querySelector('.cm-go').textContent = root.dataset.cost;
         }).catch(() => {});
     }
     clearTimeout(root._poll);
     const list = root.querySelector('.cm-list-box');
     const d = await commentsBlock(list, key);
     if (root.dataset.key !== key || !d) return d;
+    const dg = d.digest;
+    const fetching = !!(d.job && d.job.running);
+    const running = !!(dg && dg.status === 'running');
+    const done = !!(dg && dg.status === 'done');
+    const ro = !!window.VERBATIM_DEMO;
+    // 上面一行：有总结时写它是什么时候、谁写的；右边「重新总结」「导出 CSV」
+    const head = root.querySelector('.cm-head');
+    head.classList.toggle('hidden', !d.has && !done);
     const csv = root.querySelector('.cm-csv');
     csv.classList.toggle('hidden', !d.has);
     csv.href = `/api/comments/${encodeURIComponent(key)}/csv`;
-    if (d.job && d.job.running) root._poll = setTimeout(() => { if (root.dataset.key === key && root.isConnected) commentsCard(root, key); }, 3000);
-    const dg = d.digest;
-    root.querySelector('.cm-go').disabled = !!(dg && dg.status === 'running');
-    if (!root.dataset.cost) root.querySelector('.cm-go').textContent = T(dg && dg.status === 'done' ? 'cm.redigest' : 'cm.digest');
+    root.querySelector('.cm-redo').classList.toggle('hidden', !done || ro || root.dataset.redo === '1');
+    root.querySelector('.cm-dg-meta').textContent = done
+        ? [String(dg.created_at || '').slice(5, 16), commentsCoverage(dg), cmModelLabel(dg.model), dg.auto ? T('cm.autoTag') : ''].filter(Boolean).join(' · ')
+        : d.has ? T('cm.nComments', { n: ((d.info || {}).count || 0).toLocaleString() }) : '';
+    // 选项（篇幅 / 侧重 / 按钮）：还没总结过、或点了「重新总结」才出现；在抓、在写的时候不出现
+    const showCtl = !ro && !fetching && !running && (!done || root.dataset.redo === '1');
+    root.querySelector('.cm-ctl').classList.toggle('hidden', !showCtl);
+    root.querySelector('.cm-cancel').classList.toggle('hidden', !(done && root.dataset.redo === '1'));
+    root.querySelector('.cm-go').textContent = root.dataset.cost || T('cm.digest');
     const box = root.querySelector('.cm-dg');
-    if (!dg) { box.innerHTML = ''; }
-    else if (dg.status === 'running') {
+    if (fetching) {
+        box.innerHTML = root.dataset.auto ? `<div class="cm-line cx-muted">${escapeHtml(T('cm.willAuto'))}</div>` : '';
+        root._poll = setTimeout(() => { if (root.dataset.key === key && root.isConnected) commentsCard(root, key); }, 3000);
+    } else if (running) {
         box.innerHTML = `<div class="cm-line"><span class="st-spin" aria-hidden="true"></span>${escapeHtml(commentsProgress(dg))}</div>`;
         root._poll = setTimeout(() => { if (root.dataset.key === key && root.isConnected) commentsCard(root, key); }, 2500);
-    } else if (dg.status === 'failed') {
+    } else if (dg && dg.status === 'failed') {
         box.innerHTML = `<div class="cm-line cx-err">${escapeHtml(T(dg.error === 'interrupted' ? 'cm.interrupted' : dg.error === 'empty' ? 'cm.digestEmpty' : 'cm.digestFailed'))}</div>`;
-    } else {
+    } else if (done) {
         const now = (d.info || {}).count || 0;
         const stale = dg.n && now && now !== dg.n ? `<div class="cm-line cm-stale">${escapeHtml(T('cm.stale', { n: now.toLocaleString(), m: dg.n.toLocaleString() }))}</div>` : '';
-        box.innerHTML = `<div class="cm-dg-meta cx-muted">${escapeHtml([String(dg.created_at || '').slice(5, 16), commentsCoverage(dg), cmModelLabel(dg.model), dg.auto ? T('cm.autoTag') : ''].filter(Boolean).join(' · '))}</div>` + stale + commentsHtml(dg);
+        box.innerHTML = stale + commentsHtml(dg);
         commentsWire(box, dg, c => commentsBlock(list, key, c.id));
+    } else {
+        box.innerHTML = '';
     }
     return d;
 }
@@ -308,11 +331,12 @@ async function commentsDigest(root, key) {
         r = await (await fetch(`/api/comments/${encodeURIComponent(key)}/digest`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ length: root.dataset.len, focus: root.querySelector('.cm-focus').value.trim(), lang: currentLang }) })).json();
     } catch (err) { r = { error: String(err) }; }
+    go.disabled = false;
     if (r.error) {
         showToast(r.error === 'bili_login' ? T('cm.noLogin') : r.error);
-        go.disabled = false;
         return;
     }
+    root.dataset.redo = '';
     commentsCard(root, key);
 }
 
@@ -362,7 +386,7 @@ async function commentsLinkModal(url) {
         document.body.appendChild(ov);
     }
     toolOverlay('cm-overlay');
-    ov.innerHTML = `<div class="cx-modal rd-pick cm-modal" role="dialog" aria-modal="true" aria-labelledby="cm-mt">
+    ov.innerHTML = `<div class="cx-modal rd-pick pod-pick cm-modal" role="dialog" aria-modal="true" aria-labelledby="cm-mt">
         <button class="settings-x" type="button" data-close aria-label="${escapeHtml(T('common.close'))}">×</button>
         <h2 class="cx-modal-title" id="cm-mt">${stIcon('comments', 20)}<span>${escapeHtml(T('cm.title'))}</span></h2>
         <p class="cx-muted cm-modal-sub">${escapeHtml(r.title || r.bvid)}</p>
@@ -370,6 +394,7 @@ async function commentsLinkModal(url) {
     ov.classList.remove('hidden');
     if (!window.VERBATIM_DEMO) await cmStartAuto(r);      // 点的就是「下载评论区」：没抓过就抓，抓完（或已经抓过）自动总结一份
     const body = ov.querySelector('.cm-card-body');
+    body.dataset.auto = '1';                    // 弹窗里抓的会自动总结：抓的时候提示一句
     const title = async () => {                 // 抓完才知道标题
         const d = await commentsCard(body, r.bvid);
         if (d && d.info && d.info.title) ov.querySelector('.cm-modal-sub').textContent = d.info.title;
@@ -391,6 +416,10 @@ function cmOnlyOn() {
 function cmOnlySync(links) {
     const wrap = document.getElementById('cm-only-wrap');
     if (!wrap) return 0;
+    setTimeout(() => {                           // 勾了「只要评论区」时把转写才用的设置藏起来（CSS 看 .cm-only-on）
+        const f = document.getElementById('upload-form');
+        if (f) f.classList.toggle('cm-only-on', cmOnlyOn());
+    }, 0);
     const keys = links.filter(l => CM_BILI_RE.test(l)).map(l => (l.match(/BV[0-9A-Za-z]{10}/) || [l])[0]);
     const n = new Set(keys).size;                // 同一个视频贴两次只算一个（短链认不出 BV，按链接算）
     wrap.classList.toggle('hidden', !n || !!window.VERBATIM_DEMO);

@@ -283,7 +283,7 @@ def threads(data):
         if r['root'] != '0':
             by_root.setdefault(r['root'], []).append(r)
     tops = sorted((r for r in items if r['root'] == '0'), key=lambda r: (-r['like'], r['ctime']))
-    return [{'top': t, 'replies': sorted(by_root.get(t['id'], []), key=lambda r: r['ctime'])} for t in tops]
+    return [{'top': t, 'replies': sorted(by_root.get(t['id'], []), key=lambda r: (-r['like'], r['ctime']))} for t in tops]   # 回复也按赞排
 
 
 # ---------- 整理 ----------
