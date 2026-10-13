@@ -739,6 +739,26 @@ _CONTENT_BLOCK_MARKERS = (
 )
 
 
+# 云引擎额度用完（Gemini 月度花费上限 / 每日配额 / 欠费）：跟内容拦截一样是确定性的，重试同一引擎白搭。
+# 10-14 一个 30 期的合集 23:14 两分钟内全挂在「exceeded its monthly spending cap」，左栏挂着「转换中」一个多小时。
+# 用户：「不是 monthly cap 那就用 whisper 啊，自动 fallback 啊」——所以无视「失败兜底 Whisper」开关直接落本地 Whisper，
+# 并记下这个引擎撞上限的时间：一小时内后面排队的期不再先去碰云端（每期白等一轮），直接用 Whisper；过了一小时再探一次。
+_QUOTA_MARKERS = ('spending cap', 'spend cap', 'exceeded your current quota', 'insufficient_quota',
+                  'billing', 'perday', 'per day', 'credit balance is too low')
+_QUOTA_HOLD_S = 3600
+_quota_out = {}          # engine -> 撞上限的时间戳
+
+
+def _is_quota_out(err):
+    s = str(err).lower()
+    return any(m in s for m in _QUOTA_MARKERS)
+
+
+def _quota_recent(engine):
+    t = _quota_out.get(engine)
+    return t is not None and time.time() - t < _QUOTA_HOLD_S
+
+
 def _is_content_block(err):
     """是不是云引擎的确定性内容拦截（区别于网络/限流这类间歇失败）。"""
     s = str(err)
@@ -1157,6 +1177,10 @@ def _run_transcription(task_id, filepath, engine, original_filename, q,
             full = "\n".join(f"[{s['timestamp']}] {s['text']}" for s in segs)
             return segs, full
 
+        if engine != 'whisper' and _quota_recent(engine):
+            mins = int((time.time() - _quota_out[engine]) // 60)
+            raise RuntimeError(f'{engine} 额度已用完（spending cap，{mins} 分钟前撞到），这期直接用本地 Whisper')
+
         if engine == 'whisper':
             segments, full_text = _whisper_transcribe()
             _verify(segments)
@@ -1358,10 +1382,14 @@ def _run_transcription(task_id, filepath, engine, original_filename, q,
                 }))
         content_block = _is_content_block(e)
         empty_out = isinstance(e, _EmptyTranscript)
+        quota_out = not requeued and engine != 'whisper' and _is_quota_out(e)
+        if quota_out and not _quota_recent(engine):
+            _quota_out[engine] = time.time()
         fell_back = False
-        if not requeued and engine != 'whisper' and (fallback_whisper or content_block or empty_out):
+        if not requeued and engine != 'whisper' and (fallback_whisper or content_block or empty_out or quota_out):
             try:
                 why = ('Content-blocked by Gemini (deterministic)' if content_block
+                       else f'{engine} 额度用完' if quota_out
                        else f'{engine} 没转出有效内容' if empty_out
                        else f'{engine} failed ({str(e)[:50]})')
                 q.put(json.dumps({
