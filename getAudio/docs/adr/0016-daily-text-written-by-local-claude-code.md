@@ -27,3 +27,4 @@
 - Opus（effort medium）：review / reflect / digest / compare / beliefs / synth / lens / revise / podcast / slides / xhs；输入超过 30 万字符用 `claude-opus-5-5[1m]`（1M 上下文，画像材料能到 60 万字）。其余 Haiku（effort low）。
 - 不走：联网核实（grounded）、抽证据卡（`CARDS_ENGINE`，0017）、看图（`_call_gemini_mm`）、用户自己的模型（0013）。
 - 改画像那一步原来记账用途也叫 `verify`，改叫 `revise`，才分得出 Opus 档。`claude_cli.TIMEOUT` 600 → 1200 秒。
+- 联网核实（grounded：画像的事实核查脚注 `factcheck`、预测核验 `predict`）也先给 Claude：Opus（effort medium）+ Claude Code 自带的 `WebSearch` 工具（`--tools WebSearch --allowedTools WebSearch`，只给这一个）。10-13 实测一条预测 14.5 秒、给出判断和来源网址。失败照旧 Gemini + Google 搜索。

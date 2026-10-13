@@ -267,11 +267,10 @@ def _call_gemini(prompt, grounded=False, model=None, purpose='analysis', thinkin
     """带重试的 Gemini 调用。grounded=True 开 Google 搜索。model 缺省用合成模型。
     purpose 只用于记账（usage.db 里按用途汇总）。thinking：思考 token 上限（None = 模型自己定）。
     摘要 / 问答 / 打标签这类机械活，内容跟中国议题无关时先走 DeepSeek（llmroute），失败再回到这里。"""
-    if not grounded:
-        import llmroute
-        out = llmroute.text(prompt, purpose)
-        if out:
-            return out
+    import llmroute
+    out = llmroute.claude_text(prompt, purpose, web=True) if grounded else llmroute.text(prompt, purpose)
+    if out:
+        return out
     api_key = config.gemini_key()
     if not api_key:
         raise RuntimeError('GEMINI_API_KEY 未设置')

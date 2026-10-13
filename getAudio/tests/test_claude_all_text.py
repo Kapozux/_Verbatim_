@@ -52,12 +52,24 @@ big = '卡' * 400_000
 analyze._llm(big, 'aliyun', 'deepseek-v4-flash', purpose='synth')
 t.check('输入很大的画像：用 1M 上下文的 Opus', seen[-1] == (claude_cli.MODEL + '[1m]', len(big)), str(seen[-1][0]))
 
+args_seen = []
+_orig = claude_ok
+
+
+def claude_web(args, stdin):
+    args_seen.append(args)
+    return _orig(args, stdin)
+
+
+claude_cli.use_runner(claude_web)
+out = ask._llm('核实这句', purpose='predict', grounded=True)
+a = args_seen[-1]
+t.check('联网核实（grounded）：Claude Opus 带 WebSearch 工具', out == 'Claude 写的' and seen[-1][0] == claude_cli.MODEL
+        and a[a.index('--tools') + 1] == 'WebSearch' and 'WebSearch' in a[a.index('--allowedTools') + 1], str(a))
+ask._llm('普通的活', purpose='voices')
+a = args_seen[-1]
+t.check('不联网的活：照旧不给工具', a[a.index('--tools') + 1] == '' and '--allowedTools' not in a, str(a))
 n = len(seen)
-try:
-    ask._llm('核实这句', purpose='predict', grounded=True)
-except Exception:  # noqa: BLE001
-    pass
-t.check('联网核实（grounded）：不走 Claude', len(seen) == n)
 analyze._llm('抽卡', 'aliyun', 'deepseek-v4-flash', purpose='cards')
 t.check('抽卡没开 CARDS_ENGINE：不因为 TEXT_ENGINE 走 Claude', len(seen) == n and other['deepseek'] == 1, str(other))
 

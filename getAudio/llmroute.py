@@ -123,7 +123,8 @@ def _pause(err, route=None):
 # 订阅额度不另花钱。提取、照着材料写的活用 Haiku（墨页实测认字比 Kimi 准，额度极省）；要判断、找主线、写长文的用 Opus。
 # 一开始只管 PURPOSES 那几个；同日用户：「画像也可以 Claude 吧（类似所有文字处理的）」——所以凡是经过 _call_gemini
 # （ask._llm 的播客 / 幻灯片 / 声纹……）和 analyze._llm（画像合成 / 镜头 / 简报 / 证伪，不管项目选哪家）的文字活都先给 Claude。
-# 不走的：联网核实（grounded，要 Google 搜索）、抽证据卡（归 CARDS_ENGINE，ADR 0017）、看图（_call_gemini_mm）。
+# 联网核实（grounded，原来是 Gemini + Google 搜索）也给 Claude：Opus + 它自带的 WebSearch。
+# 不走的：抽证据卡（归 CARDS_ENGINE，ADR 0017）、看图（_call_gemini_mm）。
 # Claude 用不了 / 报错（没登录、撞上限停着）就照旧往下走 DeepSeek → Gemini。
 OPUS_PURPOSES = {'review', 'reflect', 'digest', 'compare', 'beliefs',
                  'synth', 'lens', 'revise', 'podcast', 'slides', 'xhs'}
@@ -152,12 +153,15 @@ def _claude_ok(purpose):
     return _base(purpose) not in CLAUDE_SKIP and claude_cli.text_engine()
 
 
-def claude_text(prompt, purpose):
-    """只试 Claude：开了且成功返回文字，否则 None（analyze._llm 在走 DeepSeek / OpenRouter 之前用）。"""
+def claude_text(prompt, purpose, web=False):
+    """只试 Claude：开了且成功返回文字，否则 None（analyze._llm 在走 DeepSeek / OpenRouter 之前用）。
+    web=True：联网核实（原来是 Gemini 带 Google 搜索），给 Claude 自带的 WebSearch，用 Opus（要判断真假）。"""
     import claude_cli
     if not _claude_ok(purpose):
         return None
     try:
+        if web:
+            return claude_cli.text(prompt, purpose=purpose, effort='medium', model=claude_cli.MODEL, tools='WebSearch') or None
         return claude_cli.text(prompt, purpose=purpose, effort=_claude_effort(purpose),
                                model=_claude_model(purpose, prompt)) or None
     except Exception as e:  # noqa: BLE001

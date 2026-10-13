@@ -63,8 +63,10 @@ def cards_engine():
     return (os.environ.get('CARDS_ENGINE') or '').strip().lower() == 'claude' and available()
 
 
-def _args(effort, model=MODEL):
-    return ['-p', '--model', model, '--effort', effort, '--system-prompt', SYSTEM, '--tools', '',
+def _args(effort, model=MODEL, tools=''):
+    """tools：默认不给任何工具；联网核实给 'WebSearch'（Claude Code 自带的搜索，10-13 实测 Haiku 一次 11 秒、带来源网址）。"""
+    allow = ['--allowedTools', tools] if tools else []
+    return ['-p', '--model', model, '--effort', effort, '--system-prompt', SYSTEM, '--tools', tools, *allow,
             '--disable-slash-commands', '--strict-mcp-config', '--setting-sources', '', '--no-session-persistence',
             '--output-format', 'stream-json', '--verbose', '--include-partial-messages']
 
@@ -92,9 +94,9 @@ def _fail(d):
     return RuntimeError(f'Claude: {text[:200] or "empty reply"}')
 
 
-def stream(prompt, purpose='ask', effort='medium', model=MODEL):
+def stream(prompt, purpose='ask', effort='medium', model=MODEL, tools=''):
     """边写边 yield。调用方中途 close（用户点了停止）：claude 进程当场关掉，已经出的字照样记账。"""
-    args = _args(effort, model)
+    args = _args(effort, model, tools)
     with _sem:
         if _runner:
             d = _runner(args, prompt)
@@ -138,5 +140,5 @@ def stream(prompt, purpose='ask', effort='medium', model=MODEL):
             raise _fail(d)
 
 
-def text(prompt, purpose='ask', effort='medium', model=MODEL):
-    return ''.join(stream(prompt, purpose, effort, model)).strip()
+def text(prompt, purpose='ask', effort='medium', model=MODEL, tools=''):
+    return ''.join(stream(prompt, purpose, effort, model, tools)).strip()
