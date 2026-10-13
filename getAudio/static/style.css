@@ -2998,3 +2998,15 @@ pre.cc-quote.repo-quote { font-family: var(--mono); font-size: 13px; line-height
 .intake-cm { flex: none; border: 1px solid var(--coral-line); background: none; color: var(--coral-deep); border-radius: 999px;
     padding: 3px 10px; font-size: 13px; cursor: pointer; white-space: nowrap; }
 .intake-cm:hover { background: var(--coral-soft); }
+/* 「转写」页：只要评论区 */
+.cm-only { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; font-size: 15px; color: var(--ink-soft); cursor: pointer; }
+.cm-only input { accent-color: var(--coral); width: 16px; height: 16px; }
+.cm-batch { margin-bottom: 16px; }
+.cm-batch-h { margin: 0 0 10px; font-size: 18px; font-weight: 500; }
+.cm-brow { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; width: 100%; text-align: left; padding: 10px 12px;
+    border: 1px solid var(--line); border-radius: var(--r-md); background: var(--card); color: var(--ink); cursor: pointer; font: inherit; }
+.cm-brow + .cm-brow { margin-top: 8px; }
+.cm-brow:not(.off):hover { border-color: var(--coral-line); }
+.cm-brow.off { cursor: default; }
+.cm-bt { font-size: 14.5px; overflow-wrap: anywhere; }
+.cm-bs { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--faint); }

@@ -354,3 +354,88 @@ async function commentsLinkModal(url) {
     };
     title();
 }
+
+// ---------------- 「转写」页：只要评论区（不转写）----------------
+// 勾了「只要评论区」：大按钮变成「下载 N 个视频的评论区」，B 站链接一个接一个抓（同时抓容易被风控），
+// 右边一张「评论区」卡片列出每个视频：排队 / 在抓 x / y / 几条评论；点一行打开那个视频的评论区弹窗。不是 B 站的标「跳过」。
+const CM_BILI_RE = /bilibili\.com\/video\/|b23\.tv\//i;
+
+function cmOnlyOn() {
+    const box = document.getElementById('cm-only');
+    return !!(box && box.checked && !box.closest('.hidden'));
+}
+
+function cmOnlySync(links) {
+    const wrap = document.getElementById('cm-only-wrap');
+    if (!wrap) return 0;
+    const n = links.filter(l => CM_BILI_RE.test(l)).length;
+    wrap.classList.toggle('hidden', !n || !!window.VERBATIM_DEMO);
+    return n;
+}
+
+let cmBatchBusy = false;
+
+async function commentsBatch(links) {
+    if (cmBatchBusy) { showToast(T('cm.batchBusy')); return; }
+    cmBatchBusy = true;
+    try { await cmBatchRun(links); } finally { cmBatchBusy = false; }
+}
+
+async function cmBatchRun(links) {
+    const side = document.getElementById('transcribe-side');
+    let card = document.getElementById('cm-batch');
+    if (!card) {
+        card = document.createElement('div');
+        card.id = 'cm-batch';
+        card.className = 'card-shell cm-batch';
+        side.prepend(card);
+    }
+    const rows = links.map(url => ({ url, bili: CM_BILI_RE.test(url), state: 'wait', bvid: '', title: '', have: 0, total: 0, count: 0 }));
+    const draw = () => {
+        card.innerHTML = `<h2 class="cm-batch-h">${escapeHtml(T('cm.title'))}</h2>` + rows.map((r, i) => {
+            const st = !r.bili ? T('cm.bSkip') : r.state === 'wait' ? T('cm.bWait')
+                : r.state === 'run' ? (r.total ? T('cm.fetching', { n: r.have.toLocaleString(), m: r.total.toLocaleString() }) : T('cm.fetchingStart'))
+                : r.state === 'err' ? r.err : T('cm.nComments', { n: r.count.toLocaleString() });
+            const can = r.state === 'done';
+            return `<button type="button" class="cm-brow${can ? '' : ' off'}" data-i="${i}" ${can ? '' : 'disabled'}>
+                <span class="cm-bt">${escapeHtml(r.title || r.url)}</span>
+                <span class="cm-bs${r.state === 'err' ? ' cx-err' : ''}">${r.state === 'run' ? '<span class="st-spin" aria-hidden="true"></span>' : ''}${escapeHtml(st)}</span></button>`;
+        }).join('');
+        card.querySelectorAll('.cm-brow:not(.off)').forEach(b => b.addEventListener('click', () => commentsLinkModal(rows[+b.dataset.i].url)));
+    };
+    draw();
+    card.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    for (const r of rows.filter(x => x.bili)) {
+        r.state = 'run';
+        draw();
+        try {
+            const res = await (await fetch('/api/comments/resolve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: r.url }) })).json();
+            if (!res.bvid) throw new Error(T('cm.notBiliLink'));
+            r.bvid = res.bvid;
+            r.title = res.title || '';
+            if (res.has) {                       // 抓过的不重抓（要最新的在弹窗里点「重新抓」）
+                const d = await (await fetch(`/api/comments/${r.bvid}`)).json();
+                r.state = 'done';
+                r.count = (d.info || {}).count || 0;
+                draw();
+                continue;
+            }
+            const st = await (await fetch(`/api/comments/${r.bvid}/fetch`, { method: 'POST' })).json();
+            if (st.error) throw new Error(st.error === 'bili_login' ? T('cm.noLogin') : st.error);
+            for (;;) {
+                await new Promise(ok => setTimeout(ok, 2000));
+                const d = await (await fetch(`/api/comments/${r.bvid}`)).json();
+                if (d.job && d.job.running) { r.have = d.job.have; r.total = d.job.reported; draw(); continue; }
+                if (d.job && d.job.error) throw new Error(d.job.error === 'bili_login' ? T('cm.noLogin') : T('cm.failed'));
+                r.state = 'done';
+                r.count = (d.info || {}).count || 0;
+                r.title = (d.info || {}).title || r.title;
+                break;
+            }
+        } catch (e) {
+            r.state = 'err';
+            r.err = e.message || T('cm.failed');
+        }
+        draw();
+    }
+}

@@ -1,7 +1,7 @@
 # B 站评论区（抓评论 + 工作台「评论区整理」）
 
 ## 速览
-- **现状**：分支 `feature/comments`（worktree `.claude/worktrees/comments`），没合进 main。来源行 ⋯「抓评论区」→ 阅读器里看；工作台格子「评论区整理」→ 概述 + 一字不改的原话，带出处圆点；「转写」页贴 B 站链接 → 那一行「下载评论区」→ 弹窗（不转写，能总结、导出 CSV）；转写详情页也有同一张评论区卡片。评论和单个视频的总结按 BV 号存在 `results/_comments/`。登录态失效自动从 Chrome 续（存 `bili_login.local.json`）。
+- **现状**：分支 `feature/comments`（worktree `.claude/worktrees/comments`），没合进 main。来源行 ⋯「抓评论区」→ 阅读器里看；工作台格子「评论区整理」→ 概述 + 一字不改的原话，带出处圆点；「转写」页贴 B 站链接 → 那一行「下载评论区」→ 弹窗（不转写，能总结、导出 CSV），或勾「只要评论区（不转写）」一批下载（`commentsBatch()`）；转写详情页也有同一张评论区卡片。评论和单个视频的总结按 BV 号存在 `results/_comments/`。登录态失效自动从 Chrome 续（存 `bili_login.local.json`）。
 - **怎么跑**：`./run_tests.sh comments`（47 项，假 B 站接口 + 假模型）。真机：10-13 在 5031 用 scratch 数据实测 BV1s1pY6cEZo，抓 2,699 条约 4 分钟，Claude Opus 整理 55 条出处、$0；三个宽度 × 浅 / 深截图过。
 - **已知问题**：「重新抓」是整期重抓；后台抓的进度只在内存里，服务重启就没了（再点一次）；整理只支持 B 站。
 - **下一步**：等用户点头合进 main；之后可做 YouTube 评论、「观众怎么看」（见 ADR 0018「没做」）。

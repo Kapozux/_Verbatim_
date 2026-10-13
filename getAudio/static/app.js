@@ -219,6 +219,13 @@ function intakeValidCount() {
 
 function updateSubmitBtn() {
     if (intakeSubmitting) { submitBtn.disabled = true; return; }
+    // 有 B 站链接时出「只要评论区（不转写）」勾选；勾了按钮只算 B 站链接（comments.js）
+    const nBili = typeof cmOnlySync === 'function' ? cmOnlySync(parseTextLines().filter(t => t.kind === 'link').map(t => t.label)) : 0;
+    if (typeof cmOnlyOn === 'function' && cmOnlyOn()) {
+        submitBtn.textContent = nBili === 1 ? T('cm.batchGoOne') : T('cm.batchGo', { n: nBili });
+        submitBtn.disabled = !nBili;
+        return;
+    }
     const n = intakeValidCount();
     submitBtn.textContent = n > 0
         ? (n === 1 ? T('transcribe.submitCountOne') : T('transcribe.submitCount', { n }))
@@ -227,6 +234,8 @@ function updateSubmitBtn() {
 }
 
 let mixedInputTimer = null;
+const cmOnlyBox = document.getElementById('cm-only');
+if (cmOnlyBox) cmOnlyBox.addEventListener('change', updateSubmitBtn);
 if (mixedInput) mixedInput.addEventListener('input', () => {
     clearTimeout(mixedInputTimer);
     mixedInputTimer = setTimeout(renderIntake, 250);
@@ -297,6 +306,10 @@ form.addEventListener('submit', async (e) => {
     e.preventDefault();
     if (intakeSubmitting) return;
     const files = intakeFiles.slice();
+    if (typeof cmOnlyOn === 'function' && cmOnlyOn()) {     // 只要评论区：不转写，B 站链接逐个抓评论
+        commentsBatch(parseTextLines().filter(t => t.kind === 'link').map(t => t.label));
+        return;
+    }
     const texts = parseTextLines();
     const linkItems = texts.filter(t => t.kind === 'link');
     const links = linkItems.map(t => t.text);   // 带 @后缀，服务器端解析

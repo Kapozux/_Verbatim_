@@ -169,6 +169,9 @@
                                class="number-input">
                     </div>
 
+                    <!-- 有 B 站链接时才出现（comments.js）：勾了不转写，只下载这些视频的评论区 -->
+                    <label id="cm-only-wrap" class="cm-only hidden"><input type="checkbox" id="cm-only">
+                        <span data-i18n="cm.only">Comments only (don't transcribe)</span></label>
                     <button type="submit" id="submit-btn" class="btn-primary" data-i18n="transcribe.submit">
                         Transcribe
                     </button>
