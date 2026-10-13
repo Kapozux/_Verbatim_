@@ -1429,7 +1429,7 @@ def _static_version():
     文件一变这串数字就变，浏览器才会当成新资源重新拉取。
     """
     try:
-        paths = [os.path.join(app.static_folder, name) for name in ('app.js', 'style.css', 'i18n.js', 'explore.js', 'tools.js', 'projects.js', 'study.js', 'voices.js', 'visual.js', 'podcast.js', 'repos.js', 'slides.js', 'notes.js')]
+        paths = [os.path.join(app.static_folder, name) for name in ('app.js', 'style.css', 'i18n.js', 'explore.js', 'tools.js', 'projects.js', 'study.js', 'voices.js', 'visual.js', 'podcast.js', 'repos.js', 'slides.js', 'notes.js', 'comments.js')]
         return str(int(max(os.path.getmtime(p) for p in paths if os.path.isfile(p))))
     except (ValueError, OSError):
         return '0'
@@ -5607,6 +5607,89 @@ def api_studio_visual(chain_id):
     rows = [by_id[t] for t in want if t in by_id and (by_id[t]['url'] or by_id[t]['done'])]
     try:
         o = study.start_visual(_chain_dir(chain_id), chain_id, config.RESULTS_FOLDER, rows)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    return jsonify({'ok': True, 'item': study._summary(o)})
+
+
+# ---------- B 站评论区（comments.py，ADR 0018）----------
+_TID_RE = re.compile(r'^[0-9A-Za-z_-]{1,80}$')
+
+
+@app.route('/api/comments/<tid>')
+def api_comments(tid):
+    """一期的评论：按楼组织（楼按赞排），外加在抓的进度。没抓过 → threads 为空、has=False。"""
+    import comments
+    if not _TID_RE.match(tid):
+        return jsonify({'error': 'Not found'}), 404
+    d = comments.load(tid)
+    body = {'bili': bool(comments.bvid_for_task(tid)), 'has': bool(d), 'info': comments.summary(d),
+            'job': comments.job_state(tid), 'threads': comments.threads(d) if d else []}
+    return Response(json.dumps(body, ensure_ascii=False), mimetype='application/json')
+
+
+@app.route('/api/comments/<tid>/fetch', methods=['POST'])
+def api_comments_fetch(tid):
+    """来源那一行 ⋯「抓评论区 / 更新评论区」：后台把这一期的评论全抓一遍（不调模型，不花钱）。"""
+    import comments
+    if DEMO_MODE:
+        return jsonify({'error': 'Read-only demo'}), 403
+    if not _TID_RE.match(tid):
+        return jsonify({'error': 'Not found'}), 404
+    ok, err = comments.start_fetch(tid)
+    if not ok:
+        return jsonify({'error': err}), 400
+    return jsonify({'ok': True})
+
+
+def _comment_rows(chain_id):
+    """笔记本里有 B 站链接的期，标上抓过没有、多少条。"""
+    import comments
+    rows = []
+    for r in _visual_rows(chain_id):
+        if not comments.bvid_for_task(r['task_id']):
+            continue
+        info = comments.summary(comments.load(r['task_id']))
+        rows.append({'task_id': r['task_id'], 'title': r['title'], 'who': r['who'],
+                     'count': info['count'] if info else None})
+    return rows
+
+
+@app.route('/api/chain/<chain_id>/comments/episodes')
+def api_comment_episodes(chain_id):
+    """「评论区整理」弹框里的清单。"""
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    return Response(json.dumps({'episodes': _comment_rows(chain_id)}, ensure_ascii=False), mimetype='application/json')
+
+
+@app.route('/api/chain/<chain_id>/studio/comments/estimate')
+def api_studio_comments_estimate(chain_id):
+    import comments
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    usd, sub = comments.estimate([t for t in request.args.get('tids', '').split(',') if _TID_RE.match(t)])
+    return jsonify({'usd': usd, 'subscription': sub})
+
+
+@app.route('/api/chain/<chain_id>/studio/comments', methods=['POST'])
+def api_studio_comments(chain_id):
+    """格子「评论区整理」：{task_ids, length: short|medium|long, focus}。没抓过的期先抓再整理。"""
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    if DEMO_MODE:
+        return jsonify({'error': 'Read-only demo'}), 403
+    import comments
+    import study
+    data = request.get_json(silent=True) or {}
+    rows = {r['task_id']: r for r in _comment_rows(chain_id)}
+    tids = [t for t in data.get('task_ids') or [] if isinstance(t, str) and t in rows]
+    if any(rows[t]['count'] is None for t in tids) and not comments.sessdata():
+        return jsonify({'error': 'bili_login'}), 400
+    try:
+        o = comments.start_digest(_chain_dir(chain_id), chain_id, tids, data.get('length') or 'medium',
+                                  data.get('focus') or '', 'en' if data.get('lang') == 'en' else 'zh',
+                                  titles={t: rows[t]['title'] for t in tids})
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     return jsonify({'ok': True, 'item': study._summary(o)})
