@@ -9,7 +9,7 @@
 
 | 事 | 谁 | 在哪 | 状态 |
 |---|---|---|---|
-| 问证据卡交给本机 Claude Code 写（`ASK_ENGINE=claude`，默认不开；用户 10-13 要的，抽卡仍用 DeepSeek / Gemini） | claude-ask 窗口（kapozux-b9） | worktree `.claude/worktrees/claude-ask`，分支 feature/claude-ask | 10-13：54 个测试文件全过；实测 4.8 秒出字、12.5 秒写完。用户点头在自己的 `.env` 打开。交接 `docs/handoff/claude-ask.md`，ADR 0015 |
+| 问证据卡交给本机 Claude Code 写（`ASK_ENGINE=claude`，默认不开；用户 10-13 要的，抽卡仍用 DeepSeek / Gemini） | claude-ask 窗口（kapozux-b9） | main（10-13 16:2x 合进、5001 已重启，`.env` 已开 `ASK_ENGINE=claude`） | 上线。54 个测试文件全过；实测 4.8 秒出字、12.5 秒写完，经 5001 问过一次（记 claude-code $0）。下一步见交接 `docs/handoff/claude-ask.md`，ADR 0015 |
 | 来源标签（照 NotebookLM：按主题自动分组、一个来源一个标签、排序：最近 / 标题 / 类型），取代文件夹 | getaudio-fa | main（10-05 合进、5001 已重启） | 已本地提交、测试全过；IB 计算机科学实测 19 份 → 7 组，$0.0003、2.6 秒 |
 | 点出处就地看原视频 / 听原音（YouTube / B 站嵌播放器从那一秒开始）+ README GIF + YC 演示 | cite-video 窗口 | main（10-04 合进、5001 已重启） | 上线。README GIF 在 `docs/media/verbatim-cite.gif`（18 秒，4.7 MB；另有 mp4）；YC 演示：等用户定（见「等用户拍板」）。交接 `docs/handoff/cite-video.md` |
 | gemini35 段落时间不可信（短文件中位数只有真实的 0.337，转 16k 再送也一样，不是格式问题）| gemini35-time 窗口 | worktree `.claude/worktrees/gemini35-time`，分支 fix/gemini35-timeline（已合进 main、5001 已重启） | 10-05 停：本机 Whisper 回补到 848/1031 电脑太卡，用户决定不补旧期、也不花钱补；新 Gemini 期仍自动排本机对齐 |
@@ -104,7 +104,7 @@
 | 0012 | 出处时间按逐词时间轴算 | main |
 | 0013 | 自己的模型选了就不偷偷换云端 | main |
 | 0014 | 接口文档从路由生成 | main |
-| 0015 | 问证据卡可以交给本机 Claude Code 写（ASK_ENGINE=claude） | 分支 feature/claude-ask |
+| 0015 | 问证据卡可以交给本机 Claude Code 写（ASK_ENGINE=claude） | main |
 | 0012 | 出处时间点走逐词时间轴（YouTube 字幕 / Qwen / 本机 Whisper 对齐），不估算 | 分支 feature/cite-cards |
 | 0013 | 用户自己的模型（OpenAI 兼容 / Ollama）选了就不偷偷换云端 | 分支 feature/on-port |
 | 0014 | 接口文档从路由表和 docstring 现生成，不手写 schema | 分支 feature/on-port |

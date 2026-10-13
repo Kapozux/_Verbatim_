@@ -1,7 +1,7 @@
 # 问证据卡交给本机 Claude Code 写
 
 ## 速览
-- **现状**：设了 `ASK_ENGINE=claude` 且电脑上有 `claude` 命令时，「问证据卡」（流式和非流式）由本机 Claude Code（Opus 5.5）写；挑卡、出处校验、改写语言照旧。默认不开，别人装的 Verbatim 行为不变。分支 `feature/claude-ask`。
+- **现状**：设了 `ASK_ENGINE=claude` 且电脑上有 `claude` 命令时，「问证据卡」（流式和非流式）由本机 Claude Code（Opus 5.5）写；挑卡、出处校验、改写语言照旧。默认不开，别人装的 Verbatim 行为不变。10-13 合进 main、5001 已重启，作者的 `.env` 已开。
 - **怎么跑**：`./run_tests.sh claude_ask`（11 项，假的 claude 事件流，不调真 Claude）；真用：`.env` 里加 `ASK_ENGINE=claude`、重启 5001。
 - **已知问题**：Claude 写了一半断了（超时 / 撞上限）会跟原来的模型中途出错一样报错，不会自动改用别的模型续写；每问冷启动约 3～5 秒才出第一个字。
 - **下一步**：工作台 / 闪卡 / 回顾这些也走 Claude？（现在只接了 `ask.answer` / `ask.answer_stream`）；像 Ephemeris 那样让 Claude 自己翻转写原文的「深挖」模式。
