@@ -9,6 +9,7 @@
 
 | 事 | 谁 | 在哪 | 状态 |
 |---|---|---|---|
+| 画像、播客、幻灯片……所有文字活都先给本机 Claude（`TEXT_ENGINE` 扩大范围；用户 10-13：「画像也可以 Claude 吧」） | claude-all 窗口（kapozux-b9） | worktree `.claude/worktrees/claude-all`，分支 feature/claude-all | 已本地提交，57 个测试文件全过；实测播客 4.9 秒、画像一句 5.1 秒。见 ADR 0016 补充、`docs/handoff/claude-text.md` |
 | 每期抽证据卡交给本机 Claude Haiku（`CARDS_ENGINE=claude`，默认不开；用户 10-13：「量太大可以 haiku（看性能）」） | claude-cards 窗口（kapozux-b9） | main（10-13 合进、5001 已重启，`.env` 已开 `CARDS_ENGINE=claude`） | 上线。56 个测试文件全过；实测 5 期 Haiku 卡 254 张、原话对得上 99%（DeepSeek 228 张、89%）。交接 `docs/handoff/claude-cards.md`，ADR 0017 |
 | 日常文字活（摘要、标签、回顾……llmroute 的用途）先交给本机 Claude Code（`TEXT_ENGINE=claude`，默认不开；用户 10-13：开销越少越好） | claude-text 窗口（kapozux-b9） | main（10-13 合进、5001 已重启，`.env` 已开 `TEXT_ENGINE=claude`） | 上线。55 个测试文件全过；实测摘要 3.2 秒、Haiku、$0。交接 `docs/handoff/claude-text.md`，ADR 0016 |
 | 问证据卡交给本机 Claude Code 写（`ASK_ENGINE=claude`，默认不开；用户 10-13 要的，抽卡仍用 DeepSeek / Gemini） | claude-ask 窗口（kapozux-b9） | main（10-13 16:2x 合进、5001 已重启，`.env` 已开 `ASK_ENGINE=claude`） | 上线。54 个测试文件全过；实测 4.8 秒出字、12.5 秒写完，经 5001 问过一次（记 claude-code $0）。下一步见交接 `docs/handoff/claude-ask.md`，ADR 0015 |

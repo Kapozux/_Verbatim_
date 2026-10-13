@@ -51,7 +51,7 @@ t.check('开了：摘要用 Haiku', out1 == 'Claude 写的摘要' and seen['clau
 t.check('开了：回顾用 Opus', out2 == 'Claude 写的摘要' and seen['claude'][1] == claude_cli.MODEL, str(seen))
 rows = usage._conn().execute("SELECT model, purpose, input_tokens, cost_usd FROM calls WHERE provider='claude-code'").fetchall()
 t.check('记账：claude-code、$0、token 照记', len(rows) == 2 and all(r[3] == 0 for r in rows) and rows[0][2] == 800, str(rows))
-t.check('不在 llmroute 用途里的活（抽卡 / 画像）不碰 Claude', llmroute.text('抽卡', 'analysis') is None and len(seen['claude']) == 2)
+t.check('抽证据卡不归 TEXT_ENGINE（归 CARDS_ENGINE）', llmroute.text('抽卡', 'cards') is None and len(seen['claude']) == 2)
 
 # 3. 流式也走 Claude
 gen = llmroute.stream('边写边看', 'study')

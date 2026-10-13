@@ -120,36 +120,60 @@ def _pause(err, route=None):
 
 
 # 本机 Claude Code 排在最前（TEXT_ENGINE=claude，2026-10-13 用户：「开销越少越好，订阅额度必须都用上」）：
-# 订阅额度不另花钱。提取、照着材料写的活用 Haiku（墨页实测认字比 Kimi 准，额度极省）；要判断、找主线的用 Opus。
-# Claude 用不了 / 报错（没登录、撞上限停着）就照旧往下走 DeepSeek → Gemini。抽证据卡、画像不归 llmroute，不受影响。
-OPUS_PURPOSES = {'review', 'reflect', 'digest', 'compare', 'beliefs'}
+# 订阅额度不另花钱。提取、照着材料写的活用 Haiku（墨页实测认字比 Kimi 准，额度极省）；要判断、找主线、写长文的用 Opus。
+# 一开始只管 PURPOSES 那几个；同日用户：「画像也可以 Claude 吧（类似所有文字处理的）」——所以凡是经过 _call_gemini
+# （ask._llm 的播客 / 幻灯片 / 声纹……）和 analyze._llm（画像合成 / 镜头 / 简报 / 证伪，不管项目选哪家）的文字活都先给 Claude。
+# 不走的：联网核实（grounded，要 Google 搜索）、抽证据卡（归 CARDS_ENGINE，ADR 0017）、看图（_call_gemini_mm）。
+# Claude 用不了 / 报错（没登录、撞上限停着）就照旧往下走 DeepSeek → Gemini。
+OPUS_PURPOSES = {'review', 'reflect', 'digest', 'compare', 'beliefs',
+                 'synth', 'lens', 'revise', 'podcast', 'slides', 'xhs'}
+CLAUDE_SKIP = {'cards'}
 HAIKU = 'claude-haiku-5-5'
+BIG_PROMPT = 300_000      # 字符；画像的材料能到 60 万字，超过这个用 1M 上下文的 Opus（claude -p 认 claude-opus-5-5[1m]，10-13 试过）
 
 
-def _claude_model(purpose):
+def _base(purpose):
+    return str(purpose or '').removesuffix('-retry')
+
+
+def _claude_model(purpose, prompt=''):
     import claude_cli
-    return claude_cli.MODEL if purpose in OPUS_PURPOSES else HAIKU
+    if _base(purpose) not in OPUS_PURPOSES:
+        return HAIKU
+    return claude_cli.MODEL + '[1m]' if len(prompt) > BIG_PROMPT else claude_cli.MODEL
 
 
-def _claude_text(prompt, purpose):
+def _claude_effort(purpose):
+    return 'medium' if _base(purpose) in OPUS_PURPOSES else 'low'
+
+
+def _claude_ok(purpose):
     import claude_cli
-    if purpose not in PURPOSES or not claude_cli.text_engine():
+    return _base(purpose) not in CLAUDE_SKIP and claude_cli.text_engine()
+
+
+def claude_text(prompt, purpose):
+    """只试 Claude：开了且成功返回文字，否则 None（analyze._llm 在走 DeepSeek / OpenRouter 之前用）。"""
+    import claude_cli
+    if not _claude_ok(purpose):
         return None
     try:
-        return claude_cli.text(prompt, purpose=purpose, effort='low' if purpose not in OPUS_PURPOSES else 'medium',
-                               model=_claude_model(purpose)) or None
+        return claude_cli.text(prompt, purpose=purpose, effort=_claude_effort(purpose),
+                               model=_claude_model(purpose, prompt)) or None
     except Exception as e:  # noqa: BLE001
         print(f'[llmroute] Claude Code {purpose} failed, falling back: {str(e)[:120]}')
         return None
 
 
+_claude_text = claude_text
+
+
 def _claude_stream(prompt, purpose):
     """先拿到第一段字再交出去：还没出字就失败了返回 None（调用方接着走 DeepSeek），不会让前端看到两段拼起来的话。"""
     import claude_cli
-    if purpose not in PURPOSES or not claude_cli.text_engine():
+    if not _claude_ok(purpose):
         return None
-    gen = claude_cli.stream(prompt, purpose=purpose, effort='low' if purpose not in OPUS_PURPOSES else 'medium',
-                            model=_claude_model(purpose))
+    gen = claude_cli.stream(prompt, purpose=purpose, effort=_claude_effort(purpose), model=_claude_model(purpose, prompt))
     try:
         first = next(gen)
     except Exception as e:  # noqa: BLE001  StopIteration（空回答）也算没拿到

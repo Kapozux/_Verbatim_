@@ -26,7 +26,7 @@ import usage
 MODEL = 'claude-opus-5-5'
 BIN = 'claude'
 PARALLEL = int(os.environ.get('CLAUDE_PARALLEL') or 6)       # 批量转写时摘要 / 标签一下来很多；6 个进程约 1.4GB
-TIMEOUT = 600
+TIMEOUT = 1200                                # 画像合成：几十万字的材料、Opus 写长文，10 分钟不一定够
 CWD = os.path.expanduser('~/.verbatim-claude')        # 会话存在这个目录名下，不混进用户自己的 Claude Code 项目
 SYSTEM = 'You are the writing engine inside Verbatim, a local research app. Follow the instructions in the user message exactly and output only what it asks for.'
 PAUSE_S = 30 * 60

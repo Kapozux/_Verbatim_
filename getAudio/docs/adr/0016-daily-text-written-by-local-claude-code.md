@@ -19,3 +19,11 @@
 
 - 别人装的 Verbatim、打包版、演示实例不受影响。
 - 批量时受 `CLAUDE_PARALLEL`（默认 6）限制，会比 DeepSeek 慢；钱是 0。
+
+## 补充（同日）：扩到所有文字活
+
+用户：「画像也可以 Claude 吧（类似所有文字处理的）」。所以 Claude 这一步不再只管 `llmroute.PURPOSES`：
+- 经过 `_call_gemini` 的（`ask._llm` 的播客 / 幻灯片 / 声纹命名 / 学习……、小红书报告）和 `analyze._llm` 的（画像合成 `synth`、镜头 `lens`、批次简报 `brief`、证伪 `verify` / 改画像 `revise`，不管项目选 DeepSeek、OpenRouter 还是 Gemini）都先给 Claude。
+- Opus（effort medium）：review / reflect / digest / compare / beliefs / synth / lens / revise / podcast / slides / xhs；输入超过 30 万字符用 `claude-opus-5-5[1m]`（1M 上下文，画像材料能到 60 万字）。其余 Haiku（effort low）。
+- 不走：联网核实（grounded）、抽证据卡（`CARDS_ENGINE`，0017）、看图（`_call_gemini_mm`）、用户自己的模型（0013）。
+- 改画像那一步原来记账用途也叫 `verify`，改叫 `revise`，才分得出 Opus 档。`claude_cli.TIMEOUT` 600 → 1200 秒。

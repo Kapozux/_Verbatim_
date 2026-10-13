@@ -481,6 +481,11 @@ def _llm(prompt, provider, model, grounded=False, purpose='analysis'):
         out = _claude_cards(prompt)
         if out:
             return out
+    if not grounded and provider != 'gemini':
+        import llmroute                # Gemini 那条在 _call_gemini 里先试 Claude，这里不重复
+        out = llmroute.claude_text(prompt, purpose)
+        if out:
+            return out
     if provider in _CN_PROVIDERS or _or_deepseek(provider, model):
         try:
             if provider == 'openrouter':
@@ -875,7 +880,7 @@ def _verify_portrait(portrait, digest, author, provider, extract_model, synth_mo
         revised = _llm(REVISE_PROMPT.format(
             portrait=portrait,
             verdicts=json.dumps(bad, ensure_ascii=False, indent=1),
-        ), provider, synth_model, purpose='verify')
+        ), provider, synth_model, purpose='revise')     # 改画像本身：跟合成同档（Claude 那边用 Opus）
     except Exception:  # noqa: BLE001
         return portrait
     return revised or portrait
