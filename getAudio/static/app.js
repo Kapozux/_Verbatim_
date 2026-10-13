@@ -849,8 +849,13 @@ function renderSummary(section, overviewEl, sectionsEl, data) {
 }
 
 // ========== Copy & Download helpers ==========
+// 声纹认出的说话人（seg.who，见 detailSpeakers）写在句首；转写里原有的「说话人N：」换成认出来的名字
+function segText(seg) {
+    return seg.who ? `${seg.who}：${String(seg.text || '').replace(/^\s*说话人\s*\d+\s*[：:]\s*/, '')}` : seg.text;
+}
+
 function segmentLines(segs) {
-    return segs.map(seg => `[${seg.timestamp}] ${seg.text}`);
+    return segs.map(seg => `[${seg.timestamp}] ${segText(seg)}`);
 }
 
 // ========== Copy & Download (detail view) ==========
@@ -883,7 +888,7 @@ function buildSRT(segments) {
             : startSec + 5;
         lines.push(String(i + 1));
         lines.push(`${formatSRTTime(startSec)} --> ${formatSRTTime(endSec)}`);
-        lines.push(seg.text);
+        lines.push(segText(seg));
         lines.push('');
     }
     return lines.join('\n');
@@ -1278,6 +1283,7 @@ async function openDetailView(taskId, startAt = null) {
             appendSegment(seg, detailSegmentsContainer, detailAudioPlayer);
         });
         if (startAt != null && isFinite(startAt)) focusDetailAt(startAt);
+        detailSpeakers(data);
 
         if (data.summary && data.summary.overview) {
             renderSummary(detailSummarySection, detailSummaryOverview,
@@ -1295,6 +1301,23 @@ async function openDetailView(taskId, startAt = null) {
         _showMain();
         navigate('tab/library', { replace: true });
     }
+}
+
+// 每句是谁说的：笔记本里做过声纹的期（本机 voices.py）跟笔记本阅读器一样在句首标名字。
+// Whisper 转的（10-14 Gemini 额度用完自动落 Whisper）正文里没有「说话人N：」，原来完整转写页就看不出谁在说话。
+async function detailSpeakers(data) {
+    if (!data.chain_id || IS_DEMO) return;
+    let r;
+    try { r = await (await fetch(`/api/chain/${data.chain_id}/voices/${data.id}`)).json(); } catch { return; }
+    if (!r || !(r.labels || []).length || detailRecord !== data) return;
+    const rows = detailSegmentsContainer.querySelectorAll('.segment');
+    r.labels.forEach(l => {
+        const seg = detailSegments[l.i], txt = rows[l.i] && rows[l.i].querySelector('.segment-text');
+        if (!seg || !txt || !l.name) return;
+        seg.who = l.name;
+        txt.textContent = String(seg.text || '').replace(/^\s*说话人\s*\d+\s*[：:]\s*/, '');
+        txt.insertAdjacentHTML('afterbegin', `<span class="vc-who" data-role="${escapeHtml(l.role || 'unclear')}">${escapeHtml(l.name)}</span>`);
+    });
 }
 
 const detailSummarizeBtn = document.getElementById('detail-summarize-btn');

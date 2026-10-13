@@ -4773,7 +4773,9 @@ def api_chain_voices_labels(chain_id, task_id):
         return jsonify({'error': 'Not found'}), 404
     import voices
     segs = voices.speaker_segments(_chain_dir(chain_id), task_id)
-    return jsonify({'labels': [{'i': i, 'name': n, 'speaker': sid} for i, (_, n, sid, _) in enumerate(segs)],
+    role = {s.get('id'): s.get('role') for s in voices._state(_chain_dir(chain_id)).get('speakers') or []}
+    return jsonify({'labels': [{'i': i, 'name': n, 'speaker': sid, 'role': role.get(sid) or 'unclear'}
+                               for i, (_, n, sid, _) in enumerate(segs)],
                     'audio': voices.has_audio(task_id)})
 
 
