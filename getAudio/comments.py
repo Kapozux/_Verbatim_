@@ -141,7 +141,7 @@ class _RealApi:
         from bilibili_api import comment
         from bilibili_api.comment import CommentResourceType, OrderType
         return asyncio.run(comment.get_comments_lazy(aid, CommentResourceType.VIDEO, offset=offset,
-                                                     order=OrderType.TIME, credential=self._cred(sessdata=sess)))
+                                                     order=OrderType.LIKE, credential=self._cred(sessdata=sess)))
 
     def sub(self, aid, root, pn, sess):
         import asyncio
@@ -156,12 +156,24 @@ def _sleep(a, b):
         time.sleep(random.uniform(a, b))
 
 
+def limits():
+    """(最多几楼, 每楼最多几条回复)。10-13 用户：「评论设置个上限，我觉得 500 吧」→ 按楼算 500、每楼 50 条回复；设置里能改。"""
+    def num(name, default):
+        try:
+            return max(1, int(os.environ.get(name) or default))
+        except ValueError:
+            return default
+    return num('COMMENTS_MAX_TOP', 500), num('COMMENTS_MAX_REPLIES', 50)
+
+
 def fetch(bvid, progress=None, sess=None):
-    """一级评论按时间翻完，再把每楼的回复翻全。progress(n_have, n_reported) 随时回报。没登录态抛 RuntimeError。"""
+    """一级评论按热度翻，最多 limits()[0] 楼；每楼回复最多翻前两倍上限条，按赞留 limits()[1] 条。
+    progress(n_have, n_reported) 随时回报。没登录态抛 RuntimeError。"""
     api = _api or _RealApi()
     sess = sess if sess is not None else sessdata()
     if not sess:
         raise RuntimeError('bili_login')
+    max_top, max_rep = limits()
     info = api.view(bvid)
     aid, reported = info['aid'], int(info.get('reply') or 0)
     rows, seen, offset = [], set(), ''
@@ -171,11 +183,14 @@ def fetch(bvid, progress=None, sess=None):
             seen.add(str(x['rpid']))
             rows.append(_row(x))
 
+    def n_top():
+        return sum(1 for r in rows if r['root'] == '0')
+
     for page in range(1, 2000):
         r = api.main(aid, offset, sess)
-        for x in (r.get('top_replies') or []) if page == 1 else []:
-            add(x)
-        for x in r.get('replies') or []:
+        for x in ((r.get('top_replies') or []) if page == 1 else []) + (r.get('replies') or []):
+            if n_top() >= max_top and str(x['rpid']) not in seen:
+                break
             add(x)
             for y in x.get('replies') or []:
                 add(y)
@@ -183,15 +198,16 @@ def fetch(bvid, progress=None, sess=None):
             progress(len(rows), reported)
         cur = r.get('cursor') or {}
         offset = ((cur.get('pagination_reply') or {}).get('next_offset')) or ''
-        if cur.get('is_end') or not offset:
+        if n_top() >= max_top or cur.get('is_end') or not offset:
             break
         _sleep(0.8, 1.5)
 
+    pages = -(-2 * max_rep // 20)                   # 每楼最多翻这么多页（楼中楼接口只能按时间翻）
     for top in [r for r in rows if r['root'] == '0' and r['rcount'] > 0]:
         have = sum(1 for r in rows if r['root'] == top['id'])
-        if have >= top['rcount']:
+        if have >= min(top['rcount'], max_rep):
             continue
-        for pn in range(1, 500):
+        for pn in range(1, pages + 1):
             d = api.sub(aid, top['id'], pn, sess)
             reps = d.get('replies') or []
             for x in reps:
@@ -203,8 +219,18 @@ def fetch(bvid, progress=None, sess=None):
             progress(len(rows), reported)
         _sleep(0.4, 0.8)
 
+    by_root = {}
+    for r in rows:
+        if r['root'] != '0':
+            by_root.setdefault(r['root'], []).append(r)
+    drop = set()
+    for root, reps in by_root.items():                # 每楼按赞留前 max_rep 条
+        drop.update(r['id'] for r in sorted(reps, key=lambda r: -r['like'])[max_rep:])
+    rows = [r for r in rows if r['id'] not in drop]
+    capped = n_top() >= max_top or bool(drop)        # 真的截掉了才算（B 站报的回复数里常有删掉的）
     return {'bvid': bvid, 'aid': aid, 'title': info.get('title', ''), 'reported': reported,
-            'fetched_at': time.strftime('%Y-%m-%d %H:%M'), 'logged_in': True, 'items': rows}
+            'fetched_at': time.strftime('%Y-%m-%d %H:%M'), 'logged_in': True, 'items': rows,
+            'limits': {'top': max_top, 'replies': max_rep}, 'capped': capped}
 
 
 # ---------- 存 ----------
@@ -246,6 +272,7 @@ def summary(data):
         return None
     items = data.get('items') or []
     return {'count': len(items), 'top': sum(1 for r in items if r['root'] == '0'), 'title': data.get('title', ''),
+            'capped': bool(data.get('capped')), 'limits': data.get('limits'),
             'reported': data.get('reported', 0), 'fetched_at': data.get('fetched_at', '')}
 
 
@@ -334,6 +361,29 @@ def build_prompt(data_list, length='medium', focus='', lang='zh'):
 _CITE = re.compile(r'\[(c\d+(?:\s*[,，]\s*c\d+)*)\]')
 
 
+def _norm(s):
+    """比原话用：去表情、空白、标点差异（全角半角统一）、大小写。B 站评论里 [doge] 之类很多，逐字比会误判。"""
+    import unicodedata
+    s = unicodedata.normalize('NFKC', _EMOTE.sub('', s or '')).lower()
+    return re.sub(r'[\s\W_]+', '', s)
+
+
+_QUOTE = re.compile(r'^(\s*>\s*)(.*?)\s*((?:〔\d+〕)+)\s*$')
+
+
+def _check_quote(line, cites):
+    """引用行「> 原话 〔n〕」：原话要真在那条评论里（归一化后是子串）。对不上就换成那条评论的原文，不留改过的话。"""
+    m = _QUOTE.match(line)
+    if not m or not m.group(2):
+        return line
+    ns = [int(x) for x in re.findall(r'〔(\d+)〕', m.group(3))]
+    q = _norm(m.group(2))
+    if not q or any(q in _norm(cites[n - 1]['text']) for n in ns if 0 < n <= len(cites)):
+        return line
+    real = cites[ns[0] - 1]['text'] if 0 < ns[0] <= len(cites) else ''
+    return f'{m.group(1)}{_clip(real, 300)} {m.group(3)}' if real else line
+
+
 def parse_digest(text, refs):
     """[c12] → 出处。返回 (正文, 出处列表)；正文里的编号换成 〔1〕〔2〕……（出处列表的下标 + 1），编错的编号直接删掉。"""
     order, cites = {}, []
@@ -353,6 +403,7 @@ def parse_digest(text, refs):
 
     out, prev = [], ''
     for line in _CITE.sub(repl, text).strip().split('\n'):
+        line = _check_quote(line, cites)
         if line.lstrip().startswith('>') and prev.lstrip().startswith('>'):
             out.append('')              # 相邻两行引用是两条原话：中间空一行，不然 Markdown 把它们并成一段
         out.append(line)
@@ -381,6 +432,8 @@ def bvid_for_task(tid):
 
 import threading                                   # noqa: E402
 
+_write_slots = threading.BoundedSemaphore(3)       # 同时最多写 3 份总结
+
 _jobs = {}                  # BV -> {'have', 'reported', 'error', 'running'}；只在本进程里，重启就没了（再点一次就行）
 _jobs_lock = threading.Lock()
 
@@ -391,7 +444,7 @@ def job_state(key):
         return dict(j) if j else None
 
 
-def _run_fetch(bvid):
+def _run_fetch(bvid, then=None):
     def prog(have, reported):
         with _jobs_lock:
             _jobs[bvid].update(have=have, reported=reported)
@@ -402,10 +455,22 @@ def _run_fetch(bvid):
     except Exception as e:  # noqa: BLE001
         with _jobs_lock:
             _jobs[bvid].update(error=str(e)[:200], running=False)
+        return
+    if then is not None:
+        auto_digest(bvid, **then)
 
 
-def start_fetch(key, run=None):
-    """开始抓一个视频的评论；已经在抓就不重复。返回 (ok, error)。"""
+def auto_digest(key, length='medium', lang='zh', run=None):
+    """只下载评论区（不转写）时抓完自动总结一份（10-13 用户：「不下载视频的话，默认做一个总结」）。
+    已经有一份总结（做好的或在做的）就不重做；要重做由用户在卡片里点「总结」。"""
+    d = load_digest(key)
+    if d and d.get('status') in ('done', 'running'):
+        return d
+    return start_episode_digest(key, length, '', lang, run=run, auto=True)
+
+
+def start_fetch(key, run=None, then=None):
+    """开始抓一个视频的评论；已经在抓就不重复。then={'length','lang'} → 抓完自动总结。返回 (ok, error)。"""
     bvid = bvid_for_task(key)
     if not bvid:
         return False, 'not_bili'
@@ -414,7 +479,7 @@ def start_fetch(key, run=None):
         if j and j.get('running'):
             return True, None
         _jobs[bvid] = {'have': 0, 'reported': 0, 'error': None, 'running': True}
-    (run or (lambda f: threading.Thread(target=f, daemon=True).start()))(lambda: _run_fetch(bvid))
+    (run or (lambda f: threading.Thread(target=f, daemon=True).start()))(lambda: _run_fetch(bvid, then))
     return True, None
 
 
@@ -446,7 +511,25 @@ def estimate(tids):
     return round(usage.estimate_cost(ask.ASK_MODEL, min(tokens, ask.est_tokens('评' * _MAX_INPUT)), 3500) or 0, 4), False
 
 
-def _write(out, tids, length, focus, lang, save_out, ref, chain=None):
+# 模型（10-13 问过 claude-gate 窗口）：都用 Opus，一次整段喂（切块汇总会丢原话和编号）。
+# 自动总结 comments-auto：effort low、算 batch 档（给用户自己的提问让额度）；手动点的 comments-digest：effort medium。
+# 没有 Claude 时退回 Gemini flash（比 flash-lite 归纳和照抄都稳）。同时最多 3 份，其余排队（不让 20 个线程去抢 Claude 的位子）。
+AUTO_PURPOSE, MANUAL_PURPOSE = 'comments-auto', 'comments-digest'
+FALLBACK_MODEL = config.GEMINI_EXTRACT_MODEL
+
+
+def _written_by(ref):
+    """这份是哪个模型写的（usage 记账里最后一次调用）。"""
+    import usage
+    try:
+        with usage._conn() as c:
+            r = c.execute('SELECT model FROM calls WHERE ref = ? ORDER BY id DESC LIMIT 1', (ref,)).fetchone()
+        return r['model'] if r else ''
+    except Exception:
+        return ''
+
+
+def _write(out, tids, length, focus, lang, save_out, ref, chain=None, purpose=MANUAL_PURPOSE):
     """整理的主体（工作台和转写页共用）：没抓的期先抓，再让模型写。结果写回 out；save_out() 每步存一次。"""
     import ask
     import usage
@@ -456,15 +539,19 @@ def _write(out, tids, length, focus, lang, save_out, ref, chain=None):
             out['progress'] = {'stage': 'fetch', 'done': i, 'total': len(todo)}
             save_out()
             save(t, fetch(bvid_for_task(t)))
-        out['progress'] = {'stage': 'write', 'done': 0, 'total': 1}
+        out['progress'] = {'stage': 'queue', 'done': 0, 'total': 1}
         save_out()
-        data = [(t, load(t)) for t in tids]
-        prompt, refs = build_prompt(data, length, focus, lang)
-        with usage.scope(ref=ref, chain=chain):
-            text = ask._llm(prompt, purpose='digest')
+        with _write_slots:
+            out['progress'] = {'stage': 'write', 'done': 0, 'total': 1}
+            save_out()
+            data = [(t, load(t)) for t in tids]
+            prompt, refs = build_prompt(data, length, focus, lang)
+            with usage.scope(ref=ref, chain=chain):
+                text = ask._llm(prompt, model=FALLBACK_MODEL, purpose=purpose)
+        out['model'] = _written_by(ref)
         md, cites = parse_digest(text or '', refs)
         if not md:
-            raise RuntimeError('empty')
+            raise RuntimeError('empty')     # 多半是 Gemini 安全拦截（时政评论）返回空；界面上说清楚
         out.update(status='done', result={'md': md}, citations=cites,
                    n=sum(len(d.get('items') or []) for _, d in data),
                    title=' / '.join(d.get('title') or '' for _, d in data)[:120])
@@ -533,7 +620,7 @@ def _save_digest(key, out):
     os.replace(p + '.tmp', p)
 
 
-def start_episode_digest(key, length='medium', focus='', lang='zh', run=None):
+def start_episode_digest(key, length='medium', focus='', lang='zh', run=None, auto=False):
     """一个视频的「总结」：新的盖掉旧的。在总结就不重复开。没抓过评论的先抓。"""
     import study
     bv = bvid_for_task(key)
@@ -543,14 +630,15 @@ def start_episode_digest(key, length='medium', focus='', lang='zh', run=None):
             return load_digest(key)
         _digesting.add(bv)
     out = {'kind': 'comments', 'status': 'running', 'created_at': study._now(), 'tids': tids,
-           'length': length, 'focus': str(focus or '')[:300]}
+           'length': length, 'focus': str(focus or '')[:300], 'auto': bool(auto)}
     if not load(key):
         out['progress'] = {'stage': 'fetch', 'done': 0, 'total': 1}
     _save_digest(key, out)
 
     def job():
         try:
-            _write(out, tids, length, focus, lang, lambda: _save_digest(key, out), f'comments:{bv}:{time.time():.0f}')
+            _write(out, tids, length, focus, lang, lambda: _save_digest(key, out), f'comments:{bv}:{time.time():.0f}',
+                   purpose=AUTO_PURPOSE if auto else MANUAL_PURPOSE)
         finally:
             with _jobs_lock:
                 _digesting.discard(bv)

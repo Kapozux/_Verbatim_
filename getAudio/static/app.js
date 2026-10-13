@@ -3467,6 +3467,8 @@ async function openSettings(pane) {
         });
         // Models（空 = 默认）
         document.getElementById('set-whisper-model').value = s.whisper_model || '';
+        document.getElementById('set-cm-top').value = s.comments_max_top || '';
+        document.getElementById('set-cm-replies').value = s.comments_max_replies || '';
         document.getElementById('set-gemini-transcribe').value = s.gemini_transcribe_model || '';
         document.getElementById('set-gemini-analysis').value = s.gemini_analysis_model || '';
         document.getElementById('set-gemini-extract').value = s.gemini_extract_model || '';
@@ -3800,6 +3802,8 @@ document.getElementById('settings-save').addEventListener('click', async () => {
         keep_audio: document.getElementById('set-keep-audio').checked ? '1' : '',
         custom_everyday: document.getElementById('set-custom-everyday').checked ? '1' : '',
         backup_dir: document.getElementById('set-backup-dir').value.trim(),
+        comments_max_top: document.getElementById('set-cm-top').value.trim(),
+        comments_max_replies: document.getElementById('set-cm-replies').value.trim(),
     };
     if (setGeminiKey.value.trim()) body.gemini_key = setGeminiKey.value.trim();
     if (setDashKey.value.trim()) body.dashscope_key = setDashKey.value.trim();

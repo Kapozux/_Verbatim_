@@ -100,8 +100,8 @@ t.check('篇幅和侧重写进提示词', '800 字' in prompt and '只看反驳'
 cid = next(k for k, (_, r) in refs.items() if r['id'] == '1')
 md, cites = comments.parse_digest(f'主流观点 > 以为自己包了个私家车 [{cid}] 还有编造的 [c99999]', refs)
 t.check('真编号换成 〔1〕，编造的删掉', '〔1〕' in md and 'c99999' not in md and len(cites) == 1, md)
-two, _ = comments.parse_digest(f'> 甲 [{cid}]\n> 乙 [{cid}]', refs)
-t.check('相邻两条引用分开成两段', two == '> 甲 〔1〕\n\n> 乙 〔1〕', two)
+two, _ = comments.parse_digest(f'> 以为自己 [{cid}]\n> 包了个私家车 [{cid}]', refs)
+t.check('相邻两条引用分开成两段', two == '> 以为自己 〔1〕\n\n> 包了个私家车 〔1〕', two)
 t.check('出处带用户、赞数、原话', cites[0]['user'] == 'u1' and cites[0]['like'] == 99 and cites[0]['tid'] == 'T1')
 
 # ---------- 接口：笔记本里的一期 ----------
@@ -151,7 +151,7 @@ for _ in range(100):
 t.check('整理完成', o['status'] == 'done', o.get('error'))
 t.check('只整理 B 站那期', o['tids'] == [TID])
 t.check('正文带出处标记，出处指回那条评论', '〔1〕' in o['result']['md'] and o['citations'][0]['id'] == '1')
-t.check('用的是整理那档（Claude 时走 Opus）', prompts and prompts[-1][0] == 'digest')
+t.check('工作台整理用手动那档（comments-digest）', prompts and prompts[-1][0] == 'comments-digest', prompts[-1][0] if prompts else '')
 items = c.get(f'/api/chain/{PID}/studio').get_json()['items']
 t.check('进工作台列表', any(i['id'] == oid and i['kind'] == 'comments' for i in items))
 
@@ -223,5 +223,61 @@ body = r.get_data(as_text=True)
 t.check('导出 CSV：带 BOM、表头、楼在回复前面', r.status_code == 200 and body.startswith('\ufeffrpid,root,user')
         and body.index('以为自己包了个私家车') < body.index('回复0'), body[:120])
 t.check('乱写的 key 不碰文件系统', c.get('/api/comments/..%2F..%2Fetc').status_code == 404)
+
+# ---------- 只下载评论区：抓完自动总结（10-13 用户：「不下载视频的话，默认做一个总结」）----------
+AUTO = 'BV1UTEv6FEqY'
+n0 = len(prompts)
+r = c.post(f'/api/comments/{AUTO}/fetch', json={'auto_digest': True, 'length': 'short'})
+t.check('自动总结：抓的接口收 auto_digest', r.status_code == 200, r.get_json())
+for _ in range(200):
+    dg = c.get(f'/api/comments/{AUTO}').get_json().get('digest') or {}
+    if dg.get('status') == 'done':
+        break
+    time.sleep(0.05)
+t.check('自动总结：抓完接着总结，标了 auto', dg.get('status') == 'done' and dg.get('auto') is True and dg.get('length') == 'short', dg)
+t.check('自动总结：只调了一次模型', len(prompts) == n0 + 1, len(prompts) - n0)
+r = c.post(f'/api/comments/{AUTO}/digest', json={'auto': True})
+t.check('自动总结：已经有一份就不重做', r.get_json()['digest']['created_at'] == dg['created_at'] and len(prompts) == n0 + 1)
+r = c.post(f'/api/comments/{AUTO}/fetch', json={})
+for _ in range(100):
+    if not (c.get(f'/api/comments/{AUTO}').get_json().get('job')):
+        break
+    time.sleep(0.05)
+t.check('不带 auto_digest 的抓（笔记本 ⋯、重新抓）不总结', len(prompts) == n0 + 1)
+
+t.check('自动总结用 comments-auto 那档', [p for p, _ in prompts][n0] == 'comments-auto', [p for p, _ in prompts][n0:])
+
+# ---------- 原话核对：归一化后是子串才留，改过的换成原文 ----------
+cites = [{'text': '以为自己包了个私家车[doge]，结果私家车晚上还偷偷背着自己出去跑滴滴赚外快'}]
+ok_line = '> 以为自己包了个私家车，结果私家车晚上还偷偷背着自己出去跑滴滴 〔1〕'
+t.check('原话：去掉表情和标点差异后是子串就留着', comments._check_quote(ok_line, cites) == ok_line)
+bad = comments._check_quote('> 他就是想包个私家车而已 〔1〕', cites)
+t.check('原话：改过的换成那条评论的原文', '以为自己包了个私家车[doge]' in bad and bad.endswith('〔1〕'), bad)
+t.check('不是引用行不动', comments._check_quote('普通一句话 〔1〕', cites) == '普通一句话 〔1〕')
+
+# ---------- 上限：按楼算，每楼回复按赞留 ----------
+os.environ['COMMENTS_MAX_TOP'] = '2'
+os.environ['COMMENTS_MAX_REPLIES'] = '5'
+fake.calls.clear()
+capd = comments.fetch('BV1s1pY6cEZo')
+tops = [r for r in capd['items'] if r['root'] == '0']
+reps = sorted(r['like'] for r in capd['items'] if r['root'] == '1')
+t.check('上限：只要前 2 楼（翻到够了就不往下翻）', len(tops) == 2 and not any(c[0] == 'main' and c[1] == 'p2' for c in fake.calls), [r['id'] for r in tops])
+t.check('上限：每楼按赞留 5 条', reps == [15, 16, 17, 18, 19], reps)
+t.check('上限：楼中楼最多翻两倍上限（1 页）', sum(1 for c in fake.calls if c[0] == 'sub') == 1)
+t.check('上限：标了截断和上限', capd['capped'] and capd['limits'] == {'top': 2, 'replies': 5})
+del os.environ['COMMENTS_MAX_TOP'], os.environ['COMMENTS_MAX_REPLIES']
+t.check('上限：默认 500 楼、50 条', comments.limits() == (500, 50))
+
+# ---------- 记下是哪个模型写的；模型返回空要说清楚 ----------
+t.check('记下写的模型（这里是假模型，没记账就空着）', 'model' in dg)
+ask._llm = lambda prompt, model=None, purpose='ask', grounded=False, thinking=None: ''
+r = c.post(f'/api/comments/{AUTO}/digest', json={'length': 'short'})
+for _ in range(100):
+    dg2 = c.get(f'/api/comments/{AUTO}').get_json().get('digest') or {}
+    if dg2.get('status') not in (None, 'running'):
+        break
+    time.sleep(0.05)
+t.check('模型返回空：标 failed / empty，界面能说「可能被拦」', dg2.get('status') == 'failed' and dg2.get('error') == 'empty', dg2)
 
 t.finish()

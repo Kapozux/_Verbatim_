@@ -47,7 +47,8 @@ def use_runner(fn):
 # 抽卡 / 摘要 / 标签 / 看图这类量大的是批量（batch，设了预算超了就等），其余 normal。
 APP = 'verbatim'
 LIVE = {'ask'}
-BATCH = {'cards', 'summary', 'tag', 'enrich', 'review', 'speakers', 'translate', 'visual', 'brief', 'verify'}
+BATCH = {'cards', 'summary', 'tag', 'enrich', 'review', 'speakers', 'translate', 'visual', 'brief', 'verify',
+         'comments-auto'}     # 只下载评论区时自动写的总结：给用户的提问让路
 
 
 def _prio(purpose):

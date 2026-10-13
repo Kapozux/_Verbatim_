@@ -89,13 +89,16 @@ _SETTING_ENV = {
     'keep_audio': 'KEEP_AUDIO',
     # Storage：备份目录（空 = 自动找本机 Google Drive）
     'backup_dir': 'BACKUP_DIR',
+    # B 站评论区上限（comments.limits；空 = 500 楼、每楼 50 条回复）
+    'comments_max_top': 'COMMENTS_MAX_TOP',
+    'comments_max_replies': 'COMMENTS_MAX_REPLIES',
 }
 
 # 非秘密、可清空（空 = 回默认）的设置字段
 _PLAIN_FIELDS = ('gemini_base_url', 'whisper_model', 'gemini_transcribe_model',
                  'gemini_analysis_model', 'gemini_extract_model', 'keep_audio', 'backup_dir',
                  'deepseek_model', 'deepseek_pro_model', 'kimi_model',
-                 'custom_base_url', 'custom_model', 'custom_everyday')
+                 'custom_base_url', 'custom_model', 'custom_everyday', 'comments_max_top', 'comments_max_replies')
 _KEY_FIELDS = ('gemini_key', 'dashscope_key', 'openrouter_key', 'deepseek_key', 'kimi_key', 'custom_key')
 
 
@@ -5633,13 +5636,17 @@ def api_comments(tid):
 
 @app.route('/api/comments/<tid>/fetch', methods=['POST'])
 def api_comments_fetch(tid):
-    """来源那一行 ⋯「抓评论区 / 更新评论区」：后台把这一期的评论全抓一遍（不调模型，不花钱）。"""
+    """抓一个视频的评论（不调模型，不花钱）。{auto_digest: true} → 抓完自动总结（「转写」页只下载评论区时）。"""
     import comments
     if DEMO_MODE:
         return jsonify({'error': 'Read-only demo'}), 403
     if not _TID_RE.match(tid):
         return jsonify({'error': 'Not found'}), 404
-    ok, err = comments.start_fetch(tid)
+    data = request.get_json(silent=True) or {}
+    then = None
+    if data.get('auto_digest'):                 # 只下载评论区：抓完自动总结一份
+        then = {'length': data.get('length') or 'medium', 'lang': 'en' if data.get('lang') == 'en' else 'zh'}
+    ok, err = comments.start_fetch(tid, then=then)
     if not ok:
         return jsonify({'error': err}), 400
     return jsonify({'ok': True})
@@ -5701,6 +5708,9 @@ def api_comments_digest(tid):
     if not comments.load(tid) and not comments.sessdata():
         return jsonify({'error': 'bili_login'}), 400
     data = request.get_json(silent=True) or {}
+    if data.get('auto'):                        # 自动总结：已经有一份就不重做
+        return jsonify({'ok': True, 'digest': comments.auto_digest(tid, data.get('length') or 'medium',
+                                                                   'en' if data.get('lang') == 'en' else 'zh')})
     o = comments.start_episode_digest(tid, data.get('length') or 'medium', data.get('focus') or '',
                                       'en' if data.get('lang') == 'en' else 'zh')
     return jsonify({'ok': True, 'digest': o})

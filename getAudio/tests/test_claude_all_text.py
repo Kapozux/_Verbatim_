@@ -52,6 +52,17 @@ big = '卡' * 400_000
 analyze._llm(big, 'aliyun', 'deepseek-v4-flash', purpose='synth')
 t.check('输入很大的画像：用 1M 上下文的 Opus', seen[-1] == (claude_cli.MODEL + '[1m]', len(big)), str(seen[-1][0]))
 
+# B 站评论区总结（ADR 0019）：都用 Opus；自动写的 effort low、算 batch 档（给用户的提问让路），手动点的 medium、普通档
+eff = []
+claude_cli.use_runner(lambda a, i: eff.append(a[a.index('--effort') + 1]) or claude_ok(a, i))
+t.check('评论区自动总结：Opus、effort low', ask._llm('评论', purpose='comments-auto') == 'Claude 写的'
+        and seen[-1][0] == claude_cli.MODEL and eff[-1] == 'low', str(eff))
+t.check('评论区自动总结重试也是 low', ask._llm('评论', purpose='comments-auto-retry') == 'Claude 写的' and eff[-1] == 'low')
+t.check('评论区手动总结：Opus、effort medium', ask._llm('评论', purpose='comments-digest') == 'Claude 写的'
+        and seen[-1][0] == claude_cli.MODEL and eff[-1] == 'medium', str(eff))
+t.check('评论区自动总结算 batch 档、手动的不算', claude_cli._prio('comments-auto') == 'batch' and claude_cli._prio('comments-digest') == 'normal')
+claude_cli.use_runner(claude_ok)
+
 args_seen = []
 _orig = claude_ok
 

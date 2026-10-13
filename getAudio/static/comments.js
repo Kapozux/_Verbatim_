@@ -80,6 +80,7 @@ async function commentsBlock(box, tid, focusId) {
     if (box.dataset.wasOpen == null && box.closest('.cm-modal')) box.dataset.wasOpen = '1';   // 贴链接的弹窗：点的就是「下载评论区」，默认展开
     box.innerHTML = `${err}<details class="cm-box"${focusId || box.dataset.wasOpen ? ' open' : ''}>
         <summary>${escapeHtml(T('cm.inReader', { n: (info.count || 0).toLocaleString(), t: info.fetched_at || '' }))}</summary>
+        ${info.capped && info.limits ? `<div class="cx-muted cm-capnote">${escapeHtml(T('cm.capped', { top: info.limits.top, rep: info.limits.replies }))}</div>` : ''}
         <div class="cm-tools"><span class="cx-muted">${escapeHtml(T('cm.sorted'))}</span>
             <button type="button" class="cx-link" data-cm="fetch">${escapeHtml(T('cm.refetch'))}</button></div>
         <div class="cm-list">${threads.slice(0, shown).map(thread).join('')}</div>
@@ -194,7 +195,8 @@ function commentsTitle(o) {
 
 function commentsProgress(o) {
     const p = o.progress || {};
-    return p.stage === 'fetch' ? T('cm.stFetch', { i: Math.min((p.done || 0) + 1, p.total || 1), n: p.total || 1 }) : T('cm.stWrite');
+    return p.stage === 'fetch' ? T('cm.stFetch', { i: Math.min((p.done || 0) + 1, p.total || 1), n: p.total || 1 })
+        : p.stage === 'queue' ? T('cm.stQueue') : T('cm.stWrite');
 }
 
 function commentsCoverage(o) {
@@ -266,8 +268,9 @@ async function commentsCard(root, key) {
         fetch(`/api/comments/${encodeURIComponent(key)}/estimate`).then(r => r.json()).then(est => {
             if (root.dataset.key !== key) return;
             const go = root.querySelector('.cm-go');
-            if (est.subscription) go.textContent = T('cm.digestSub');
-            else if (est.usd) go.textContent = T('cm.digestCost', { cost: fmtUsd(Math.max(0.01, est.usd)) });
+            if (est.subscription) root.dataset.cost = T('cm.digestSub');
+            else if (est.usd) root.dataset.cost = T('cm.digestCost', { cost: fmtUsd(Math.max(0.01, est.usd)) });
+            if (root.dataset.cost) go.textContent = root.dataset.cost;
         }).catch(() => {});
     }
     clearTimeout(root._poll);
@@ -280,15 +283,18 @@ async function commentsCard(root, key) {
     if (d.job && d.job.running) root._poll = setTimeout(() => { if (root.dataset.key === key && root.isConnected) commentsCard(root, key); }, 3000);
     const dg = d.digest;
     root.querySelector('.cm-go').disabled = !!(dg && dg.status === 'running');
+    if (!root.dataset.cost) root.querySelector('.cm-go').textContent = T(dg && dg.status === 'done' ? 'cm.redigest' : 'cm.digest');
     const box = root.querySelector('.cm-dg');
     if (!dg) { box.innerHTML = ''; }
     else if (dg.status === 'running') {
         box.innerHTML = `<div class="cm-line"><span class="st-spin" aria-hidden="true"></span>${escapeHtml(commentsProgress(dg))}</div>`;
         root._poll = setTimeout(() => { if (root.dataset.key === key && root.isConnected) commentsCard(root, key); }, 2500);
     } else if (dg.status === 'failed') {
-        box.innerHTML = `<div class="cm-line cx-err">${escapeHtml(dg.error === 'interrupted' ? T('cm.interrupted') : T('cm.digestFailed'))}</div>`;
+        box.innerHTML = `<div class="cm-line cx-err">${escapeHtml(T(dg.error === 'interrupted' ? 'cm.interrupted' : dg.error === 'empty' ? 'cm.digestEmpty' : 'cm.digestFailed'))}</div>`;
     } else {
-        box.innerHTML = `<div class="cm-dg-meta cx-muted">${escapeHtml([String(dg.created_at || '').slice(5, 16), commentsCoverage(dg)].join(' · '))}</div>` + commentsHtml(dg);
+        const now = (d.info || {}).count || 0;
+        const stale = dg.n && now && now !== dg.n ? `<div class="cm-line cm-stale">${escapeHtml(T('cm.stale', { n: now.toLocaleString(), m: dg.n.toLocaleString() }))}</div>` : '';
+        box.innerHTML = `<div class="cm-dg-meta cx-muted">${escapeHtml([String(dg.created_at || '').slice(5, 16), commentsCoverage(dg), cmModelLabel(dg.model), dg.auto ? T('cm.autoTag') : ''].filter(Boolean).join(' · '))}</div>` + stale + commentsHtml(dg);
         commentsWire(box, dg, c => commentsBlock(list, key, c.id));
     }
     return d;
@@ -321,6 +327,27 @@ async function detailComments(rec) {
     if (d && !d.bili) sec.classList.add('hidden');
 }
 
+function cmModelLabel(m) {
+    m = String(m || '');
+    if (!m) return '';
+    if (m.includes('opus')) return 'Claude Opus';
+    if (m.includes('sonnet')) return 'Claude Sonnet';
+    if (m.includes('haiku')) return 'Claude Haiku';
+    return m.replace(/^gemini-/, 'Gemini ');
+}
+
+// 只下载评论区（不转写）：没抓过 → 抓，抓完后台自动总结；抓过但还没总结 → 直接自动总结。已有总结不重做。
+async function cmStartAuto(r) {
+    const post = (url, body) => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json());
+    let x;
+    try {
+        x = r.has ? await post(`/api/comments/${r.bvid}/digest`, { auto: true, lang: currentLang })
+            : await post(`/api/comments/${r.bvid}/fetch`, { auto_digest: true, lang: currentLang });
+    } catch { x = {}; }
+    if (x.error) showToast(x.error === 'bili_login' ? T('cm.noLogin') : x.error);
+    return x;
+}
+
 // 「转写」页贴的 B 站链接：那一行的「下载评论区」→ 中间弹窗（不转写视频，只抓评论；抓好能总结、导出 CSV）
 async function commentsLinkModal(url) {
     let r;
@@ -341,11 +368,7 @@ async function commentsLinkModal(url) {
         <p class="cx-muted cm-modal-sub">${escapeHtml(r.title || r.bvid)}</p>
         <div class="cm-card-body"></div></div>`;
     ov.classList.remove('hidden');
-    if (!r.has && !window.VERBATIM_DEMO) {                   // 点的就是「下载评论区」：没抓过就直接开始抓
-        await fetch(`/api/comments/${encodeURIComponent(r.bvid)}/fetch`, { method: 'POST' }).then(x => x.json()).then(x => {
-            if (x.error) showToast(x.error === 'bili_login' ? T('cm.noLogin') : x.error);
-        }).catch(() => {});
-    }
+    if (!window.VERBATIM_DEMO) await cmStartAuto(r);      // 点的就是「下载评论区」：没抓过就抓，抓完（或已经抓过）自动总结一份
     const body = ov.querySelector('.cm-card-body');
     const title = async () => {                 // 抓完才知道标题
         const d = await commentsCard(body, r.bvid);
@@ -368,7 +391,8 @@ function cmOnlyOn() {
 function cmOnlySync(links) {
     const wrap = document.getElementById('cm-only-wrap');
     if (!wrap) return 0;
-    const n = links.filter(l => CM_BILI_RE.test(l)).length;
+    const keys = links.filter(l => CM_BILI_RE.test(l)).map(l => (l.match(/BV[0-9A-Za-z]{10}/) || [l])[0]);
+    const n = new Set(keys).size;                // 同一个视频贴两次只算一个（短链认不出 BV，按链接算）
     wrap.classList.toggle('hidden', !n || !!window.VERBATIM_DEMO);
     return n;
 }
@@ -390,46 +414,46 @@ async function cmBatchRun(links) {
         card.className = 'card-shell cm-batch';
         side.prepend(card);
     }
-    const rows = links.map(url => ({ url, bili: CM_BILI_RE.test(url), state: 'wait', bvid: '', title: '', have: 0, total: 0, count: 0 }));
+    const rows = links.map(url => ({ url, bili: CM_BILI_RE.test(url), state: 'wait', bvid: '', title: '', have: 0, total: 0, count: 0, dg: null }));
+    const dgText = r => !r.dg ? '' : r.dg.status === 'done' ? T('cm.bDigestDone') : r.dg.status === 'failed'
+        ? T(r.dg.error === 'empty' ? 'cm.digestEmpty' : 'cm.digestFailed') : commentsProgress(r.dg);
     const draw = () => {
         card.innerHTML = `<h2 class="cm-batch-h">${escapeHtml(T('cm.title'))}</h2>` + rows.map((r, i) => {
-            const st = !r.bili ? T('cm.bSkip') : r.state === 'wait' ? T('cm.bWait')
+            const st = !r.bili ? T('cm.bSkip') : r.state === 'dup' ? T('cm.bDup') : r.state === 'wait' ? T('cm.bWait')
                 : r.state === 'run' ? (r.total ? T('cm.fetching', { n: r.have.toLocaleString(), m: r.total.toLocaleString() }) : T('cm.fetchingStart'))
-                : r.state === 'err' ? r.err : T('cm.nComments', { n: r.count.toLocaleString() });
+                : r.state === 'err' ? r.err : [T('cm.nComments', { n: r.count.toLocaleString() }), dgText(r)].filter(Boolean).join(' · ');
+            const spin = r.state === 'run' || (r.dg && r.dg.status === 'running');
             const can = r.state === 'done';
             return `<button type="button" class="cm-brow${can ? '' : ' off'}" data-i="${i}" ${can ? '' : 'disabled'}>
                 <span class="cm-bt">${escapeHtml(r.title || r.url)}</span>
-                <span class="cm-bs${r.state === 'err' ? ' cx-err' : ''}">${r.state === 'run' ? '<span class="st-spin" aria-hidden="true"></span>' : ''}${escapeHtml(st)}</span></button>`;
+                <span class="cm-bs${r.state === 'err' ? ' cx-err' : ''}">${spin ? '<span class="st-spin" aria-hidden="true"></span>' : ''}${escapeHtml(st)}</span></button>`;
         }).join('');
         card.querySelectorAll('.cm-brow:not(.off)').forEach(b => b.addEventListener('click', () => commentsLinkModal(rows[+b.dataset.i].url)));
     };
+    const getJson = url => fetch(url).then(x => x.json());
     draw();
     card.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    const seen = new Set();
     for (const r of rows.filter(x => x.bili)) {
         r.state = 'run';
         draw();
         try {
             const res = await (await fetch('/api/comments/resolve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: r.url }) })).json();
             if (!res.bvid) throw new Error(T('cm.notBiliLink'));
+            if (seen.has(res.bvid)) { r.state = 'dup'; r.title = res.title || ''; draw(); continue; }   // 同一个视频贴了两次
+            seen.add(res.bvid);
             r.bvid = res.bvid;
             r.title = res.title || '';
-            if (res.has) {                       // 抓过的不重抓（要最新的在弹窗里点「重新抓」）
-                const d = await (await fetch(`/api/comments/${r.bvid}`)).json();
-                r.state = 'done';
-                r.count = (d.info || {}).count || 0;
-                draw();
-                continue;
-            }
-            const st = await (await fetch(`/api/comments/${r.bvid}/fetch`, { method: 'POST' })).json();
+            const st = await cmStartAuto(res);      // 抓（抓完后台自动总结）；抓过的直接总结
             if (st.error) throw new Error(st.error === 'bili_login' ? T('cm.noLogin') : st.error);
             for (;;) {
-                await new Promise(ok => setTimeout(ok, 2000));
-                const d = await (await fetch(`/api/comments/${r.bvid}`)).json();
-                if (d.job && d.job.running) { r.have = d.job.have; r.total = d.job.reported; draw(); continue; }
+                const d = await getJson(`/api/comments/${r.bvid}`);
+                if (d.job && d.job.running) { r.have = d.job.have; r.total = d.job.reported; draw(); await new Promise(ok => setTimeout(ok, 2000)); continue; }
                 if (d.job && d.job.error) throw new Error(d.job.error === 'bili_login' ? T('cm.noLogin') : T('cm.failed'));
                 r.state = 'done';
                 r.count = (d.info || {}).count || 0;
                 r.title = (d.info || {}).title || r.title;
+                r.dg = d.digest;
                 break;
             }
         } catch (e) {
@@ -437,5 +461,14 @@ async function cmBatchRun(links) {
             r.err = e.message || T('cm.failed');
         }
         draw();
+    }
+    // 评论都抓完了：总结在后台排队写（同时最多 3 份），这里接着把每行的总结进度刷到写完
+    while (rows.some(r => r.state === 'done' && (!r.dg || r.dg.status === 'running'))) {
+        await new Promise(ok => setTimeout(ok, 3000));
+        for (const r of rows.filter(x => x.state === 'done' && (!x.dg || x.dg.status === 'running'))) {
+            try { r.dg = (await getJson(`/api/comments/${r.bvid}`)).digest; } catch { /* 下一轮再看 */ }
+        }
+        draw();
+        if (!card.isConnected) return;
     }
 }

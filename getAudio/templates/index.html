@@ -1090,6 +1090,17 @@
                             <input type="text" id="set-gemini-extract" class="search-input"
                                    data-i18n-placeholder="settings.phGeminiExtract" placeholder="gemini-2.5-flash (default)" autocomplete="off">
                         </label>
+                        <label class="settings-field">
+                            <span class="settings-label"><span data-i18n="settings.cmLimits">Bilibili comments: how many to fetch</span>
+                                <span class="settings-opt" data-i18n="settings.cmLimitsOpt">most-liked first · blank = 500 top-level comments, 50 replies each</span>
+                            </span>
+                            <span class="cm-limits">
+                                <input type="number" id="set-cm-top" class="search-input" min="1" max="5000" placeholder="500">
+                                <span data-i18n="settings.cmTop">top-level</span>
+                                <input type="number" id="set-cm-replies" class="search-input" min="1" max="1000" placeholder="50">
+                                <span data-i18n="settings.cmReplies">replies each</span>
+                            </span>
+                        </label>
                         <p class="settings-opt" data-i18n="settings.modelsFooter">DeepSeek / Kimi / GLM / Qwen model names are per-analysis presets (pick the model in the Creators form).</p>
                     </section>
 

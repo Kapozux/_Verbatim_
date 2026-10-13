@@ -127,7 +127,9 @@ def _pause(err, route=None):
 # 不走的：抽证据卡（归 CARDS_ENGINE，ADR 0017）、看图（_call_gemini_mm）。
 # Claude 用不了 / 报错（没登录、撞上限停着）就照旧往下走 DeepSeek → Gemini。
 OPUS_PURPOSES = {'review', 'reflect', 'digest', 'compare', 'beliefs',
-                 'synth', 'lens', 'revise', 'podcast', 'slides', 'xhs'}
+                 'synth', 'lens', 'revise', 'podcast', 'slides', 'xhs',
+                 'comments-auto', 'comments-digest'}      # B 站评论区总结（ADR 0019）：自动的 low、手动的 medium
+LOW_EFFORT = {'comments-auto'}
 CLAUDE_SKIP = {'cards'}
 HAIKU = 'claude-haiku-5-5'
 BIG_PROMPT = 300_000      # 字符；画像的材料能到 60 万字，超过这个用 1M 上下文的 Opus（claude -p 认 claude-opus-5-5[1m]，10-13 试过）
@@ -145,7 +147,7 @@ def _claude_model(purpose, prompt=''):
 
 
 def _claude_effort(purpose):
-    return 'medium' if _base(purpose) in OPUS_PURPOSES else 'low'
+    return 'medium' if _base(purpose) in OPUS_PURPOSES - LOW_EFFORT else 'low'
 
 
 def _claude_ok(purpose):
