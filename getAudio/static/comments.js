@@ -461,7 +461,7 @@ async function cmBatchRun(links) {
             const spin = r.state === 'run' || (r.dg && r.dg.status === 'running');
             const can = r.state === 'done';
             return `<button type="button" class="cm-brow${can ? '' : ' off'}" data-i="${i}" ${can ? '' : 'disabled'}>
-                <span class="cm-bt">${escapeHtml(r.title || r.url)}</span>
+                <span class="cm-bt">${escapeHtml(r.title || (r.url.match(/BV[0-9A-Za-z]{10}/) || [r.url])[0])}</span>
                 <span class="cm-bs${r.state === 'err' ? ' cx-err' : ''}">${spin ? '<span class="st-spin" aria-hidden="true"></span>' : ''}${escapeHtml(st)}</span></button>`;
         }).join('');
         card.querySelectorAll('.cm-brow:not(.off)').forEach(b => b.addEventListener('click', () => commentsLinkModal(rows[+b.dataset.i].url)));

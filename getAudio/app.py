@@ -5660,7 +5660,7 @@ def api_comments_resolve():
     if not bv:
         return jsonify({'error': 'not_bili'}), 400
     d = comments.load(bv)
-    return jsonify({'bvid': bv, 'has': bool(d), 'title': (d or {}).get('title', '')})
+    return jsonify({'bvid': bv, 'has': bool(d), 'title': (d or {}).get('title', '') or comments.title_of(bv)})
 
 
 @app.route('/api/comments/<tid>/csv')

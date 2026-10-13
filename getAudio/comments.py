@@ -156,18 +156,23 @@ def _sleep(a, b):
         time.sleep(random.uniform(a, b))
 
 
+EMBEDDED = 2            # B 站主列表里每楼附带的最热回复条数（10-13 实测按热度翻时是 2 条）
+
+
 def limits():
-    """(最多几楼, 每楼最多几条回复)。10-13 用户：「评论设置个上限，我觉得 500 吧」→ 按楼算 500、每楼 50 条回复；设置里能改。"""
+    """(最多几楼, 每楼最多几条回复)。10-13 用户：「就 500 楼，顶多 2 条回复」（加热度）；设置里能改。"""
     def num(name, default):
         try:
             return max(1, int(os.environ.get(name) or default))
         except ValueError:
             return default
-    return num('COMMENTS_MAX_TOP', 500), num('COMMENTS_MAX_REPLIES', 50)
+    return num('COMMENTS_MAX_TOP', 500), num('COMMENTS_MAX_REPLIES', 2)
 
 
 def fetch(bvid, progress=None, sess=None):
-    """一级评论按热度翻，最多 limits()[0] 楼；每楼回复最多翻前两倍上限条，按赞留 limits()[1] 条。
+    """一级评论按热度翻，最多 limits()[0] 楼；每楼回复按赞留 limits()[1] 条。
+    B 站主列表里每楼本来就带着最热的几条回复（EMBEDDED 条），上限不超过它就不去翻楼中楼（快很多）；
+    超过了才翻，每楼最多翻两倍上限条。
     progress(n_have, n_reported) 随时回报。没登录态抛 RuntimeError。"""
     api = _api or _RealApi()
     sess = sess if sess is not None else sessdata()
@@ -203,8 +208,9 @@ def fetch(bvid, progress=None, sess=None):
         _sleep(0.8, 1.5)
 
     pages = -(-2 * max_rep // 20)                   # 每楼最多翻这么多页（楼中楼接口只能按时间翻）
-    need = [t for t in rows if t['root'] == '0' and t['rcount'] > 0
-            and sum(1 for r in rows if r['root'] == t['id']) < min(t['rcount'], max_rep)]
+    need = [] if max_rep <= EMBEDDED else [
+        t for t in rows if t['root'] == '0' and t['rcount'] > 0
+        and sum(1 for r in rows if r['root'] == t['id']) < min(t['rcount'], max_rep)]
     for k, top in enumerate(need):
         for pn in range(1, pages + 1):
             d = api.sub(aid, top['id'], pn, sess)
@@ -480,6 +486,14 @@ def start_fetch(key, run=None, then=None):
         _jobs[bvid] = {'have': 0, 'reported': 0, 'error': None, 'running': True}
     (run or (lambda f: threading.Thread(target=f, daemon=True).start()))(lambda: _run_fetch(bvid, then))
     return True, None
+
+
+def title_of(bvid):
+    """视频标题（批量下载那一行一开始就写名字，不写一长串链接）。拿不到返回空。"""
+    try:
+        return ((_api or _RealApi()).view(bvid) or {}).get('title', '')
+    except Exception:
+        return ''
 
 
 def resolve(url):

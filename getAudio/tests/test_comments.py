@@ -81,7 +81,8 @@ except RuntimeError as e:
 fake.good = {'GOOD'}
 comments.sessdata(force=True)
 
-# ---------- 抓：一级翻完 + 回复翻全 ----------
+# ---------- 抓：一级翻完 + 回复翻全（每楼上限调到 50，走翻楼中楼那条路）----------
+os.environ['COMMENTS_MAX_REPLIES'] = '50'
 seen = []
 d = comments.fetch('BV1s1pY6cEZo', progress=lambda have, rep, **k: seen.append((have, rep, k.get('stage'), k.get('i'), k.get('n'))))
 ids = [r['id'] for r in d['items']]
@@ -268,7 +269,13 @@ t.check('上限：每楼按赞留 5 条', reps == [15, 16, 17, 18, 19], reps)
 t.check('上限：楼中楼最多翻两倍上限（1 页）', sum(1 for c in fake.calls if c[0] == 'sub') == 1)
 t.check('上限：标了截断和上限', capd['capped'] and capd['limits'] == {'top': 2, 'replies': 5})
 del os.environ['COMMENTS_MAX_TOP'], os.environ['COMMENTS_MAX_REPLIES']
-t.check('上限：默认 500 楼、50 条', comments.limits() == (500, 50))
+t.check('上限：默认 500 楼、2 条（10-13 用户：「就 500 楼，顶多 2 条回复」）', comments.limits() == (500, 2))
+fake.calls.clear()
+dflt = comments.fetch('BV1s1pY6cEZo')
+t.check('默认：每楼只留主列表里带的最热 2 条，不翻楼中楼', not any(c[0] == 'sub' for c in fake.calls)
+        and sorted(r['like'] for r in dflt['items'] if r['root'] == '1') == [0, 1], [c[0] for c in fake.calls])
+t.check('贴链接先拿到标题', c.post('/api/comments/resolve', json={'url': 'https://www.bilibili.com/video/BV1vYDDB8E8B'}).get_json()['title'] == '测试视频')
+os.environ['COMMENTS_MAX_REPLIES'] = '50'
 
 # ---------- 记下是哪个模型写的；模型返回空要说清楚 ----------
 t.check('记下写的模型（这里是假模型，没记账就空着）', 'model' in dg)
