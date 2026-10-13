@@ -1,4 +1,4 @@
-"""B 站评论区（ADR 0018）：每期抓评论（一级翻完 + 每楼回复翻全）、登录态失效自己从浏览器续、工作台「评论区整理」。
+"""B 站评论区（ADR 0019）：每期抓评论（一级翻完 + 每楼回复翻全）、登录态失效自己从浏览器续、工作台「评论区整理」。
 10-13 用户：「这个评论能帮我抓吗」「对一些很有意思的保留一些原话，更多用概述，总数有限制」「我啥都不动，它自己就行了」。
 跑生产代码：comments.fetch / sessdata / build_prompt / parse_digest，接口 /api/comments/<tid>(/fetch)、
 /api/chain/<id>/comments/episodes、/studio/comments(/estimate)、/studio/<oid>。

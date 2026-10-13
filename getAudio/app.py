@@ -5614,7 +5614,7 @@ def api_studio_visual(chain_id):
     return jsonify({'ok': True, 'item': study._summary(o)})
 
 
-# ---------- B 站评论区（comments.py，ADR 0018）----------
+# ---------- B 站评论区（comments.py，ADR 0019）----------
 _TID_RE = re.compile(r'^[0-9A-Za-z_-]{1,80}$')
 
 

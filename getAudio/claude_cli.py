@@ -21,6 +21,7 @@ import subprocess
 import threading
 import time
 
+import claude_gate
 import usage
 
 MODEL = 'claude-opus-5-5'
@@ -42,8 +43,20 @@ def use_runner(fn):
     _paused['until'] = 0.0
 
 
+# 三个应用共用一份额度时的分配器（claude_gate；CLAUDE_GATE 没设就不起作用）：问是交互（live，留着位子），
+# 抽卡 / 摘要 / 标签 / 看图这类量大的是批量（batch，设了预算超了就等），其余 normal。
+APP = 'verbatim'
+LIVE = {'ask'}
+BATCH = {'cards', 'summary', 'tag', 'enrich', 'review', 'speakers', 'translate', 'visual', 'brief', 'verify'}
+
+
+def _prio(purpose):
+    base = str(purpose or '').removesuffix('-retry')
+    return 'live' if base in LIVE else 'batch' if base in BATCH else 'normal'
+
+
 def available():
-    if _paused['until'] > time.time():
+    if _paused['until'] > time.time() or claude_gate.paused_until():
         return False
     return bool(_runner) or bool(shutil.which(BIN))
 
@@ -80,7 +93,8 @@ def _delta(ev):
     return None
 
 
-def _record(d, purpose, model=MODEL):
+def _record(d, purpose, model=MODEL, secs=0.0):
+    claude_gate.record(APP, purpose, model, d, secs, _prio(purpose))
     u = d.get('usage') or {}
     usage.record('claude-code', model, purpose, input_tokens=u.get('input_tokens', 0) + u.get('cache_creation_input_tokens', 0),
                  output_tokens=u.get('output_tokens', 0), cached_tokens=u.get('cache_read_input_tokens', 0), cost_usd=0.0)
@@ -91,6 +105,7 @@ def _fail(d):
     if _LIMIT.search(text):
         m = re.search(r'\|(\d{10})', text)
         _paused['until'] = max(int(m.group(1)) if m else time.time() + PAUSE_S, time.time() + 60)
+        claude_gate.pause(_paused['until'], text, APP)
     return RuntimeError(f'Claude: {text[:200] or "empty reply"}')
 
 
@@ -98,14 +113,15 @@ def stream(prompt, purpose='ask', effort='medium', model=MODEL, tools='', _stdin
     """边写边 yield。调用方中途 close（用户点了停止）：claude 进程当场关掉，已经出的字照样记账。"""
     args = _args(effort, model, tools) + list(_extra)
     prompt = prompt if _stdin is None else _stdin
-    with _sem:
+    t0 = time.time()
+    with _sem, claude_gate.slot(APP, purpose, _prio(purpose)):
         if _runner:
             d = _runner(args, prompt)
             for ev in d.get('events', []):
                 t = _delta(ev)
                 if t:
                     yield t
-            _record(d, purpose, model)
+            _record(d, purpose, model, time.time() - t0)
             if d.get('is_error') or not (d.get('result') or '').strip():
                 raise _fail(d)
             return
@@ -134,7 +150,7 @@ def stream(prompt, purpose='ask', effort='medium', model=MODEL, tools='', _stdin
             if p.poll() is None:
                 p.kill()
             p.wait()
-            _record(d, purpose, model)
+            _record(d, purpose, model, time.time() - t0)
         if d.get('is_error') or not (d.get('result') or '').strip():
             if not d.get('result'):
                 d['result'] = (p.stderr.read() or '')[:300]

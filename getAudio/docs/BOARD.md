@@ -9,7 +9,8 @@
 
 | 事 | 谁 | 在哪 | 状态 |
 |---|---|---|---|
-| B 站评论区：每期抓评论（来源栏阅读器里看）+ 工作台「评论区整理」（概述 + 带出处的原话，限字数）；登录 cookie 失效时自动从 Chrome 取新的（用户 10-13：「我啥都不动，它自己就行了」） | comments 窗口 | worktree `.claude/worktrees/comments`，分支 feature/comments | 10-13 做完、本地提交，没合 main。59 个测试文件全过（新增 test_comments 29 项）；5031 实测 BV1s1pY6cEZo：抓 2,699 条约 4 分钟、Claude 整理 $0；1700 / 1000 / 400 × 浅深截图过。同日加了「转写」页贴 B 站链接 →「下载评论区」弹窗（不转写，能总结、导出 CSV），评论改按 BV 号存；转写详情页也有同一张卡片。实测新视频 781 条约 1 分钟抓完。等用户点头合进 main。交接 `docs/handoff/comments.md`，ADR 0018 |
+| 三个应用（Verbatim / Ephemeris / 墨页）共用 Claude 额度的分配器 `claude_gate`（用户 10-13：「一个监控所有 usage 的分配器」） | claude-gate 窗口（kapozux-b9） | main（10-13 合进；三边都开了：Verbatim / Ephemeris 的 `.env`、墨页 launchd plist 设 `CLAUDE_GATE=~/.claude-gate/gate.db`，三个服务已重启） | 上线。59 个测试文件全过；三边各真调一次都记进了共用账本。交接 `docs/handoff/claude-gate.md`，ADR 0018 |
+| B 站评论区：每期抓评论（来源栏阅读器里看）+ 工作台「评论区整理」（概述 + 带出处的原话，限字数）；登录 cookie 失效时自动从 Chrome 取新的（用户 10-13：「我啥都不动，它自己就行了」） | comments 窗口 | worktree `.claude/worktrees/comments`，分支 feature/comments | 10-13 做完、本地提交，没合 main。59 个测试文件全过（新增 test_comments 29 项）；5031 实测 BV1s1pY6cEZo：抓 2,699 条约 4 分钟、Claude 整理 $0；1700 / 1000 / 400 × 浅深截图过。同日加了「转写」页贴 B 站链接 →「下载评论区」弹窗（不转写，能总结、导出 CSV），评论改按 BV 号存；转写详情页也有同一张卡片。实测新视频 781 条约 1 分钟抓完。等用户点头合进 main。交接 `docs/handoff/comments.md`，ADR 0019 |
 | 画像、播客、幻灯片……所有文字活都先给本机 Claude（`TEXT_ENGINE` 扩大范围；用户 10-13：「画像也可以 Claude 吧」） | claude-all 窗口（kapozux-b9） | main（10-13 合进、5001 已重启） | 上线。57 个测试文件全过；实测播客 4.9 秒、画像一句 5.1 秒。见 ADR 0016 补充、`docs/handoff/claude-text.md` |
 | 每期抽证据卡交给本机 Claude Haiku（`CARDS_ENGINE=claude`，默认不开；用户 10-13：「量太大可以 haiku（看性能）」） | claude-cards 窗口（kapozux-b9） | main（10-13 合进、5001 已重启，`.env` 已开 `CARDS_ENGINE=claude`） | 上线。56 个测试文件全过；实测 5 期 Haiku 卡 254 张、原话对得上 99%（DeepSeek 228 张、89%）。交接 `docs/handoff/claude-cards.md`，ADR 0017 |
 | 日常文字活（摘要、标签、回顾……llmroute 的用途）先交给本机 Claude Code（`TEXT_ENGINE=claude`，默认不开；用户 10-13：开销越少越好） | claude-text 窗口（kapozux-b9） | main（10-13 合进、5001 已重启，`.env` 已开 `TEXT_ENGINE=claude`） | 上线。55 个测试文件全过；实测摘要 3.2 秒、Haiku、$0。交接 `docs/handoff/claude-text.md`，ADR 0016 |
@@ -112,11 +113,12 @@
 | 0015 | 问证据卡可以交给本机 Claude Code 写（ASK_ENGINE=claude） | main |
 | 0016 | 日常文字活先交给本机 Claude Code（TEXT_ENGINE=claude，提取用 Haiku、判断用 Opus） | main |
 | 0017 | 每期抽证据卡可以交给本机 Claude Haiku（CARDS_ENGINE=claude） | main |
+| 0018 | 三个应用共用 Claude 额度的分配器（claude_gate） | main |
 | 0012 | 出处时间点走逐词时间轴（YouTube 字幕 / Qwen / 本机 Whisper 对齐），不估算 | 分支 feature/cite-cards |
 | 0013 | 用户自己的模型（OpenAI 兼容 / Ollama）选了就不偷偷换云端 | 分支 feature/on-port |
 | 0014 | 接口文档从路由表和 docstring 现生成，不手写 schema | 分支 feature/on-port |
-| 0018 | B 站评论区：评论是来源的一部分，整理是产出；登录态自动从浏览器续 | 分支 feature/comments |
-| 0019 | （下一个可用） | |
+| 0019 | B 站评论区：评论是来源的一部分，整理是产出；登录态自动从浏览器续 | 分支 feature/comments |
+| 0020 | （下一个可用） | |
 
 ## 最近做完（10-02 ~ 10-03）
 
