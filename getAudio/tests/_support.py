@@ -62,6 +62,10 @@ def isolate(prefix, cheap_route=False):
     os.environ['WORDTIME_WHISPER'] = '0'   # 本机 Whisper 补时间轴：测试里不跑模型
     os.environ['OPENROUTER_API_KEY'] = ''
     os.environ['CHEAP_TEXT_ROUTE'] = 'on' if cheap_route else 'off'
+    # 本机 Claude Code（ASK_ENGINE / TEXT_ENGINE=claude）：显式置空，不然 .env 里开着的会让测试真去起 claude 进程
+    # （禁外网只拦得住本进程的 socket，拦不住子进程）。要测 Claude 的测试自己设、并用 claude_cli.use_runner 打桩
+    os.environ['ASK_ENGINE'] = ''
+    os.environ['TEXT_ENGINE'] = ''
     os.makedirs(os.path.join(tmp, 'results', '_chains'))
     # 本机开着代理（Clash 之类）时，HTTP 客户端会先连 127.0.0.1 的代理、由代理转发出去——
     # 下面的「只许连本机」挡不住这一跳，所以代理变量一律清掉

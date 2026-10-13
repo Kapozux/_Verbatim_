@@ -119,8 +119,54 @@ def _pause(err, route=None):
     print(f'[llmroute] {route["name"] if route else "aliyun"} paused 30 min: {s[:160]}')
 
 
+# 本机 Claude Code 排在最前（TEXT_ENGINE=claude，2026-10-13 用户：「开销越少越好，订阅额度必须都用上」）：
+# 订阅额度不另花钱。提取、照着材料写的活用 Haiku（墨页实测认字比 Kimi 准，额度极省）；要判断、找主线的用 Opus。
+# Claude 用不了 / 报错（没登录、撞上限停着）就照旧往下走 DeepSeek → Gemini。抽证据卡、画像不归 llmroute，不受影响。
+OPUS_PURPOSES = {'review', 'reflect', 'digest', 'compare', 'beliefs'}
+HAIKU = 'claude-haiku-5-5'
+
+
+def _claude_model(purpose):
+    import claude_cli
+    return claude_cli.MODEL if purpose in OPUS_PURPOSES else HAIKU
+
+
+def _claude_text(prompt, purpose):
+    import claude_cli
+    if purpose not in PURPOSES or not claude_cli.text_engine():
+        return None
+    try:
+        return claude_cli.text(prompt, purpose=purpose, effort='low' if purpose not in OPUS_PURPOSES else 'medium',
+                               model=_claude_model(purpose)) or None
+    except Exception as e:  # noqa: BLE001
+        print(f'[llmroute] Claude Code {purpose} failed, falling back: {str(e)[:120]}')
+        return None
+
+
+def _claude_stream(prompt, purpose):
+    """先拿到第一段字再交出去：还没出字就失败了返回 None（调用方接着走 DeepSeek），不会让前端看到两段拼起来的话。"""
+    import claude_cli
+    if purpose not in PURPOSES or not claude_cli.text_engine():
+        return None
+    gen = claude_cli.stream(prompt, purpose=purpose, effort='low' if purpose not in OPUS_PURPOSES else 'medium',
+                            model=_claude_model(purpose))
+    try:
+        first = next(gen)
+    except Exception as e:  # noqa: BLE001  StopIteration（空回答）也算没拿到
+        print(f'[llmroute] Claude Code {purpose} stream failed, falling back: {str(e)[:120]}')
+        return None
+
+    def rest():
+        yield first
+        yield from gen
+    return rest()
+
+
 def text(prompt, purpose):
-    """能走就走 DeepSeek，返回文字；不能走或失败返回 None（调用方接着用 Gemini）。"""
+    """先 Claude（开了的话），再 DeepSeek，返回文字；都不能走或失败返回 None（调用方接着用 Gemini）。"""
+    out = _claude_text(prompt, purpose)
+    if out:
+        return out
     if not use_cheap(prompt, purpose):
         return None
     from analyze import _call_openai_compat
@@ -138,6 +184,9 @@ def text(prompt, purpose):
 def stream(prompt, purpose):
     """流式版：返回一个逐段 yield 文字的生成器；不能走或还没出字就失败了返回 None（调用方用 Gemini）。
     已经开始吐字之后再出错就只能往上抛——换模型重来会让前端看到两段拼起来的话。"""
+    claude = _claude_stream(prompt, purpose)
+    if claude is not None:
+        return claude
     if not use_cheap(prompt, purpose):
         return None
     import requests

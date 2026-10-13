@@ -1,7 +1,8 @@
 """本机 Claude Code 当写字的模型（2026-10-13，用户：「问证据卡」交给 Claude）。只在设了 ASK_ENGINE=claude、
 电脑上又有 `claude` 命令时才用；别人装的 Verbatim 没有 Claude Code，默认行为不变（CLAUDE.md 多窗口规矩 4）。
 
-    engine()                    → 'claude' / ''：这次「问证据卡」要不要交给 Claude
+    engine()                    → 'claude' / ''：这次「问证据卡」要不要交给 Claude（ASK_ENGINE）
+    text_engine()               → 日常文字活（llmroute 的用途）要不要先给 Claude（TEXT_ENGINE）
     available()                 → 有没有 claude 命令、是不是撞了上限停着
     stream(prompt, purpose)     → 生成器，边写边 yield 一小段字；还没出字就失败抛异常（调用方退回原来的模型）
     text(prompt, purpose)       → 一次拿全文；失败抛异常
@@ -24,7 +25,7 @@ import usage
 
 MODEL = 'claude-opus-5-5'
 BIN = 'claude'
-PARALLEL = int(os.environ.get('CLAUDE_PARALLEL') or 3)
+PARALLEL = int(os.environ.get('CLAUDE_PARALLEL') or 6)       # 批量转写时摘要 / 标签一下来很多；6 个进程约 1.4GB
 TIMEOUT = 600
 CWD = os.path.expanduser('~/.verbatim-claude')        # 会话存在这个目录名下，不混进用户自己的 Claude Code 项目
 SYSTEM = 'You are the writing engine inside Verbatim, a local research app. Follow the instructions in the user message exactly and output only what it asks for.'
@@ -48,11 +49,17 @@ def available():
 
 
 def engine():
+    """问证据卡（ask.answer / answer_stream）交不交给 Claude：ASK_ENGINE=claude。"""
     return 'claude' if (os.environ.get('ASK_ENGINE') or '').strip().lower() == 'claude' and available() else ''
 
 
-def _args(effort):
-    return ['-p', '--model', MODEL, '--effort', effort, '--system-prompt', SYSTEM, '--tools', '',
+def text_engine():
+    """日常文字活（llmroute 的那些用途：摘要、标签、回顾……）交不交给 Claude：TEXT_ENGINE=claude（2026-10-13）。"""
+    return (os.environ.get('TEXT_ENGINE') or '').strip().lower() == 'claude' and available()
+
+
+def _args(effort, model=MODEL):
+    return ['-p', '--model', model, '--effort', effort, '--system-prompt', SYSTEM, '--tools', '',
             '--disable-slash-commands', '--strict-mcp-config', '--setting-sources', '', '--no-session-persistence',
             '--output-format', 'stream-json', '--verbose', '--include-partial-messages']
 
@@ -66,9 +73,9 @@ def _delta(ev):
     return None
 
 
-def _record(d, purpose):
+def _record(d, purpose, model=MODEL):
     u = d.get('usage') or {}
-    usage.record('claude-code', MODEL, purpose, input_tokens=u.get('input_tokens', 0) + u.get('cache_creation_input_tokens', 0),
+    usage.record('claude-code', model, purpose, input_tokens=u.get('input_tokens', 0) + u.get('cache_creation_input_tokens', 0),
                  output_tokens=u.get('output_tokens', 0), cached_tokens=u.get('cache_read_input_tokens', 0), cost_usd=0.0)
 
 
@@ -80,9 +87,9 @@ def _fail(d):
     return RuntimeError(f'Claude: {text[:200] or "empty reply"}')
 
 
-def stream(prompt, purpose='ask', effort='medium'):
+def stream(prompt, purpose='ask', effort='medium', model=MODEL):
     """边写边 yield。调用方中途 close（用户点了停止）：claude 进程当场关掉，已经出的字照样记账。"""
-    args = _args(effort)
+    args = _args(effort, model)
     with _sem:
         if _runner:
             d = _runner(args, prompt)
@@ -90,7 +97,7 @@ def stream(prompt, purpose='ask', effort='medium'):
                 t = _delta(ev)
                 if t:
                     yield t
-            _record(d, purpose)
+            _record(d, purpose, model)
             if d.get('is_error') or not (d.get('result') or '').strip():
                 raise _fail(d)
             return
@@ -119,12 +126,12 @@ def stream(prompt, purpose='ask', effort='medium'):
             if p.poll() is None:
                 p.kill()
             p.wait()
-            _record(d, purpose)
+            _record(d, purpose, model)
         if d.get('is_error') or not (d.get('result') or '').strip():
             if not d.get('result'):
                 d['result'] = (p.stderr.read() or '')[:300]
             raise _fail(d)
 
 
-def text(prompt, purpose='ask', effort='medium'):
-    return ''.join(stream(prompt, purpose, effort)).strip()
+def text(prompt, purpose='ask', effort='medium', model=MODEL):
+    return ''.join(stream(prompt, purpose, effort, model)).strip()
