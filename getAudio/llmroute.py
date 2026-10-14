@@ -126,7 +126,9 @@ def _pause(err, route=None):
 # 联网核实（grounded，原来是 Gemini + Google 搜索）也给 Claude：Opus + 它自带的 WebSearch。
 # 不走的：抽证据卡（归 CARDS_ENGINE，ADR 0017）、看图（_call_gemini_mm）。
 # Claude 用不了 / 报错（没登录、撞上限停着）就照旧往下走 DeepSeek → Gemini。
-OPUS_PURPOSES = {'review', 'reflect', 'digest', 'compare', 'beliefs',
+# 'review' 不在这里：它是转写体检（模型只标识别垃圾），照原文挑的活给 Haiku low（10-14 用户点头；之前被当成「回顾」放进来，
+# 体检一直在用 Opus medium，10-13 三模型实测体检结果几乎一样）。「回顾」是 reflect。
+OPUS_PURPOSES = {'reflect', 'digest', 'compare', 'beliefs',
                  'synth', 'lens', 'revise', 'podcast', 'slides', 'xhs',
                  'comments-auto', 'comments-digest'}      # B 站评论区总结（ADR 0019）：自动的 low、手动的 medium
 LOW_EFFORT = {'comments-auto'}

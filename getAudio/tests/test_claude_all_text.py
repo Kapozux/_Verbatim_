@@ -61,6 +61,11 @@ t.check('评论区自动总结重试也是 low', ask._llm('评论', purpose='com
 t.check('评论区手动总结：Opus、effort medium', ask._llm('评论', purpose='comments-digest') == 'Claude 写的'
         and seen[-1][0] == claude_cli.MODEL and eff[-1] == 'medium', str(eff))
 t.check('评论区自动总结算 batch 档、手动的不算', claude_cli._prio('comments-auto') == 'batch' and claude_cli._prio('comments-digest') == 'normal')
+# 转写体检（purpose 'review'，模型只标识别垃圾、代码删）：照原文挑，用 Haiku、effort low、batch 档（2026-10-14 用户点头；
+# 之前 'review' 被当成「回顾」放进了 OPUS_PURPOSES，体检一直在用 Opus medium。10-13 三模型实测体检结果几乎一样）
+t.check('转写体检：Haiku、effort low', analyze._llm('[0] 嗯', 'aliyun', 'deepseek-v4-flash', purpose='review') == 'Claude 写的'
+        and seen[-1][0] == 'claude-haiku-5-5' and eff[-1] == 'low', str((seen[-1], eff[-1])))
+t.check('转写体检算 batch 档', claude_cli._prio('review') == 'batch')
 claude_cli.use_runner(claude_ok)
 
 args_seen = []
