@@ -9,7 +9,7 @@
 
 | 事 | 谁 | 在哪 | 状态 |
 |---|---|---|---|
-| 转写体检（purpose `review`）改用 Claude Haiku low（用户 10-14 点头；之前 `review` 被当成「回顾」放进 `OPUS_PURPOSES`，体检一直走 Opus medium） | review-haiku 窗口（ef991caf） | worktree `.claude/worktrees/review-haiku`，分支 feature/review-haiku | 测试先写、过了；等其他窗口点头再合 main、重启 5001。交接见 `docs/handoff/claude-text.md` 速览 |
+| 转写体检（purpose `review`）改用 Claude Haiku low（用户 10-14 点头；之前 `review` 被当成「回顾」放进 `OPUS_PURPOSES`，体检一直走 Opus medium） | review-haiku 窗口（ef991caf） | main（10-14 合进、5001 已重启） | 上线。60/61 个测试文件过（test_quota_whisper 全量跑时卡住，kapozux-9f 在修）。交接见 `docs/handoff/claude-text.md` 速览 |
 | 三个应用（Verbatim / Ephemeris / 墨页）共用 Claude 额度的分配器 `claude_gate`（用户 10-13：「一个监控所有 usage 的分配器」） | claude-gate 窗口（kapozux-b9） | main（10-13 合进；三边都开了：Verbatim / Ephemeris 的 `.env`、墨页 launchd plist 设 `CLAUDE_GATE=~/.claude-gate/gate.db`，三个服务已重启） | 上线。59 个测试文件全过；三边各真调一次都记进了共用账本。交接 `docs/handoff/claude-gate.md`，ADR 0018 |
 | B 站评论区：每期抓评论（来源栏阅读器里看）+ 工作台「评论区整理」（概述 + 带出处的原话，限字数）；登录 cookie 失效时自动从 Chrome 取新的（用户 10-13：「我啥都不动，它自己就行了」） | comments 窗口（kapozux-9f） | main（10-13 22:35 合进；22:50 又合进只下载评论区时自动总结（Opus low、batch 档）+ 按热度 500 楼上限；23:18 每楼回复改成 2 条（主列表附带的，不翻楼中楼），进度按楼报，5001 已重启） | 上线。59 个测试文件全过（新增 test_comments 29 项）；5031 实测 BV1s1pY6cEZo：抓 2,699 条约 4 分钟、Claude 整理 $0；1700 / 1000 / 400 × 浅深截图过。同日加了「转写」页贴 B 站链接 →「下载评论区」弹窗（不转写，能总结、导出 CSV），评论改按 BV 号存；转写详情页也有同一张卡片。实测新视频 781 条约 1 分钟抓完。交接 `docs/handoff/comments.md`，ADR 0019 |
 | 画像、播客、幻灯片……所有文字活都先给本机 Claude（`TEXT_ENGINE` 扩大范围；用户 10-13：「画像也可以 Claude 吧」） | claude-all 窗口（kapozux-b9） | main（10-13 合进、5001 已重启） | 上线。57 个测试文件全过；实测播客 4.9 秒、画像一句 5.1 秒。见 ADR 0016 补充、`docs/handoff/claude-text.md` |
