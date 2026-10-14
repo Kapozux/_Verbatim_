@@ -217,7 +217,43 @@ def load(chain_dir, passages=False):
     if passages:
         _add_passages(corpus, state)
         _add_people(corpus, state)
+        _add_recording_people(corpus, state)
     return corpus
+
+
+def _add_recording_people(corpus, state):
+    """项目里另外加的录音（sources.json 的 recordings）常常是别的 UP 主的：每期记上是谁的（转写 meta 的 creator），
+    跟项目自己的频道分开，提示词就按人归属（_subject / study._prompt 看 people 有几个人）。
+    10-14：「Chinese social analyze」是懒猫徒手健身的频道 + 4 个别的 UP 主的视频，问答把努力奋斗小凯的话写成同一个「他」的。"""
+    reg = _read_json(os.path.join(corpus['dir'], 'sources.json'), {}) or {}
+    rec = {r.get('task_id') for r in reg.get('recordings') or [] if r.get('task_id')}
+    if not rec:
+        return
+    own = (state.get('channel_name') or corpus['author'] or '').strip() if state.get('url') else ''
+    found = []
+    for e in corpus['episodes']:
+        if e.get('task_id') not in rec or e.get('person'):
+            continue
+        who = str((_read_json(os.path.join(config.RESULTS_FOLDER, e['task_id'], 'meta.json'), {}) or {}).get('creator') or '').strip()
+        if who:
+            e['person'] = who
+            found.append(who)
+    others = [n for n in dict.fromkeys(found) if n != own]
+    if not others:
+        return
+    people = corpus.setdefault('people', [])
+    names = {p['name'] for p in people}
+    if own:
+        for e in corpus['episodes']:
+            if e.get('kind') not in ('doc', 'repo') and not e.get('person') and e.get('task_id') not in rec:
+                e['person'] = own
+        if own not in names:
+            people.insert(0, {'tag': '', 'name': own, 'chain_id': os.path.basename(corpus['dir'])})
+            names.add(own)
+    for n in others:
+        if n not in names:                    # 没有自己的链条：不能「用他的口吻回答」，只用来归属
+            people.append({'tag': '', 'name': n, 'chain_id': '', 'rec': True})
+            names.add(n)
 
 
 def _add_people(corpus, state):
@@ -232,10 +268,12 @@ def _add_people(corpus, state):
     root = os.path.dirname(corpus['dir'])
     people = []
     if state.get('url'):                      # 项目自己的频道也是一个人：期上记名字，跟别人分得开
+        own = state.get('channel_name') or corpus['author']      # 项目改过名：author 是项目名，不是频道主
+        rec = {r.get('task_id') for r in reg.get('recordings') or []}
         for e in corpus['episodes']:
-            if e.get('kind') not in ('doc', 'repo') and not e.get('person'):
-                e['person'] = corpus['author']
-        people.append({'tag': '', 'name': corpus['author'], 'chain_id': os.path.basename(corpus['dir'])})
+            if e.get('kind') not in ('doc', 'repo') and not e.get('person') and e.get('task_id') not in rec:
+                e['person'] = own
+        people.append({'tag': '', 'name': own, 'chain_id': os.path.basename(corpus['dir'])})
     for r in refs:
         d = os.path.join(root, r['chain_id'])
         st = _read_json(os.path.join(d, 'chain.json'), {}) or {}
@@ -1216,7 +1254,8 @@ def _persona_view(corpus, persona):
         return None, None
     tag = me.get('tag') or ''
     keep = {i for i, e in enumerate(corpus['episodes'])
-            if (e.get('person_tag') == tag if tag else (not e.get('person_tag') and e.get('kind') not in ('doc', 'repo')))}
+            if (e.get('person_tag') == tag if tag else (not e.get('person_tag') and e.get('kind') not in ('doc', 'repo')
+                                                         and e.get('person', me['name']) == me['name']))}
     d = os.path.join(os.path.dirname(corpus['dir']), me['chain_id']) if tag else corpus['dir']
     return keep, dict(corpus, author=me['name'], people=[], dir=d, kind='creator', template='creator')
 

@@ -3087,6 +3087,8 @@ def _run_chain(state):
         # 用户没填 author 就用探测到的频道名；头像给卡片展示
         if channel.get('name') and state.get('author') in ('', '该博主'):
             state['author'] = channel['name']
+        if channel.get('name'):               # 频道真名另存：项目改了名（author 是项目名）时，问答 / 来源栏还认得出这是谁的频道
+            state['channel_name'] = channel['name']
         state['avatar'] = channel.get('avatar', '') or state.get('avatar', '')
         # 订阅数单独取（probe 带 lang=zh-CN 时 YouTube 会返 None）；沿用旧列表时
         # 探测本来就被封了，别再打一次 channel_followers() 陪绑。
@@ -4313,7 +4315,7 @@ def api_project_sources(chain_id):
     have_cards = _cards_file_index(_chain_dir(chain_id))
     channel = None
     if state.get('url'):
-        channel = {'url': state['url'], 'name': state.get('author') or '', 'avatar': state.get('avatar') or '',
+        channel = {'url': state['url'], 'name': state.get('channel_name') or state.get('author') or '', 'avatar': state.get('avatar') or '',
                    'followers': state.get('followers') or 0, 'stage': state.get('stage')}
     missing = [v for v in vids if v.get('task_id') and v.get('status') == 'done'
                and not (v['task_id'] in have_cards and _card_file_done(have_cards[v['task_id']]))]

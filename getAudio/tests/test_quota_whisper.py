@@ -9,6 +9,7 @@ import uuid
 from _support import Checks, isolate
 
 TMP = isolate('quota_whisper')
+os.environ['VOICES_AUTO'] = 'off'      # 转写成功会把声纹排进后台（真模型、非守护线程）：测试进程会等它跑完才退
 import app as A  # noqa: E402
 import taskdb  # noqa: E402
 import transcribe_gemini  # noqa: E402
@@ -26,6 +27,7 @@ def gemini_cap(path, progress_callback=None):
 
 
 transcribe_gemini.transcribe_audio = gemini_cap
+A._on_battery = lambda: False          # 笔记本用电池时本地 Whisper 会原地等插电（测试会一直卡着）
 transcribe_whisper.transcribe_audio = lambda path, progress_callback=None: [{'start': 1, 'end': 2, 'text': '你好'}]
 
 t.check('认得出月度花费上限', A._is_quota_out(RuntimeError(CAP)))
