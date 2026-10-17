@@ -2,31 +2,61 @@
 
 # Verbatim
 
-**Free, local, unlimited-length transcription. Paste a YouTube/Bilibili link, get a transcript with timestamps. No account needed.**
+**Hundreds of hours of audio/video, ask anything, and every sentence in the answer can be clicked to jump to the exact second of the original words.**
+
+An open-source audio/video notebook that can run fully locally. The idea is similar to Gemini Notebook (previously NotebookLM), but enhanced for audio: it works with YouTube, Bilibili, class recordings and podcasts. It remembers who is speaking, and can turn a whole semester of class recordings into a revision guide, a quiz, and a podcast that explains the knowledge to you with your teacher's original voice clips inserted.
 
 ![Verbatim demo](getAudio/docs/media/verbatim-cite.gif)
-Built by Kapozux/Kerwin, student in Shanghai. In active development since March 2026.
+
+**[Quick start](#quick-start):** download the DMG (Apple Silicon Mac) or run `./install.sh` (macOS / Linux). Local Whisper transcription is free; questions and Studio need a Gemini API key, or your own local model through Ollama.
+
+Author: Kerwin (Kapozux), Shanghai high schooler. Developed from March 2026 to now:
+
+245 commits, 62 test suites, 1,500+ hours of audio processed so far.
+Built with Claude Code as a development tool.
 
 ![Verbatim](docs/verbatim.png)
 
-## What it does
+---
 
-Paste a link and Verbatim downloads the video, transcribes it, and writes a timestamped summary. Paste a
-whole channel or playlist instead, and it pulls every episode, transcribes each one, extracts evidence
-cards from every episode, and builds a portrait of the creator from those cards. If a cloud engine fails
-on a file, that file falls back to local Whisper automatically. It works with YouTube, Bilibili, and
-local audio/video files.
+## Why I made it
 
-Each analysed creator gets a workspace you can keep coming back to: ask questions answered only from
-their own words (every sentence cites the episode and second), see how their stance on a topic moves
-over time, check their past predictions against the web, and find the claims they repeat across
-episodes. New videos can be picked up on a schedule. See [Creators](docs/creators.md).
+I can't sit through an hour-long recorded stream, but I still want to know what is being talked about inside it. Current tools are either expensive or lack Chinese support, so I made my own.
 
-## Why I built it
+Later it became my main tool for revision: I put class recordings and papers into the same notebook and ask something like "What is the definition of encapsulation?" After I click the citation in the answer, it brings me to the highlighted section of the CS book. I have used it every day for half a year.
 
-I can't sit through an hour-long video, but I still want to know what was said. Existing tools were
-either expensive or bad at Chinese, so I built my own. I've used it daily for six months and put 790+
-hours of audio through it.
+## Difference from NotebookLM (as of October 2026)
+
+| | NotebookLM | Verbatim |
+|---|---|---|
+| Click to the exact second | Subtitled YouTube videos only | YouTube, Bilibili and local audio/video all supported |
+| Who is speaking | No identification | Local voiceprint identification: who is the teacher, the student, the reporter |
+| Scale | 50–300 sources per notebook | Full YouTube channels, thousands of hours |
+| Generated podcast | No sources | Inserts original audio clips, each section with its source |
+| Model and data | Gemini only, data stored at Google | Open source, can run entirely on your device, your data is yours |
+| For AI agents | No interface | MCP server published on PyPI, so Claude can transcribe and search your library for you |
+
+## What it can do
+
+**Notebook**: The left bar holds the Sources (audio/video, PDF, PPT, Word, websites), you ask questions in the middle, and the right section is the Studio.
+Answers are based only on your material. Every sentence has its citation; click it to jump to the original sentence or the exact second of the audio/video.
+
+**Studio**: One click to generate review notes, flashcards, quizzes, reports, slides and audio podcasts.
+Every step shows the estimated cost first, then displays what it actually cost.
+
+**Transcribe**: Paste a link or drag in a file. There are several transcription engines to choose from (local Whisper, Gemini, Qwen).
+When an engine fails or runs out of quota, it automatically falls back to local Whisper without getting stuck.
+
+**Creator Analysis**: Paste a YouTube channel link, and it will transcribe every episode and extract evidence cards (claim, original quote, timestamp). Then, based on the evidence cards, it writes a portrait of the creator: how their stance changes over time, whether their past predictions were accurate, and which claims they keep repeating.
+New videos sync automatically. 85,000+ evidence cards generated so far (in my own library). See [Creators](docs/creators.md).
+
+## Insight on tech
+
+- **Process lives in code, not handed to the model.** Every multi-step task is a plain Python loop, and the model only focuses on a single step. So the results are reproducible, and errors can be located.
+- **Using deterministic rules to clear hallucinations.** Merge repeated filler words, get rid of loops, fix timestamps; it only acts when multiple signals agree.
+- **Evidence first, conclusion second.** Every episode is first compressed into neutral evidence cards, and the portrait can only reference evidence cards. Finally, a self-verification pass deletes claims that the cards don't support.
+- **Cheap routing.** Daily tasks go to a cheap model first, and switch to an expensive one only when there's an error. Every token used and every cost is logged.
+- **Engineering habits.** 62 automated test suites (all offline, no cost), ~50,000 lines of code.
 
 ## Quick Start
 
@@ -82,11 +112,6 @@ DASHSCOPE_API_KEY=...     # QwenASR / Precise
 OPENROUTER_API_KEY=...    # optional: Claude as the analysis model
 ```
 
-## Evidence Cards
-
-Every sentence in a creator analysis traces back to a specific timestamp in the original video. 33,832
-evidence cards generated so far.
-
 ## MCP Server
 
 ```bash
@@ -98,13 +123,8 @@ creator analysis. The PyPI release has the transcription tools; the creator work
 stances, predictions, recurring claims, radar) are in this repo for now — install them with
 `pipx install -e verbatim-mcp`.
 
-## Stats
-
-| Lines of code | Commits | Transcripts | Hours transcribed | Evidence cards |
-|---|---|---|---|---|
-| ~16,000 | 100+ | 2,058 | 795 | 33,832 |
-
-## Known Issues
+<details>
+<summary><b>Known issues</b></summary>
 
 - **Creator pipelines don't auto-resume** after a server restart. They're marked failed; click
   **Continue** to reuse everything already done and redo only what's missing.
@@ -115,34 +135,6 @@ stances, predictions, recurring claims, radar) are in this repo for now — inst
 - The **Xiaohongshu tab** needs a companion scraper project (`XHS_PROJECT` env var) and `uv`. It's not a
   pip dependency, since it drives a real logged-in browser session.
 - **Not built yet:** pipeline auto-resume across restarts, and Gemini Batch API for cheaper bulk analysis.
-
-<details>
-<summary><b>Under the hood</b></summary>
-
-```
-Browser (SPA, SSE progress)
-   │  fetch / SSE
-Flask (app.py)
-   ├─ ThreadPoolExecutor + per-engine semaphores   ── transcription concurrency
-   ├─ global download / analysis semaphores        ── throttling shared across all pipelines
-   ├─ SQLite (taskdb.py, usage.db)                 ── task state, restart recovery, cost tracking
-   └─ results/<uuid>/…, results/_chains/<id>/…     ── transcripts and creator analyses
-```
-
-- **Control flow lives in Python, not the model.** `harness.py` gives two primitives, `fanout`
-  (concurrent, order-preserving map) and `agent` (one LLM call with retries and optional schema
-  validation). Every multi-step pipeline is a plain Python loop over them.
-- **Download and transcription overlap.** Each video starts transcribing the moment its download
-  finishes.
-- **Hallucination cleanup is deterministic.** `sanitize.py` collapses filler runs, dedups loops, repairs
-  timestamps, and removes silence-masked hallucinations, acting only when several signals agree.
-- **Analysis is evidence-first.** Episodes are reduced to neutral cards (observation + verbatim quote +
-  timestamp) before any judgment. The portrait is built only from cards, then a self-verify pass cuts
-  claims the cards don't support.
-- **Safe by construction.** IDs are validated before filesystem joins, local files are read via
-  symlink so originals are never touched, and user-influenced strings are HTML-escaped.
-
-Key settings live in `config.py` (engine concurrency, Whisper model size, analysis model presets).
 
 </details>
 
