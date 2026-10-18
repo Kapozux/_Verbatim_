@@ -2,10 +2,10 @@
 
 ## 速览
 
-- **现状**：Chrome MV3 插件在 `extension/`，分支 `feature/video-ext` 已本地提交，还没合进 main、5001 还没重启（重启后插件才能连上 5001）。
+- **现状**：Chrome MV3 插件在 `extension/`；10-18 合进 main、5001 已重启，插件能直接连 5001。
 - **怎么跑**：`chrome://extensions` → 开发者模式 →「加载已解压的扩展程序」选 `getAudio/extension`；安装说明见 `extension/README.md`。
 - **已知问题**：只认 localhost / 127.0.0.1；「从这里开始转」读播放器时间只在 Playwright 里间接测过（没有真点工具栏）；右键菜单、快捷键、系统通知没有自动化测试。
-- **下一步**：合进 main、重启 5001 后，用户在自己的 Chrome 里装上，真点一次 YouTube 和 B 站。
+- **下一步**：用户在自己的 Chrome 里装上，真点一次 YouTube 和 B 站（工具栏、右键、快捷键、通知）。
 
 ## 做了什么
 
