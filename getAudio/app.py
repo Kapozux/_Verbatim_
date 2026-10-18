@@ -145,6 +145,8 @@ _AUTH_COOKIE = 'getaudio_token'
 # 反向代理改写了地址等特殊情况：VERBATIM_ALLOWED_ORIGINS=https://a.example,https://b.example
 _LOOPBACK_HOSTS = {'localhost', '127.0.0.1', '::1', '[::1]'}
 _UNSAFE_METHODS = {'POST', 'PUT', 'PATCH', 'DELETE'}
+# 自带的浏览器插件（extension/，在视频页点一下就转写）：manifest 里写死了 key，ID 固定，只放行这一个
+EXTENSION_ORIGIN = 'chrome-extension://dncnefkhhhkebmpiponfhcmmoaakaani'
 
 
 def _host_only(hostport):
@@ -165,7 +167,8 @@ def _cross_site_guard():
     if origin:
         allowed = {o.strip().rstrip('/').lower() for o in os.environ.get('VERBATIM_ALLOWED_ORIGINS', '').split(',') if o.strip()}
         netloc = urlsplit(origin).netloc.lower() if origin != 'null' else ''
-        if (netloc and netloc == request.host.lower()) or origin.rstrip('/').lower() in allowed:
+        if (netloc and netloc == request.host.lower()) or origin.rstrip('/').lower() in allowed \
+                or origin == EXTENSION_ORIGIN:
             return None
         return jsonify({'error': f'Blocked a request from another website ({origin}). Open Verbatim at its own address, '
                                  'or list that origin in VERBATIM_ALLOWED_ORIGINS.'}), 403
