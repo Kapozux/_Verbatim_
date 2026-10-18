@@ -6,6 +6,9 @@ http://localhost:5001 发表单 / fetch(no-cors) 的「简单请求」：/upload
 改法：改动类请求看 Origin（没有就看 Sec-Fetch-Site），必须是 Verbatim 自己的地址；只监听本机时 Host 必须是
 localhost / 127.0.0.1 / ::1。不带这些头的非浏览器客户端（curl、脚本、MCP server）照常放行。
 跑生产代码：Flask 应用的请求钩子。桩：没有（被拦下的请求不会走到路由；放行的请求看是不是 403）。"""
+import base64
+import hashlib
+import json
 import os
 
 from _support import Checks, isolate
@@ -36,6 +39,14 @@ t.check('用 127.0.0.1 打开的页面发的：照常',
                data='{}', content_type='text/plain').status_code == 200)
 t.check('同源（Sec-Fetch-Site: same-origin）：照常', post(**{'Sec-Fetch-Site': 'same-origin'}) == 200)
 t.check('curl / 脚本 / MCP（没有这些头）：照常', post() == 200 and spent)
+# 自带的浏览器插件（extension/，manifest 里写死了 key，所以 ID 固定）：只放行这一个，别的插件照样拒绝
+EXT = 'chrome-extension://dncnefkhhhkebmpiponfhcmmoaakaani'
+t.check('Verbatim 自己的插件发的：照常', post(Origin=EXT) == 200 and spent)
+t.check('别的插件发的：拒绝', post(Origin='chrome-extension://abcdefghijklmnopabcdefghijklmnop') == 403 and not spent)
+with open(os.path.join(os.path.dirname(A.__file__), 'extension', 'manifest.json'), encoding='utf-8') as f:
+    _key = base64.b64decode(json.load(f)['key'])
+_id = ''.join(chr(ord('a') + int(ch, 16)) for ch in hashlib.sha256(_key).hexdigest()[:32])
+t.check('插件 manifest 的 key 算出来的 ID 就是后端放行的那个', 'chrome-extension://' + _id == EXT == A.EXTENSION_ORIGIN)
 t.check('上传文件（表单）从别的网站发来：拒绝',
         c.post('/upload', base_url=BASE, headers={'Origin': 'https://evil.example'},
                data={}, content_type='multipart/form-data').status_code == 403)

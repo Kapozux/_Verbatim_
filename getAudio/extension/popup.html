@@ -1,0 +1,55 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="popup.css">
+</head>
+<body>
+<header>
+  <img src="icons/icon32.png" alt="" width="20" height="20">
+  <span class="brand">Verbatim</span>
+  <button id="settings-btn" class="icon-btn" type="button">
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+  </button>
+</header>
+
+<section id="main">
+  <div id="page-title" class="page-title"></div>
+  <div id="not-video" class="hint hidden"></div>
+  <div id="actions">
+    <button id="whole-btn" class="primary" type="button"></button>
+    <button id="here-btn" class="secondary hidden" type="button"></button>
+    <label class="field"><span id="nb-label"></span>
+      <select id="notebook"></select>
+    </label>
+  </div>
+  <div id="msg" class="msg hidden"></div>
+
+  <h2 id="recent-h"></h2>
+  <ul id="jobs"></ul>
+  <button id="open-app" class="link" type="button"></button>
+</section>
+
+<section id="settings" class="hidden">
+  <label class="field"><span data-t="popup.server"></span><input id="s-server" type="url" spellcheck="false"></label>
+  <label class="field"><span data-t="popup.password"></span><input id="s-password" type="password" autocomplete="off"></label>
+  <label class="field"><span data-t="popup.engine"></span>
+    <select id="s-engine">
+      <option value="gemini35" data-t="popup.engine.gemini35"></option>
+      <option value="gemini" data-t="popup.engine.gemini"></option>
+      <option value="qwenasr" data-t="popup.engine.qwenasr"></option>
+      <option value="whisper" data-t="popup.engine.whisper"></option>
+    </select>
+  </label>
+  <label class="field"><span data-t="popup.subs"></span>
+    <select id="s-subs">
+      <option value="auto" data-t="popup.subs.auto"></option>
+      <option value="off" data-t="popup.subs.off"></option>
+    </select>
+  </label>
+  <button id="s-save" class="primary" type="button" data-t="popup.save"></button>
+</section>
+
+<script type="module" src="popup.js"></script>
+</body>
+</html>
