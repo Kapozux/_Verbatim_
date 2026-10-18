@@ -52,8 +52,12 @@ def _guard_network():
     socket.create_connection = create_connection
 
 
-def isolate(prefix, cheap_route=False):
-    """临时数据目录 + 假 key + 禁外网；返回数据目录。必须在 import 任何生产模块之前调用。"""
+def isolate(prefix, cheap_route=False, real_moye=False):
+    """临时数据目录 + 假 key + 禁外网；返回数据目录。必须在 import 任何生产模块之前调用。
+
+    real_moye：要不要连本机真的墨页（8765）。默认不连——墨页在本机，禁外网拦不住，
+    没等转完就结束的测试会在用户的墨页资料库里留下记录（2026-10 留了 139 条 diagram.png）。
+    只有会等转完、让 sources._moye_job 把记录删掉的测试才开。"""
     tmp = tempfile.mkdtemp(prefix=f'verbatim_{prefix}_')
     os.environ['GETAUDIO_DATA_DIR'] = tmp
     os.environ['GEMINI_API_KEY'] = 'test-not-a-real-key'
@@ -68,6 +72,8 @@ def isolate(prefix, cheap_route=False):
     os.environ['TEXT_ENGINE'] = ''
     os.environ['CARDS_ENGINE'] = ''
     os.environ["CLAUDE_GATE"] = ""
+    if not real_moye:
+        os.environ['MOYE_URL'] = 'http://127.0.0.1:9'   # 没人监听：moye_alive() 为假，走不连墨页的那条路
     os.environ["CLAUDE_GATE_CC_DIR"] = os.path.join(tmp, "no-claude-projects")   # 别读真的 ~/.claude
     os.makedirs(os.path.join(tmp, 'results', '_chains'))
     # 本机开着代理（Clash 之类）时，HTTP 客户端会先连 127.0.0.1 的代理、由代理转发出去——

@@ -13,7 +13,7 @@ import time
 
 from _support import Checks, fake_embed as _embed, isolate, make_transcript
 
-TMP = isolate('study')
+TMP = isolate('study', real_moye=True)   # 导出 PDF 走墨页的 md2pdf，不进资料库
 import analyze  # noqa: E402
 import app as A  # noqa: E402
 import ask  # noqa: E402

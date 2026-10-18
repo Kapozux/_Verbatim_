@@ -8,7 +8,7 @@ import time
 
 from _support import Checks, isolate
 
-TMP = isolate('sources')
+TMP = isolate('sources', real_moye=True)   # 「PDF 走墨页」等转完，记录由 _moye_job 删掉
 import sources as S  # noqa: E402
 
 t = Checks()
