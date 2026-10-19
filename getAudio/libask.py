@@ -26,7 +26,7 @@ import look
 
 MAX_RESULTS = 8
 MODEL = os.environ.get('LIBASK_MODEL') or 'claude-sonnet-5-5'    # 找东西不用 Opus：Sonnet 快一倍，订阅额度记 $0
-EFFORT = os.environ.get('LIBASK_EFFORT') or 'medium'
+EFFORT = os.environ.get('LIBASK_EFFORT') or 'high'    # 10-19 medium 时它看了摘要就交、不读原文
 CATALOG_BUDGET = 60000          # 没有 Claude 时交给便宜模型的目录，最多这么多字（约 3 万 token，flash-lite 一次不到 $0.01）
 HERE = os.path.dirname(os.path.abspath(__file__))
 LOOK = f'{sys.executable} {os.path.join(HERE, "look.py")}'
@@ -35,22 +35,25 @@ PROMPT = """你在帮一个人从他自己的 Verbatim 资料库里找转写（�
 资料库一共 {total} 份转写。他要找：「{question}」
 
 用 Bash 运行 `{look} <命令>` 查（别的命令都会被拒）：
-  search <词> [词…] [--any] [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--creator 名] [--n 30]   哪些转写提到（默认几个词都要出现；标题 / 标签 / 一句话 / 正文）
+  search <词> [词…] [--any] [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--creator 名] [--mine] [--n 30]   哪些转写提到（默认几个词都要出现；标题 / 标签 / 一句话 / 正文）
   hits   <短号> <词> [--n 20]                    一份转写里这个词出现的每一句，带时间
   read   <短号> [--at 词 | --from 时:分:秒] [--n 40]   读一段原文
   info   <短号>                                   标题、一句话、标签、来源、时长、摘要和分节
-  list   [--since …] [--until …] [--creator 名] [--engine E] [--min 分钟] [--max 分钟] [--n 50] [--old]   按时间列
+  list   [--since …] [--until …] [--creator 名] [--mine] [--engine E] [--min 分钟] [--max 分钟] [--n 50] [--old]   按时间列
   stats                                            总量、按月、按引擎、按博主
   schema / sql "<SELECT …>"                        自己写只读 SQL
 
 怎么找：
 - 他记得的多半是片段：说过的一句话、聊的话题、谁说的、大概哪天、什么语言、是录音还是视频。把这些拆开，换几种说法都搜：
   中英文、简称、近义词（「机器学习 / 模型 / SHAP」「考试 / 期末 / exam」）；正文是转写出来的，专有名词常被听错，多试几种写法。
-- 说了时间（「上周」「十月」「昨天晚上」）就按今天推算加 --since / --until；说了「我录的」就是上传的文件（结果里写「上传的文件」），
-  说了博主就加 --creator。
-- 候选多的时候用 info 看摘要、用 hits / read 看原话再判断，别只凭标题。找的是某一段话，就用 hits 定位到那一句的时间。
+- 说了时间（「上周」「十月」「昨天晚上」）就按今天推算加 --since / --until；说了「我录的」「我自己的」「不是博主的」
+  就加 --mine（只看他自己上传的录音 / 文件）；说了博主就加 --creator。
+- 搜不到字面的词，多半是他的说法跟录音里的说法不一样（口语、简称、转写听错）：换说法再搜；还不行就用 list --mine（加时间范围）
+  按时间翻、用 info 看摘要挑候选。
+- **要列进结果的每一份，都必须先用 hits 或 read 读到跟他的描述对得上的原话**，at 填那句话的时间。只看了标题 / 一句话 / 摘要的
+  不算找到，不许列——系统会把没读过原文的结果直接丢掉。读了发现对不上就换下一个候选。
 - 每次只跑一条完整的命令（照上面的写法原样写全路径）：不要用 shell 变量、不要用 ; && | 把几条连起来——那样会被拒。
-- 找到把握大的就可以停，不用把整个库翻遍。
+- 读原文核实过、把握大了就可以停；把握不大就接着找，宁可多读几份。真找不到就给空数组，在 note 里说查了哪些说法、读了哪几份。
 
 最后只输出 JSON，不要别的文字：
 {{"results": [{{"t": "短号", "at": "时:分:秒 或空字符串", "why": "一句话说为什么是它"}}], "note": "可空：一句话补充（比如没找到时说查了什么）"}}
@@ -142,7 +145,7 @@ def step_of(command):
         tid = look.resolve(a.tid)
         m = look._meta(tid) if tid else {}
         d = m.get('ai_title') or m.get('filename') or a.tid
-        return {'k': k, 'd': _clip(f'{d} · {a.word}' if k == 'hits' else d, 80)}
+        return {'k': k, 'd': _clip(f'{d} · {a.word}' if k == 'hits' else d, 80), **({'tid': tid} if tid else {})}
     return {'k': k, 'd': _clip(' '.join(getattr(a, 'words', None) or []), 80)}
 
 
@@ -193,15 +196,16 @@ def card(tid, why, at=''):
                                                                'creator')}}
 
 
-def pick(raw, by_ref):
-    """模型的回答 → 结果卡片；认不出的、重复的丢掉。by_ref(ref) → 完整 id 或 None。"""
+def pick(raw, by_ref, read=None):
+    """模型的回答 → 结果卡片；认不出的、重复的丢掉。by_ref(ref) → 完整 id 或 None。
+    read：它这次真用 hits / read 读过原文的转写（Claude 自己查时）；不在里面的丢掉——只看了摘要就列上来的不算（10-19 用户：「为什么不看原文」）。"""
     data = _json(raw)
     seen, out = set(), []
     for item in data.get('results') or []:
         if not isinstance(item, dict):
             continue
         tid = by_ref(item.get('t') if 't' in item else item.get('n'))
-        if not tid or tid in seen:
+        if not tid or tid in seen or (read is not None and tid not in read):
             continue
         seen.add(tid)
         out.append(card(tid, item.get('why'), item.get('at') or ''))
@@ -216,16 +220,20 @@ def find(question, progress=None):
     total = _total()
     prompt = PROMPT.format(today=date.today().isoformat(), total=total, question=question, look=LOOK, n=MAX_RESULTS)
 
+    read = set()
+
     def seen(kind, text):
         if kind == 'tool':
             s = step_of(text)
             if s:
                 progress(s)
+                if s['k'] in ('read', 'hits') and s.get('tid'):
+                    read.add(s['tid'])
     raw, _ = claude_cli.agent(prompt, LOOK, on_event=seen, model=MODEL, effort=EFFORT, purpose='find', stop=_stop,
                               env={'GETAUDIO_DATA_DIR': config.DATA_DIR})
     if _stop.is_set():
         return None
-    results, note = pick(raw, look.resolve)
+    results, note = pick(raw, look.resolve, read)
     return {'results': results, 'note': note, 'considered': total, 'mode': 'claude'}
 
 
