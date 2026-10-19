@@ -7460,6 +7460,23 @@ def _transcript_plain_text(task_id):
                     for s in segs if (s.get('text') or '').strip()).strip()
 
 
+def _transcript_source_line(task_id):
+    """合并时每份下面一行出处（照墨页合并 .md 每份标来源）：转写日期 · 时长 · 博主 · 原链接或文件名。"""
+    try:
+        with open(os.path.join(config.RESULTS_FOLDER, task_id, 'meta.json'), 'r', encoding='utf-8') as f:
+            meta = json.load(f)
+    except Exception:
+        return ''
+    bits = [str(meta.get('date') or '')[:10]]
+    if meta.get('duration_seconds'):
+        sec = int(float(meta['duration_seconds']))
+        bits.append(f'{sec // 3600}:{sec % 3600 // 60:02d}:{sec % 60:02d}' if sec >= 3600 else f'{sec // 60}:{sec % 60:02d}')
+    if meta.get('creator'):
+        bits.append(str(meta['creator']))
+    bits.append(meta.get('source_url') or meta.get('filename') or '')
+    return ' · '.join(b for b in bits if b)
+
+
 @app.route('/api/transcripts/merge', methods=['POST'])
 def api_transcripts_merge():
     """把任意一组转写（按 task_id）拼成一份纯文本 Markdown。跨博主、可挑期。
@@ -7485,7 +7502,8 @@ def api_transcripts_merge():
         if not text:
             missing += 1
             continue
-        parts.append(f"## {_transcript_title(tid)}\n\n{text}\n")
+        src = _transcript_source_line(tid)
+        parts.append(f"## {_transcript_title(tid)}\n\n" + (f"> {src}\n\n" if src else '') + f"{text}\n")
     if not parts:
         return jsonify({'error': 'None of the selected transcripts had text'}), 400
 

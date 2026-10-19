@@ -1023,7 +1023,7 @@ async function renderHistory() {
         }
 
         historyList.innerHTML = '';
-        entries.forEach(entry => historyList.appendChild(buildHistoryCard(entry)));
+        entries.forEach(entry => historyList.appendChild(buildHistoryCard(entry, { pick: true })));
     } catch {
         historyList.innerHTML = `<p class="history-empty">${T('library.failedToLoad')}</p>`;
     }
@@ -1041,9 +1041,25 @@ function buildSourceLink(url) {
     return a;
 }
 
-function buildHistoryCard(entry) {
+function buildHistoryCard(entry, { pick = false } = {}) {
     const item = document.createElement('div');
     item.className = 'history-item';
+    // 资料库里勾选几份合并（照墨页：勾选框平时藏着，悬停或已经勾了东西时才出现）；跟博主分集页同一个购物车
+    if (pick) {
+        const label = document.createElement('label');
+        label.className = 'hist-pick';
+        label.title = T('library.pickTitle');
+        const box = document.createElement('input');
+        box.type = 'checkbox';
+        box.dataset.pick = entry.id;
+        box.checked = mergeCart.has(entry.id);
+        box.setAttribute('aria-label', T('library.pickLabel', { name: entry.ai_title || entry.filename }));
+        box.addEventListener('change', () => toggleMergePick(entry.id, box.checked));
+        label.addEventListener('click', e => e.stopPropagation());
+        label.appendChild(box);
+        item.appendChild(label);
+        item.classList.toggle('picked', box.checked);
+    }
 
     const info = document.createElement('div');
     info.className = 'history-item-info';
@@ -2408,7 +2424,38 @@ function toggleMergePick(taskId, checked) {
     // 同步卡片高亮（重绘时也会带上 vg-picked）
     const box = document.querySelector(`.vg-pick input[onchange*="${taskId}"]`);
     if (box) box.closest('.vg-card')?.classList.toggle('vg-picked', checked);
+    syncPicks();
     renderMergeBar();
+}
+
+// 资料库卡片、「问」的结果卡片：同一份转写可能同时出现在两处，勾一处两处一起变
+function syncPicks() {
+    document.querySelectorAll('input[data-pick]').forEach(box => {
+        box.checked = mergeCart.has(box.dataset.pick);
+        box.closest('.history-item')?.classList.toggle('picked', box.checked);
+    });
+    document.body.classList.toggle('picking', mergeCart.size > 0);
+}
+
+async function fetchMerged() {
+    const r = await (await fetch('/api/transcripts/merge', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ task_ids: [...mergeCart] }),
+    })).json();
+    if (r.error) throw new Error(r.error);
+    return r;
+}
+
+// 照墨页的「下载合并 .md」：不打开预览，直接存成一个文件
+async function downloadMergedMd() {
+    if (!mergeCart.size) return;
+    try {
+        const r = await fetchMerged();
+        downloadFile(r.markdown, r.filename || '合并转写.md', 'text/markdown;charset=utf-8');
+        showToast(r.missing ? T('chainDetail.mergeSkipped', { n: r.missing }) : T('doc.downloaded'));
+    } catch (e) {
+        showToast(e.message || T('toast.mergeFailed'));
+    }
 }
 
 function renderMergeBar() {
@@ -2425,6 +2472,7 @@ function renderMergeBar() {
         <span class="merge-bar-count">${T('chainDetail.selectedCount', { n })}</span>
         <button class="btn-secondary btn-small" onclick="clearMergeCart()">${T('common.clear')}</button>
         <button class="btn-secondary btn-small" onclick="collectionFromCart()">❖ ${T('col.fromCart')}</button>
+        <button class="btn-secondary btn-small" onclick="downloadMergedMd()">${T('library.downloadMerged')}</button>
         <button class="btn-primary btn-small" onclick="runMergeTranscripts()">📄 ${T('chainDetail.merge')}</button>`;
 }
 
@@ -2435,6 +2483,7 @@ function clearMergeCart() {
         const box = c.querySelector('.vg-pick input');
         if (box) box.checked = false;
     });
+    syncPicks();
     renderMergeBar();
 }
 
