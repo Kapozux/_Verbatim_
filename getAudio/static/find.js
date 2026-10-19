@@ -29,7 +29,7 @@
     }
 
     function resultCard(r) {
-        const card = buildHistoryCard(r);
+        const card = buildHistoryCard(r, { pick: true });
         const info = card.querySelector('.history-item-info');
         const oneLine = info.querySelector('.history-item-oneline');
         if (oneLine) oneLine.remove();          // 换成理由：比 AI 简介更能说明为什么是它
@@ -50,7 +50,7 @@
             info.insertBefore(q, why.nextSibling);
         }
         card.addEventListener('click', e => {
-            if (e.target.closest('a, button')) return;
+            if (e.target.closest('a, button, label')) return;
             navigate(target);
         });
         return card;
