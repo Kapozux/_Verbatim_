@@ -9,7 +9,7 @@
 
 | 事 | 谁 | 在哪 | 状态 |
 |---|---|---|---|
-| 资料库勾选几份转写，合并成一个 .md（用户 10-19：「模仿墨页将那个选择功能（合并 md）放进来」） | lib-pick 窗口（getaudio-d3） | worktree `.claude/worktrees/lib-pick`，分支 feature/lib-pick | 已本地提交。64 个测试文件全过（新增 test_merge_md 8 项）；5048 实测勾两份 → 下载合并 .md，1700 / 1000 / 400 × 浅深截图过。交接 `docs/handoff/library-pick.md` |
+| 资料库勾选几份转写，合并成一个 .md（用户 10-19：「模仿墨页将那个选择功能（合并 md）放进来」） | lib-pick 窗口（getaudio-d3） | main（10-19 合进、5001 已重启） | 上线。64 个测试文件全过（新增 test_merge_md 8 项）；5048 实测勾两份 → 下载合并 .md，1700 / 1000 / 400 × 浅深截图过。交接 `docs/handoff/library-pick.md` |
 | 资料库的「问」：一句话描述 → 最像的几份转写 + 理由 + 跳到那一秒（用户 10-19：「借鉴 Ephemeris 的问，但是用来找转写」「Moye 也做了个，互相参考」） | find-ask 窗口（getaudio-d3） | main（10-19 合进、5001 已重启） | 上线。63 个测试文件全过（新增 test_libask 38 项）；真库 3574 份实测 12–17 秒、订阅额度 $0；5048 上 1700 / 1000 / 400 × 浅深截图过。顺手修了点出处跳到那一秒时被摘要顶到屏幕外。下一步：用户真用几次看找得准不准。交接 `docs/handoff/library-ask.md`，ADR 0021 |
 | 浏览器插件：在视频页点一下就交给本机 Verbatim 转写（用户 10-18：「插件自动能点一下后台就给我转字幕」，选了真插件不要书签） | video-ext 窗口（getaudio-d3） | main（10-18 合进、5001 已重启） | 上线。62 个测试文件全过；Playwright 装插件实测 TED 字幕通道 268 段 $0；5001 上插件来源放行、别的网站 403。下一步：用户在自己的 Chrome 里装上真点一次 YouTube / B 站。交接 `docs/handoff/browser-extension.md`，ADR 0020 |
 | 转写体检（purpose `review`）改用 Claude Haiku low（用户 10-14 点头；之前 `review` 被当成「回顾」放进 `OPUS_PURPOSES`，体检一直走 Opus medium） | review-haiku 窗口（ef991caf） | main（10-14 合进、5001 已重启） | 上线。60/61 个测试文件过（test_quota_whisper 全量跑时卡住，kapozux-9f 在修）。交接见 `docs/handoff/claude-text.md` 速览 |
