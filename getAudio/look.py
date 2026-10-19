@@ -1,14 +1,15 @@
 """资料库「问」的查资料命令（2026-10-19，照 Ephemeris 的 look.py）：只读，Claude Code 只被允许跑这一个命令（libask）。人也能在终端直接用。
 
-python look.py search <词> [词…] [--any] [--since D] [--until D] [--creator 名] [--n 30]   哪些转写提到（几个词默认都要出现；标题 / 标签 / 一句话 / 正文）
+python look.py search <词> [词…] [--any] [--since D] [--until D] [--creator 名] [--mine] [--n 30]   哪些转写提到（几个词默认都要出现；标题 / 标签 / 一句话 / 正文）
 python look.py hits   <转写> <词> [--n 20]                                                 一份转写里这个词出现的每一句，带时间
 python look.py read   <转写> [--at 词 | --from 时:分:秒] [--n 40]                         读一段原文（默认从头；--at 跳到词第一次出现的地方前几句）
 python look.py info   <转写>                                                               标题、一句话、标签、来源、时长、摘要和分节
-python look.py list   [--since D] [--until D] [--creator 名] [--engine E] [--min 分钟] [--max 分钟] [--n 50]   按时间列转写（最新的在前；--old 最早的在前）
+python look.py list   [--since D] [--until D] [--creator 名] [--mine] [--engine E] [--min 分钟] [--max 分钟] [--n 50]   按时间列转写（最新的在前；--old 最早的在前）
 python look.py stats                                                                       一共多少条、多少小时、按月、按引擎、按博主
 python look.py schema                                                                      sql 能查的表和列
 python look.py sql "<SELECT …>" [--n 30]                                                   自己写只读 SQL（改不了库）
 
+--mine：只看他自己上传的录音 / 文件（不是从链接、博主下的）。
 <转写> 是 8 位短号（输出里 [[t:c8a04c4e]] 里那串），也可以是完整 id。
 出处记号：[[t:短号]] 是一份转写，[[t:短号@时:分:秒]] 是那份里的某一句。回答时照抄，Verbatim 会认回原文、点了跳到那一秒。
 日期 D 写 YYYY-MM-DD；date 是转写的时间（录音、视频是哪天的不一定知道；有 upload_date 的是视频发布日）。
@@ -108,7 +109,9 @@ def _range(args, col='d.date'):
     return sql, vals
 
 
-def _creator_ok(m, name):
+def _creator_ok(m, name, mine=False):
+    if mine and (m.get('source_url') or m.get('creator')):
+        return False
     return not name or name.lower() in str(m.get('creator') or '').lower()
 
 
@@ -145,7 +148,7 @@ def cmd_search(args):
     out, n = [], 0
     for r in rows:
         m = json.loads(r['meta'])
-        if not _creator_ok(m, args.creator):
+        if not _creator_ok(m, args.creator, args.mine):
             continue
         n += 1
         if n > args.n:
@@ -249,7 +252,7 @@ def cmd_list(args):
     for r in rows:
         m = json.loads(r['meta'])
         mins = float(m.get('duration_seconds') or 0) / 60
-        if not _creator_ok(m, args.creator) or (args.engine and m.get('engine') != args.engine) \
+        if not _creator_ok(m, args.creator, args.mine) or (args.engine and m.get('engine') != args.engine) \
                 or (args.min is not None and mins < args.min) or (args.max is not None and mins > args.max):
             continue
         n += 1
@@ -311,6 +314,7 @@ def parser():
         s.add_argument('--since')
         s.add_argument('--until')
         s.add_argument('--creator')
+        s.add_argument('--mine', action='store_true')
         s.add_argument('--old', action='store_true')
 
     s = sub.add_parser('search')

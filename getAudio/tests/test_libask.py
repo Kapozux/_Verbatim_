@@ -88,9 +88,10 @@ def claude_ok(args, stdin):
         {'t': DORM[:8], 'at': '00:07:50', 'why': '10 月 18 日宿舍录音，讲 SHAP'},
         {'t': 'deadbeef', 'at': '', 'why': '编的'},
         {'t': DORM, 'at': '', 'why': '重复'},
-        {'t': TED[:8], 'at': '99:99', 'why': '时间不对'}], 'note': ''}, ensure_ascii=False)
+        {'t': TED[:8], 'at': '99:99', 'why': '时间不对'},
+        {'t': OLD[:8], 'at': '', 'why': '只看了摘要'}], 'note': ''}, ensure_ascii=False)
     return {'events': [tool(f'{libask.LOOK} search SHAP --since 2026-10-01'), tool(f'{libask.LOOK} read {DORM[:8]} --at SHAP'),
-                       tool('rm -rf /')],
+                       tool(f'{libask.LOOK} hits {TED[:8]} shape'), tool(f'{libask.LOOK} info {OLD[:8]}'), tool('rm -rf /')],
             'result': '好的，结果：\n' + answer, 'session_id': 's1',
             'usage': {'input_tokens': 10, 'output_tokens': 5, 'cache_read_input_tokens': 0, 'cache_creation_input_tokens': 0}}
 
@@ -103,10 +104,11 @@ t.check('只给 Bash、只放行 look.py 这一条命令', a[a.index('--tools') 
         and a[a.index('--allowedTools') + 1] == f'Bash({libask.LOOK}:*)', a)
 t.check('找东西用 Sonnet', a[a.index('--model') + 1] == libask.MODEL)
 t.check('提示词里有问题、今天、库的大小', '讲 SHAP 的俄语录音' in seen['stdin'] and '一共 3 份' in seen['stdin'])
-t.check('进度：搜了什么、读了哪份（显示标题），别的命令不算', steps == [
-    {'k': 'search', 'd': 'SHAP'}, {'k': 'read', 'd': '学生多线程对话：模型解释性与考前复习'}], steps)
+t.check('进度：搜了什么、读了哪份（显示标题），别的命令不算', [(s['k'], s['d']) for s in steps] == [
+    ('search', 'SHAP'), ('read', '学生多线程对话：模型解释性与考前复习'), ('hits', 'TEDx student talks · shape'),
+    ('info', '九月复习课')], steps)
 ids = [x['id'] for x in res['results']]
-t.check('编的、重复的丢掉，短号认回完整 id', ids == [DORM, TED], ids)
+t.check('编的、重复的丢掉，短号认回完整 id；只看了摘要（info）没读原文的也丢掉', ids == [DORM, TED], ids)
 first = res['results'][0]
 t.check('时间对到那份里真有的一句（之前最近的一句）', first['at'] == '00:07:41' and first['sec'] == 461
         and 'SHAP' in first['quote'], first)
@@ -129,6 +131,8 @@ res = libask.find_catalog('九月那节复习课', ask=cheap)
 t.check('目录最新的在前、有标题和一句话', got['p'].index('学生多线程') < got['p'].index('九月复习课') and '宿舍里三个人' in got['p'])
 t.check('编号对回真实的转写，编的、重复的丢掉', [x['id'] for x in res['results']] == [OLD] and res['mode'] == 'catalog')
 _, by_n, total = libask.catalog(budget=80)
+t.check('--mine 只看自己上传的', OLD[:8] in run('search', '考试', '--mine') and TED[:8] not in run('search', 'shape', '--mine')
+        and TED[:8] not in run('list', '--mine') and DORM[:8] in run('list', '--mine'))
 t.check('目录放不下就从旧的那头截', len(by_n) == 1 and by_n[1] == DORM and total == 3, by_n)
 
 
@@ -154,7 +158,7 @@ for _ in range(50):
         break
     time.sleep(0.1)
 t.check('问完：结果、进度、用时', not st['running'] and [x['id'] for x in st['result']['results']] == [DORM, TED]
-        and len(st['steps']) == 2 and st['ended'] >= st['started'], st)
+        and len(st['steps']) == 4 and st['ended'] >= st['started'], st)
 
 gate.clear()
 client.post('/api/find', json={'q': '停下'})
