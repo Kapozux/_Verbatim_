@@ -3,12 +3,13 @@
 谁在做什么、做到哪、下一步是什么，都在这一张表里。**每个窗口开工先读这张表**，认领一件事就在「谁」里写上自己的窗口名；收工前更新状态和下一步。
 新冒出来的 bug、想法、要用户拍板的事，也先记到这里，不要只写在聊天里或别的交接文档里。规矩见 `getAudio/CLAUDE.md`「多窗口一起开发」。
 
-最后更新：2026-10-18
+最后更新：2026-10-19
 
 ## 正在做
 
 | 事 | 谁 | 在哪 | 状态 |
 |---|---|---|---|
+| 资料库的「问」：一句话描述 → 最像的几份转写 + 理由 + 跳到那一秒（用户 10-19：「借鉴 Ephemeris 的问，但是用来找转写」「Moye 也做了个，互相参考」） | find-ask 窗口（getaudio-d3） | worktree `.claude/worktrees/find-ask`，分支 feature/find-ask | 已本地提交，没合进 main。63 个测试文件全过（新增 test_libask 38 项）；真库 3574 份实测 12–17 秒、订阅额度 $0；5048 上 1700 / 1000 / 400 × 浅深截图过。顺手修了点出处跳到那一秒时被摘要顶到屏幕外。下一步：用户点头后合进 main、重启 5001。交接 `docs/handoff/library-ask.md`，ADR 0021 |
 | 浏览器插件：在视频页点一下就交给本机 Verbatim 转写（用户 10-18：「插件自动能点一下后台就给我转字幕」，选了真插件不要书签） | video-ext 窗口（getaudio-d3） | main（10-18 合进、5001 已重启） | 上线。62 个测试文件全过；Playwright 装插件实测 TED 字幕通道 268 段 $0；5001 上插件来源放行、别的网站 403。下一步：用户在自己的 Chrome 里装上真点一次 YouTube / B 站。交接 `docs/handoff/browser-extension.md`，ADR 0020 |
 | 转写体检（purpose `review`）改用 Claude Haiku low（用户 10-14 点头；之前 `review` 被当成「回顾」放进 `OPUS_PURPOSES`，体检一直走 Opus medium） | review-haiku 窗口（ef991caf） | main（10-14 合进、5001 已重启） | 上线。60/61 个测试文件过（test_quota_whisper 全量跑时卡住，kapozux-9f 在修）。交接见 `docs/handoff/claude-text.md` 速览 |
 | 三个应用（Verbatim / Ephemeris / 墨页）共用 Claude 额度的分配器 `claude_gate`（用户 10-13：「一个监控所有 usage 的分配器」） | claude-gate 窗口（kapozux-b9） | main（10-13 合进；三边都开了：Verbatim / Ephemeris 的 `.env`、墨页 launchd plist 设 `CLAUDE_GATE=~/.claude-gate/gate.db`，三个服务已重启） | 上线。59 个测试文件全过；三边各真调一次都记进了共用账本。交接 `docs/handoff/claude-gate.md`，ADR 0018 |
@@ -121,7 +122,8 @@
 | 0014 | 接口文档从路由表和 docstring 现生成，不手写 schema | 分支 feature/on-port |
 | 0019 | B 站评论区：评论是来源的一部分，整理是产出；登录态自动从浏览器续 | 分支 feature/comments |
 | 0020 | 浏览器插件：跨站防护只多放行这一个固定 ID 的插件 | main |
-| 0021 | （下一个可用） | |
+| 0021 | 资料库的「问」：本机 Claude 跑只读的 look.py 找转写，没有 Claude 退回只看目录 | 分支 feature/find-ask |
+| 0022 | （下一个可用） | |
 
 ## 最近做完（10-02 ~ 10-03）
 

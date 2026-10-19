@@ -6,6 +6,7 @@
     available()                 → 有没有 claude 命令、是不是撞了上限停着
     stream(prompt, purpose)     → 生成器，边写边 yield 一小段字；还没出字就失败抛异常（调用方退回原来的模型）
     text(prompt, purpose)       → 一次拿全文；失败抛异常
+    agent(prompt, allow, ...)   → 让它自己跑命令查资料再答（资料库「问」，libask）：只给 Bash、只放行 allow 开头的命令
 
 走的是用户的 Claude 订阅额度（不是 API key），所以记账记 $0、token 照记（provider=claude-code）。
 精简模式：自己的系统提示、不给工具、不读设置和 MCP、不留会话；一次性的调用关掉缓存写入
@@ -46,7 +47,7 @@ def use_runner(fn):
 # 三个应用共用一份额度时的分配器（claude_gate；CLAUDE_GATE 没设就不起作用）：问是交互（live，留着位子），
 # 抽卡 / 摘要 / 标签 / 看图这类量大的是批量（batch，设了预算超了就等），其余 normal。
 APP = 'verbatim'
-LIVE = {'ask'}
+LIVE = {'ask', 'find'}
 BATCH = {'cards', 'summary', 'tag', 'enrich', 'review', 'speakers', 'translate', 'visual', 'brief', 'verify',
          'comments-auto'}     # 只下载评论区时自动写的总结：给用户的提问让路
 
@@ -169,3 +170,86 @@ def vision(prompt, images, purpose='visual', effort='low', model='claude-haiku-5
     content.append({'type': 'text', 'text': prompt})
     msg = json.dumps({'type': 'user', 'message': {'role': 'user', 'content': content}}) + '\n'
     return ''.join(stream(prompt, purpose, effort, model, _stdin=msg, _extra=('--input-format', 'stream-json'))).strip()
+
+
+AGENT_SYSTEM = ('You are the search assistant inside Verbatim, a local transcription library. Use only the one command '
+                'the user message allows, follow its instructions exactly, and output only the final answer it asks for.')
+
+
+def _events(ev, on_event):
+    """stream-json 的一行 → on_event(kind, text)：'message' 新的一段回复开始 / 'delta' 一小段字 / 'tool' 它要跑的命令。"""
+    t = ev.get('type')
+    if t == 'stream_event':
+        e = ev.get('event') or {}
+        if e.get('type') == 'message_start':
+            on_event('message', '')
+        elif e.get('type') == 'content_block_delta' and (e.get('delta') or {}).get('type') == 'text_delta':
+            on_event('delta', e['delta'].get('text', ''))
+    elif t == 'assistant':
+        for b in (ev.get('message') or {}).get('content') or []:
+            if b.get('type') == 'tool_use':
+                on_event('tool', (b.get('input') or {}).get('command', ''))
+
+
+def agent(prompt, allow, on_event=None, session=None, effort='medium', model=MODEL, purpose='find', stop=None, env=None):
+    """让 Claude 自己跑命令查资料再答（照 Ephemeris 的 llm.claude_agent）：只给 Bash，且只放行 allow 开头的命令。
+    session：追问时接着上一轮的会话（前面查到的材料它还记得）。stop：threading.Event，置位就掐掉进程（停止按钮）。
+    返回 (回答, 会话 id)；停下了返回 (已经写出来的, None)。失败抛异常。"""
+    args = ['-p', '--model', model, '--effort', effort, '--system-prompt', AGENT_SYSTEM,
+            '--tools', 'Bash', '--allowedTools', f'Bash({allow}:*)',
+            '--disable-slash-commands', '--strict-mcp-config', '--setting-sources', '',
+            '--output-format', 'stream-json', '--verbose', '--include-partial-messages']
+    if session:
+        args += ['--resume', session]
+    on_event = on_event or (lambda kind, text: None)
+    t0 = time.time()
+    with _sem, claude_gate.slot(APP, purpose, _prio(purpose)):
+        if _runner:
+            d = _runner(args, prompt)
+            for ev in d.get('events', []):
+                if stop is not None and stop.is_set():
+                    return '', None
+                _events(ev, on_event)
+            _record(d, purpose, model, time.time() - t0)
+            if d.get('is_error') or not (d.get('result') or '').strip():
+                raise _fail(d)
+            return d['result'].strip(), d.get('session_id')
+        os.makedirs(CWD, exist_ok=True)
+        p = subprocess.Popen([BIN] + args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             text=True, cwd=CWD, env={**os.environ, **(env or {})})
+        d = {'is_error': True, 'result': ''}
+        killer = threading.Thread(target=_watch, args=(p, stop, t0), daemon=True)
+        killer.start()
+        try:
+            p.stdin.write(prompt)
+            p.stdin.close()
+            for line in p.stdout:
+                try:
+                    ev = json.loads(line)
+                except ValueError:
+                    continue
+                if ev.get('type') == 'result':
+                    d = ev
+                    continue
+                _events(ev, on_event)
+        finally:
+            if p.poll() is None:
+                p.kill()
+            p.wait()
+            _record(d, purpose, model, time.time() - t0)
+        if stop is not None and stop.is_set():
+            return '', None
+        if d.get('is_error') or not (d.get('result') or '').strip():
+            if not d.get('result'):
+                d['result'] = (p.stderr.read() or '')[:300]
+            raise _fail(d)
+        return d['result'].strip(), d.get('session_id')
+
+
+def _watch(p, stop, t0):
+    """停止按钮、总时长超了：掐掉进程。"""
+    while p.poll() is None:
+        if (stop is not None and stop.is_set()) or time.time() - t0 > TIMEOUT:
+            p.kill()
+            return
+        time.sleep(0.5)

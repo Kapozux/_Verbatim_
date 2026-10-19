@@ -275,6 +275,33 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .history-item-meta { font-size: 13px; color: var(--faint); font-variant-numeric: tabular-nums; }
 .history-item-actions { display: flex; gap: 6px; flex-shrink: 0; margin-left: 12px; }
 .history-toolbar { display: flex; flex-direction: column; gap: 12px; margin-bottom: 16px; }
+/* 资料库「问」（find.js）：搜索框右端的按钮 + 列表上面的结果区 */
+.find-box { position: relative; }
+.find-box .search-input { padding-right: 84px; }
+.find-btn { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); display: inline-flex; align-items: center; gap: 5px;
+  padding: 6px 13px; border: 0; border-radius: 999px; background: transparent; color: var(--coral-deep); font: inherit; font-size: 14.5px;
+  font-weight: 500; cursor: pointer; transition: background .15s ease; }
+.find-btn:hover { background: var(--code-bg); }
+.find-btn[disabled] { opacity: .5; cursor: default; }
+.find-panel { margin: -4px 0 16px; padding: 14px 0 4px; border-bottom: 1px solid var(--line); }
+.find-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 15px; color: var(--ink-soft); }
+.find-head .btn-secondary { flex-shrink: 0; }
+.find-status { display: flex; align-items: center; gap: 8px; min-width: 0; overflow-wrap: anywhere; }
+.find-spin { width: 13px; height: 13px; border-radius: 50%; border: 2px solid var(--coral-soft); border-top-color: var(--coral); animation: gtspin .8s linear infinite; flex-shrink: 0; }
+.find-steps { margin: 8px 0 2px; padding: 0; list-style: none; font-size: 13.5px; color: var(--muted); display: flex; flex-direction: column; gap: 3px; }
+.find-steps li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.find-steps b { font-weight: 500; color: var(--ink-soft); }
+details.find-trace { margin-top: 6px; font-size: 13.5px; color: var(--muted); }
+details.find-trace summary { cursor: pointer; width: fit-content; }
+.find-note { margin: 8px 0 0; font-size: 14px; color: var(--muted); }
+.find-results { display: flex; flex-direction: column; gap: 11px; margin: 12px 0; }
+.find-results .history-item { cursor: pointer; }
+.find-panel:not(.hidden) + .history-list > .history-empty { display: none; }   /* 问的那句话拿去普通搜索多半没命中：别在结果下面写「没有匹配」 */
+.find-why { font-size: 15px; color: var(--ink); margin-top: 4px; line-height: 1.5; }
+.find-quote { display: flex; gap: 8px; align-items: baseline; font-size: 14px; color: var(--ink-soft); margin-top: 4px; min-width: 0; }
+.find-quote a { flex-shrink: 0; color: var(--coral-deep); text-decoration: none; font-variant-numeric: tabular-nums; }
+.find-quote a:hover { text-decoration: underline; }
+.find-quote span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .filter-chips { display: flex; gap: 8px; flex-wrap: wrap; }
 .chip { padding: 5px 15px; font-size: 14.5px; border: 1px solid var(--line-2); border-radius: 999px; background: var(--card); color: var(--muted); cursor: pointer; transition: all .15s ease; }
 .chip:hover { border-color: var(--ink); color: var(--ink); }
