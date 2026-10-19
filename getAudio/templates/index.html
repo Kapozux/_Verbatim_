@@ -302,9 +302,15 @@
                                 </div>
                             </div>
                             <div class="history-toolbar">
-                                <input type="search" id="search-input" class="search-input"
-                                       data-i18n-placeholder="library.searchPlaceholder"
-                                       placeholder="Search titles, filenames, transcript text, or paste a video link…">
+                                <div class="find-box">
+                                    <input type="search" id="search-input" class="search-input"
+                                           data-i18n-placeholder="library.searchPlaceholder"
+                                           placeholder="Search titles, filenames, transcript text, or paste a video link…">
+                                    <button id="find-btn" class="find-btn" type="button" data-i18n-title="find.btnTitle" title="Let AI find transcripts from a description (Enter)">
+                                        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 16l.8 2.2L22 19l-2.2.8L19 22l-.8-2.2L16 19l2.2-.8z"/></svg>
+                                        <span data-i18n="find.btn">Ask</span>
+                                    </button>
+                                </div>
                                 <div id="source-filters" class="filter-chips">
                                     <button class="chip active" data-source="" data-i18n="library.allSources">All sources</button>
                                     <button class="chip" data-source="mine" data-i18n="library.mine">Mine</button>
@@ -320,6 +326,7 @@
                                     <button class="chip" data-engine="whisper" data-i18n="engine.whisper">Whisper</button>
                                 </div>
                             </div>
+                            <section id="find-panel" class="find-panel hidden" aria-live="polite"></section>
                             <div id="history-list" class="history-list">
                                 <p class="history-empty" data-i18n="library.noTranscripts">No transcripts yet</p>
                             </div>
@@ -1211,5 +1218,6 @@
     <script src="/static/repos.js?v={{ static_version }}"></script>
     <script src="/static/notes.js?v={{ static_version }}"></script>
     <script src="/static/comments.js?v={{ static_version }}"></script>
+    <script src="/static/find.js?v={{ static_version }}"></script>
 </body>
 </html>

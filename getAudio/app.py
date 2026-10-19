@@ -24,6 +24,7 @@ from concurrent.futures import ThreadPoolExecutor
 from flask import Flask, Response, jsonify, render_template, request, send_file
 
 import config
+import libask
 import library
 import taskdb
 import timecode
@@ -2414,6 +2415,32 @@ def api_search():
                      **({'creator': author} if author else {})})
     hits.sort(key=lambda e: e.get('date', ''), reverse=True)
     return jsonify(hits)
+
+
+# ========== 资料库「问」：一句话描述 → 最像的几份转写（libask.py） ==========
+
+@app.route('/api/find', methods=['GET'])
+def api_find_state():
+    """正在问 / 刚问完的那一次：查找进度（steps）、挑出来的（result）。前端每秒看一眼。mode 说明这台电脑能不能查正文。"""
+    return jsonify({**libask.state(), 'mode_now': libask.mode()})
+
+
+@app.route('/api/find', methods=['POST'])
+def api_find_start():
+    """后台问（本机 Claude Code 查正文，几十秒；没有 Claude Code 只看目录，几秒）。同一时间只问一个。"""
+    q = ((request.get_json(silent=True) or {}).get('q') or '').strip()
+    if not q:
+        return jsonify({'error': 'empty'}), 400
+    try:
+        libask.start(q)
+    except RuntimeError:
+        return jsonify({'error': 'busy'}), 409
+    return jsonify(libask.state())
+
+
+@app.route('/api/find/stop', methods=['POST'])
+def api_find_stop():
+    return jsonify({'stopped': libask.stop()})
 
 
 @app.route('/api/history', methods=['DELETE'])

@@ -1282,7 +1282,6 @@ async function openDetailView(taskId, startAt = null) {
         detailSegments.forEach(seg => {
             appendSegment(seg, detailSegmentsContainer, detailAudioPlayer);
         });
-        if (startAt != null && isFinite(startAt)) focusDetailAt(startAt);
         detailSpeakers(data);
 
         if (data.summary && data.summary.overview) {
@@ -1295,6 +1294,8 @@ async function openDetailView(taskId, startAt = null) {
         detailSummarizeBtn.classList.toggle('hidden',
             !!(data.summary && data.summary.overview) || !segCount || IS_DEMO);
         if (typeof detailComments === 'function') detailComments(data);     // B 站的期：评论区卡片（comments.js）
+        // 定位到那一秒放在最后：摘要、评论区卡片画在正文上面，先滚过去会被它们顶到屏幕外（10-19）
+        if (startAt != null && isFinite(startAt)) requestAnimationFrame(() => focusDetailAt(startAt));
     } catch {
         showToast(T('toast.couldNotLoadRecord'));
         // 冷启动时 URL 里带着失效/已删除的 taskId 会走到这——保底别留白屏，退回资料库。
