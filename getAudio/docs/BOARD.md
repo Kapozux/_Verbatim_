@@ -9,7 +9,7 @@
 
 | 事 | 谁 | 在哪 | 状态 |
 |---|---|---|---|
-| 官方 Gemini 转不了（撞月度上限等）先改走 OpenRouter 上的 Gemini，再落 Whisper（用户 10-28：「如果 google 官方的不行就用 OR」） | or-fallback 窗口（getaudio-28） | worktree `.claude/worktrees/or-fallback`，分支 feature/or-fallback | 测试全过（新增 test_or_fallback 17 项）；等用户在 Settings 填 OpenRouter key 后真文件实测、合 main。约 $0.2 / 小时音频。交接 `docs/handoff/openrouter-fallback.md` |
+| 官方 Gemini 转不了（撞月度上限等）先改走 OpenRouter 上的 Gemini，再落 Whisper（用户 10-28：「如果 google 官方的不行就用 OR」） | or-fallback 窗口（getaudio-28） | main（10-28 合进、5001 已重启） | 上线。65 个测试文件全过（test_or_fallback 26 项）；「CLL 伤逝」15:40 实测 74 秒、$0.052、19 段。5 分钟一块、时间戳太稀再要一次、静音块不算失败。说话人基本不标、有时出繁体。约 $0.2–0.25 / 小时音频。交接 `docs/handoff/openrouter-fallback.md` |
 | 资料库勾选几份转写，合并成一个 .md（用户 10-19：「模仿墨页将那个选择功能（合并 md）放进来」） | lib-pick 窗口（getaudio-d3） | main（10-19 合进、5001 已重启） | 上线。64 个测试文件全过（新增 test_merge_md 8 项）；5048 实测勾两份 → 下载合并 .md，1700 / 1000 / 400 × 浅深截图过。交接 `docs/handoff/library-pick.md` |
 | 资料库的「问」：一句话描述 → 最像的几份转写 + 理由 + 跳到那一秒（用户 10-19：「借鉴 Ephemeris 的问，但是用来找转写」「Moye 也做了个，互相参考」） | find-ask 窗口（getaudio-d3） | main（10-19 合进、5001 已重启） | 上线。63 个测试文件全过（新增 test_libask 38 项）；真库 3574 份实测 12–17 秒、订阅额度 $0；5048 上 1700 / 1000 / 400 × 浅深截图过。顺手修了点出处跳到那一秒时被摘要顶到屏幕外。下一步：用户真用几次看找得准不准。交接 `docs/handoff/library-ask.md`，ADR 0021 |
 | 浏览器插件：在视频页点一下就交给本机 Verbatim 转写（用户 10-18：「插件自动能点一下后台就给我转字幕」，选了真插件不要书签） | video-ext 窗口（getaudio-d3） | main（10-18 合进、5001 已重启） | 上线。62 个测试文件全过；Playwright 装插件实测 TED 字幕通道 268 段 $0；5001 上插件来源放行、别的网站 403。下一步：用户在自己的 Chrome 里装上真点一次 YouTube / B 站。交接 `docs/handoff/browser-extension.md`，ADR 0020 |
