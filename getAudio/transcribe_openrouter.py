@@ -149,9 +149,14 @@ def _transcribe_chunk(key, path):
                          input_tokens=u.get('prompt_tokens') or 0,
                          output_tokens=u.get('completion_tokens') or 0,
                          cost_usd=u.get('cost'))
-            text = ((data_out.get('choices') or [{}])[0].get('message') or {}).get('content') or ''
+            choice = (data_out.get('choices') or [{}])[0]
+            text = (choice.get('message') or {}).get('content') or ''
             if not text.strip():
-                raise RuntimeError('返回空文本')
+                # 正常收尾却没字 = 这块没人说话（提示词让它跳过静音）。10-28「CLL 伤逝」最后 40 秒是静音，
+                # 当成失败重试 → 撞上断网 → 整条落 Whisper。整条稿是不是白卷由 app 的 _verify 把关。
+                if str(choice.get('finish_reason') or '').lower() == 'stop':
+                    return ''
+                raise RuntimeError(f"返回空文本（finish_reason={choice.get('finish_reason')}）")
             return text
         except _Fatal as e:
             raise RuntimeError(f'OpenRouter 转写失败: {e}') from e

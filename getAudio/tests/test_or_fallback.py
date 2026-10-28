@@ -176,4 +176,17 @@ t.check('解析出两段带时间', len(segs) == 2 and segs[1]['timestamp'] == '
 t.check('记账：openrouter + transcribe + 实价', recorded and recorded[0][0][0] == 'openrouter'
         and recorded[0][0][2] == 'transcribe' and recorded[0][1].get('cost_usd') == 0.0012, str(recorded)[:300])
 
+# 8. 没人说话的一块（10-28「CLL 伤逝」最后 40 秒是静音）：模型正常收尾、内容为空 = 这块没语音，不是失败，别重试
+sent.clear()
+txor.requests.post = lambda url, headers=None, json=None, timeout=None: (sent.append(1), _Resp({
+    'choices': [{'finish_reason': 'stop', 'message': {'content': ''}}],
+    'usage': {'prompt_tokens': 1390, 'completion_tokens': 115, 'cost': 0.0015}}))[1]
+txor.time.sleep = lambda s: None
+try:
+    text = txor._transcribe_chunk('test-or-key', audio)
+    t.check('静音块：返回空、不报错', text == '', repr(text))
+except Exception as e:  # noqa: BLE001
+    t.check('静音块：返回空、不报错', False, str(e)[:200])
+t.check('静音块只请求一次', len(sent) == 1, str(len(sent)))
+
 t.finish()
