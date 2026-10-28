@@ -14,6 +14,7 @@ OpenRouter 是另一本账（预充值额度），官方那边的上限管不到
 
 import base64
 import os
+import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_EXCEPTION
@@ -85,7 +86,7 @@ def transcribe_audio(filepath, progress_callback=None):
 
         def _one(idx):
             path, offset = chunks[idx]
-            text = _transcribe_chunk(key, path)
+            text = _transcribe_chunk(key, path, _chunk_len(idx))
             parts[idx] = shift_timestamps(text, offset, chunk_seconds=_chunk_len(idx)).strip()
             if progress_callback:
                 with lock:
@@ -118,7 +119,27 @@ def transcribe_audio(filepath, progress_callback=None):
             shutil.rmtree(temp_dir, ignore_errors=True)
 
 
-def _transcribe_chunk(key, path):
+_STRICT = """
+再强调一次：每隔约 30 秒必须另起一行、以 [HH:MM:SS] 时间戳开头（从这段音频的开头算起），整段只有一两个时间戳是不合格的。
+"""
+_TS = re.compile(r'\[(?:\d{1,2}:)?\d{1,2}:\d{2}\]')
+
+
+def _transcribe_chunk(key, path, chunk_seconds=None):
+    """转一块。模型偶尔整块只打一个时间戳（10-28「CLL 伤逝」第一块：5 分钟 1719 字一个时间戳）：
+    少于每 90 秒一个就带提醒再要一次，取时间戳多的那份。再要那次失败就用第一份。"""
+    text = _request_chunk(key, path, PROMPT)
+    if chunk_seconds and chunk_seconds >= 120 and len(_TS.findall(text)) < chunk_seconds / 90:
+        try:
+            again = _request_chunk(key, path, PROMPT + _STRICT)
+            if len(_TS.findall(again)) > len(_TS.findall(text)):
+                text = again
+        except Exception:  # noqa: BLE001
+            pass
+    return text
+
+
+def _request_chunk(key, path, prompt):
     fmt = _FORMATS.get(os.path.splitext(path)[1].lower(), 'mp3')
     with open(path, 'rb') as f:
         data = base64.b64encode(f.read()).decode('ascii')
@@ -126,7 +147,7 @@ def _transcribe_chunk(key, path):
     body = {
         'model': model,
         'messages': [{'role': 'user', 'content': [
-            {'type': 'text', 'text': PROMPT},
+            {'type': 'text', 'text': prompt},
             {'type': 'input_audio', 'input_audio': {'data': data, 'format': fmt}},
         ]}],
         'temperature': 0,
