@@ -1183,7 +1183,7 @@ def _run_transcription(task_id, filepath, engine, original_filename, q,
 
         if engine != 'whisper' and _quota_recent(engine):
             mins = int((time.time() - _quota_out[engine]) // 60)
-            raise RuntimeError(f'{engine} 额度已用完（spending cap，{mins} 分钟前撞到），这期直接用本地 Whisper')
+            raise RuntimeError(f'{engine} 额度已用完（spending cap，{mins} 分钟前撞到），这期不再先碰官方')
 
         if engine == 'whisper':
             segments, full_text = _whisper_transcribe()
@@ -1390,7 +1390,30 @@ def _run_transcription(task_id, filepath, engine, original_filename, q,
         if quota_out and not _quota_recent(engine):
             _quota_out[engine] = time.time()
         fell_back = False
-        if not requeued and engine != 'whisper' and (fallback_whisper or content_block or empty_out or quota_out):
+        # 官方 Gemini 不行（撞月度上限、调用失败、白卷）→ 先试 OpenRouter 上的 Gemini，再轮到 Whisper。
+        # 10-28 用户：「如果 google 官方的不行就用 OR」。内容拦截不试：OR 背后是同一个 Gemini，拦截照旧。
+        import transcribe_openrouter
+        if (not requeued and engine in ('gemini', 'gemini35') and not content_block
+                and transcribe_openrouter.api_key()):
+            try:
+                q.put(json.dumps({
+                    'type': 'progress', 'percent': 0,
+                    'message': f'{engine} 不行（{str(e)[:50]}）— 改用 OpenRouter 上的 Gemini...',
+                }))
+                timing['fallback_from'] = engine
+                timing.pop('transcribe_s', None)
+                segments, full_text = transcribe_openrouter.transcribe_audio(
+                    input_path, progress_callback=progress_cb)
+                for seg in segments:
+                    q.put(json.dumps({'type': 'segment', **seg}))
+                _verify(segments)
+                summary_data = _summary(full_text)
+                _finish_ok(segments, summary_data, 'openrouter')
+                fell_back = True
+            except Exception as e_or:  # noqa: BLE001
+                e = RuntimeError(f'{engine} 失败：{e}；OpenRouter 后备也失败：{e_or}')
+        if (not fell_back and not requeued and engine != 'whisper'
+                and (fallback_whisper or content_block or empty_out or quota_out)):
             try:
                 why = ('Content-blocked by Gemini (deterministic)' if content_block
                        else f'{engine} 额度用完' if quota_out
