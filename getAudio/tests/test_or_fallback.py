@@ -189,4 +189,12 @@ except Exception as e:  # noqa: BLE001
     t.check('静音块：返回空、不报错', False, str(e)[:200])
 t.check('静音块只请求一次', len(sent) == 1, str(len(sent)))
 
+# 9. 切块按 5 分钟：15 分钟一块时模型整块只打两三个时间戳（10-28 实测 3 个 / 15 分钟），5 分钟一块每 30 多秒一个
+asked = []
+txor._can_split_audio = lambda: True
+txor.split_audio_file = lambda path, secs: (asked.append(secs), ([(path, 0)], None))[1]
+txor.requests.post = fake_post
+txor.transcribe_audio(audio)
+t.check('OpenRouter 按 5 分钟切块', asked == [300], str(asked))
+
 t.finish()
