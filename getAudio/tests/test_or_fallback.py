@@ -102,6 +102,9 @@ transcribe_gemini35.transcribe_audio = google_cap
 or_behaviour['fail'] = True
 r = run('gemini35', 'e.m4a')
 t.check('OR 也挂 + 额度用完 → 还是落 Whisper', r.get('status') == 'done' and calls['or'] == 1 and calls['whisper'] == 1, str(calls))
+_meta = os.path.join(A.config.RESULTS_FOLDER, r['id'], 'meta.json')
+_tm = __import__('json').load(open(_meta, encoding='utf-8')).get('timing') or {} if os.path.isfile(_meta) else {}
+t.check('Whisper 接住了也留下 OR 的失败原因', 'HTTP 402' in str(_tm.get('openrouter_error')), str(_tm)[:300])
 transcribe_gemini35.transcribe_audio = google_500
 r = run('gemini35', 'f.m4a')
 t.check('OR 也挂 + 普通失败（没勾兜底）→ 判失败', r.get('status') == 'failed', str(r.get('status')))

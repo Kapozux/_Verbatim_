@@ -5,7 +5,7 @@
 - **现状**：`gemini` / `gemini35` 引擎失败（撞月度花费上限、调用失败、白卷）时，先用 OpenRouter 上的 Gemini（默认 `google/gemini-3.8-flash`）转一遍，成功就记成 `openrouter` 引擎；OpenRouter 也不行才按老规矩落 Whisper 或判失败。没填 `OPENROUTER_API_KEY` 时行为跟以前完全一样。
 - **怎么跑**：Settings 里填 OpenRouter key（存到 `OPENROUTER_API_KEY`）即可，不用额外开关。换模型：`.env` 设 `OPENROUTER_TRANSCRIBE_MODEL`。测试 `./run_tests.sh or_fallback`。
 - **已知问题**：没有 Gemini 3.5 Transcribe 的原生说话人分离和词级时间戳，说话人靠提示词让模型标「说话人N：」，时间戳每 30 秒一个；OpenRouter 的结果不排本机 Whisper 补逐词时间。
-- **下一步**：真文件实测一次（10-28「CLL 伤逝」）；看 OR 转出来的说话人标得准不准。
+- **下一步**：10-28 第一次实测「CLL 伤逝」（15:40）：15 分钟那块 OR 先回空（0 token）、重试又等满 300 秒超时，落 Whisper；同一文件手动直发 OR 90 秒成功、$0.043。之后 OR 失败原因记在 meta.json 的 `timing.openrouter_error` 和日志 `[openrouter]`，再出现就看那里。
 
 ## 来由
 

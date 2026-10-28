@@ -1411,6 +1411,10 @@ def _run_transcription(task_id, filepath, engine, original_filename, q,
                 _finish_ok(segments, summary_data, 'openrouter')
                 fell_back = True
             except Exception as e_or:  # noqa: BLE001
+                # 后面 Whisper 转成了的话 e 就不落库了：OR 的原因单独记进 meta 的 timing、打进日志，不然查不到
+                # （10-28 第一次实测：15 分钟那块 OR 回了个空、再超时，Whisper 接住后什么都没留下）
+                timing['openrouter_error'] = str(e_or)[:300]
+                print(f'[openrouter] {task_id}: {e_or}')
                 e = RuntimeError(f'{engine} 失败：{e}；OpenRouter 后备也失败：{e_or}')
         if (not fell_back and not requeued and engine != 'whisper'
                 and (fallback_whisper or content_block or empty_out or quota_out)):
