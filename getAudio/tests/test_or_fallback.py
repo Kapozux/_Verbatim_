@@ -197,4 +197,25 @@ txor.requests.post = fake_post
 txor.transcribe_audio(audio)
 t.check('OpenRouter 按 5 分钟切块', asked == [300], str(asked))
 
+# 10. 一块 5 分钟却只回一个时间戳（10-28 实测：第一块整块 1719 字一个时间戳）→ 带提醒再要一次，取时间戳多的那份
+replies = ['[00:00:00] ' + '很长一段' * 100,
+           ''.join(f'[00:0{m}:{s:02d}] 第{m}分{s}秒\n' for m in range(5) for s in (0, 30))]
+prompts = []
+
+
+def sparse_then_dense(url, headers=None, json=None, timeout=None):
+    prompts.append(json['messages'][0]['content'][0]['text'])
+    return _Resp({'choices': [{'finish_reason': 'stop', 'message': {'content': replies[min(len(prompts), 2) - 1]}}],
+                  'usage': {'prompt_tokens': 7000, 'completion_tokens': 900, 'cost': 0.006}})
+
+
+txor.requests.post = sparse_then_dense
+text = txor._transcribe_chunk('test-or-key', audio, chunk_seconds=300)
+t.check('时间戳太稀：再要一次', len(prompts) == 2 and prompts[1] != prompts[0], str(len(prompts)))
+t.check('取时间戳多的那份', text.count('[') == 10, text[:80])
+prompts.clear()
+replies[0] = replies[1]
+txor._transcribe_chunk('test-or-key', audio, chunk_seconds=300)
+t.check('时间戳够密：只要一次', len(prompts) == 1, str(len(prompts)))
+
 t.finish()
