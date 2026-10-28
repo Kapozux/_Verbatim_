@@ -9,7 +9,7 @@ OpenRouter 是另一本账（预充值额度），官方那边的上限管不到
 只是换成 OpenRouter 的 OpenAI 兼容接口、音频 base64 内联（input_audio）。
 没有 Gemini 3.5 Transcribe 那种原生说话人分离 / 词级时间戳——那个专用模型 OpenRouter 上没有，
 说话人靠提示词让模型自己标「说话人N：」。
-长音频复用 transcribe_gemini.split_audio_file 切 15 分钟一块（16k 单声道 Opus，约 5 MB），各块并行。
+长音频复用 transcribe_gemini.split_audio_file 切 5 分钟一块（16k 单声道 Opus），各块并行。
 """
 
 import base64
@@ -23,7 +23,7 @@ import requests
 import config
 import usage
 from transcribe_gemini import (
-    CHUNK_DURATION_SECONDS, TRANSCRIPTION_PROMPT, _can_split_audio, _get_audio_duration_seconds,
+    TRANSCRIPTION_PROMPT, _can_split_audio, _get_audio_duration_seconds,
     parse_timestamped_text, shift_timestamps, split_audio_file,
 )
 
@@ -35,6 +35,9 @@ PROMPT = TRANSCRIPTION_PROMPT + """
 补充：如果有不止一个人说话，在每段开头标出说话人，格式为「说话人1：」「说话人2：」（按第一次出现的先后编号）；只有一个人说话就不用标。
 """
 
+# 5 分钟一块：10-28 实测 15 分钟一块时模型整块只打 3 个时间戳（还常常不标说话人），
+# 5 分钟一块每 30 多秒一个。代价是每块各想一遍，约 $0.2–0.25 / 小时音频（15 分钟块约 $0.16）。
+CHUNK_SECONDS = 5 * 60
 _TIMEOUT_S = 300          # 一块 15 分钟音频通常一分钟内回；挂住就判失败，别永远占着线程
 _MAX_ATTEMPTS = 3
 _RETRY_BACKOFF_SECONDS = [3, 8]
@@ -61,7 +64,7 @@ def transcribe_audio(filepath, progress_callback=None):
     chunks, temp_dir = [(filepath, 0)], None
     if _can_split_audio():
         try:
-            chunks, temp_dir = split_audio_file(filepath, CHUNK_DURATION_SECONDS)
+            chunks, temp_dir = split_audio_file(filepath, CHUNK_SECONDS)
         except Exception:  # noqa: BLE001  切不了就整段送
             chunks, temp_dir = [(filepath, 0)], None
     try:
