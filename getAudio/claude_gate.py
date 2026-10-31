@@ -7,6 +7,10 @@
     三个应用 + 人自己在 Claude Code 里用的」合计，到了 LIMIT - CLAUDE_GATE_KEEP（默认 100，用户 10-13：「给我自己留 100 吧」）
     批量和普通的活就等着，交互的照常。人自己用的量从 ~/.claude/projects 的对话记录增量读（一分钟最多读一次）；
     应用自己起的 claude（~/.verbatim-claude 之类的目录名下）不算进去，它们已经记在 calls 里。
+  · 给人自己留周额度（10-31：20x 订阅取消了 5 小时上限，只剩 7 天的）：设了 CLAUDE_GATE_WEEK_KEEP（给人留几成，例 0.3）
+    就看 Anthropic 那边的真数（claude -p 的 rate_limit_event 里「7 天用了几成」，人在 claude.ai 聊天、自己用 Claude Code 都算）：
+    批量和普通的用到 1 - KEEP 就不起 claude（抛 Paused，各自退回原来的模型），交互的到 1 - CLAUDE_GATE_WEEK_KEEP_LIVE（默认 0.1）。
+    十分钟最多探一次（Haiku 回一个字、不留会话），三边共用 meta 里那份。
   · 一起停：谁撞了上限就写进 pause，三边都停到重置时间（各自退回原来的模型），不用各撞一遍。
   · 记账：每次调用一行（应用、用途、模型、token、等值美元、秒数）。`python3 claude_gate.py` 看现在谁占着、5 小时 / 7 天各用了多少。
 同一份文件在 Verbatim（getAudio/claude_gate.py）和 Ephemeris（ephemeris/claude_gate.py）各放一份（项目之间不互相 import），
@@ -155,6 +159,51 @@ def used_5h(c):
             c.execute('SELECT COALESCE(SUM(usd), 0) FROM cc_calls WHERE ts > ?', (since,)).fetchone()[0])
 
 
+WEEK_EVERY = 600
+
+
+def _probe():
+    """问一次 Haiku，从 rate_limit_event 读 (7 天用了几成, 重置时间)；读不到 None。"""
+    import json
+    import shutil
+    import subprocess
+    exe = shutil.which('claude')
+    if not exe:
+        return None
+    try:
+        r = subprocess.run([exe, '-p', '--model', 'haiku', '--system-prompt', 'Reply with one word.', '--tools', '',
+                            '--setting-sources', '', '--strict-mcp-config', '--disable-slash-commands', '--no-session-persistence',
+                            '--output-format', 'stream-json', '--verbose'], input='ok', capture_output=True, text=True,
+                           encoding='utf-8', errors='replace', timeout=90, cwd=os.path.dirname(path()),
+                           env={**os.environ, 'DISABLE_PROMPT_CACHING': '1'})
+    except (OSError, subprocess.SubprocessError):
+        return None
+    for line in r.stdout.splitlines():
+        if '"rate_limit_event"' not in line:
+            continue
+        try:
+            w = json.loads(line)['rate_limit_info']['unifiedWindows']['seven_day']
+            return float(w['utilization']), float(w['resetsAt'])
+        except (ValueError, KeyError, TypeError):
+            continue
+    return None
+
+
+def week(c):
+    """(7 天用了几成, 重置时间)；探不到、或者存着的那份已经过了重置时间，是 None。"""
+    m = dict(c.execute("SELECT k, v FROM meta WHERE k IN ('week_util', 'week_reset', 'week_ts')").fetchall())
+    now = time.time()
+    have = (m['week_util'], m['week_reset']) if m.get('week_reset', 0) > now and 'week_util' in m else None
+    if have and m.get('week_ts', 0) > now - WEEK_EVERY:
+        return have
+    c.execute("INSERT INTO meta (k, v) VALUES ('week_ts', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v", (now,))  # 别的进程这十分钟不探
+    got = _probe()
+    if got:
+        c.executemany("INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+                      [('week_util', got[0]), ('week_reset', got[1])])
+    return got or have
+
+
 def paused_until():
     if not enabled():
         return 0.0
@@ -195,6 +244,12 @@ def slot(app, purpose='', prio='normal', wait=1800):
         yield
         return
     c = _db()
+    if _num('CLAUDE_GATE_WEEK_KEEP', 0):
+        keep = _num('CLAUDE_GATE_WEEK_KEEP_LIVE', 0.1) if prio == 'live' else _num('CLAUDE_GATE_WEEK_KEEP', 0)
+        w = week(c)
+        if w and w[0] >= 1 - keep:
+            c.close()
+            raise Paused(f'Claude 7 天额度已用 {w[0]:.0%}，剩下的留给你自己（{time.strftime("%m-%d %H:%M", time.localtime(w[1]))} 重置）')
     if prio != 'live' and _num('CLAUDE_GATE_LIMIT_5H', 0):
         sync_cc(c)
     deadline, sid = time.time() + wait, None
@@ -271,6 +326,13 @@ if __name__ == '__main__':
     limit, keep = _num('CLAUDE_GATE_LIMIT_5H', 0), _num('CLAUDE_GATE_KEEP', 100)
     print(f'最近 5h 合计 ${s["apps_5h"] + s["cc_5h"]:.0f}（应用 ${s["apps_5h"]:.2f} + 你自己用 Claude Code ${s["cc_5h"]:.0f}）'
           + (f'；上限按 ${limit:.0f} 算，到 ${limit - keep:.0f} 应用就让路' if limit else ''))
+    if _num('CLAUDE_GATE_WEEK_KEEP', 0):
+        c = _db()
+        w = week(c)
+        c.close()
+        stop, live = 1 - _num('CLAUDE_GATE_WEEK_KEEP', 0), 1 - _num('CLAUDE_GATE_WEEK_KEEP_LIVE', 0.1)
+        print(f'7 天额度：' + (f'已用 {w[0]:.0%}（{time.strftime("%m-%d %H:%M", time.localtime(w[1]))} 重置）' if w else '没读到')
+              + f'；批量 / 普通到 {stop:.0%}、交互到 {live:.0%} 就让给你')
     print(f'你自己用 Claude Code 最近 7 天：${s["cc_7d"]:.0f}')
     for name in ('5h', '7d'):
         total = sum(r[3] or 0 for r in s[name])

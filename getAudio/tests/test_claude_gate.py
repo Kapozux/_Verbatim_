@@ -82,4 +82,19 @@ with claude_gate.slot('t', 'cards', 'batch', wait=0):
     pass
 t.check('没到：批量照常', True)
 
+# 给人自己留周额度（10-31，5 小时上限取消了）：看 Anthropic 那边的「7 天用了几成」，批量先让、问留到最后
+os.environ.pop('CLAUDE_GATE_LIMIT_5H', None)
+os.environ['CLAUDE_GATE_WEEK_KEEP'] = '0.3'
+claude_gate._probe = lambda: (0.75, time.time() + 3600)
+sqlite3.connect(claude_gate.path(), isolation_level=None).execute("DELETE FROM meta")
+try:
+    with claude_gate.slot('t', 'cards', 'batch', wait=0):
+        got = 'in'
+except claude_gate.Paused:
+    got = 'paused'
+t.check('周额度用了 75%（给人留 30%）：批量不起 claude', got == 'paused')
+with claude_gate.slot('t', 'ask', 'live', wait=0):
+    pass
+t.check('问到 90% 才让', True)
+
 t.finish()
