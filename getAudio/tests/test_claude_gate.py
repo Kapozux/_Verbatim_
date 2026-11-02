@@ -26,7 +26,7 @@ t = Checks()
 
 claude_cli.text('问一句', purpose='ask')
 claude_cli.text('抽卡', purpose='cards', model='claude-haiku-5-5')
-t.check('调用时占着一个位子：问 = live，抽卡 = batch', held[0] == [('verbatim', 'ask', 'live', 0)] and held[1][0][2] == 'batch', str(held))
+t.check('调用时占着一个位子：问 = live，抽卡 = batch', [r[:4] for r in held[0]] == [('verbatim', 'ask', 'live', 0)] and held[1][0][2] == 'batch', str(held))
 s = claude_gate.status()
 t.check('用完就还', s['slots'] == [], str(s['slots']))
 t.check('每次记一行账（应用、模型、等值美元）', sorted((r[0], r[1], r[2]) for r in s['5h']) ==
@@ -36,7 +36,7 @@ t.check('每次记一行账（应用、模型、等值美元）', sorted((r[0], 
 claude_gate.pause(time.time() + 600, 'usage limit reached', 'moye')
 t.check('别的应用撞上限：这边 available() 为假', not claude_cli.available())
 import sqlite3  # noqa: E402
-sqlite3.connect(claude_gate.path(), isolation_level=None).execute('DELETE FROM pause')
+sqlite3.connect(claude_gate.path(), isolation_level=None).execute('DELETE FROM pauses')
 
 # 这边撞了上限：写进共用的 pause
 claude_cli.use_runner(lambda a, s: {'is_error': True, 'result': 'Claude AI usage limit reached|%d' % (time.time() + 900), 'events': []})
@@ -44,7 +44,7 @@ try:
     claude_cli.text('x', purpose='summary')
 except Exception:  # noqa: BLE001
     pass
-p = claude_gate.status()['pause']
+p = claude_gate.status()['pause']['claude']
 t.check('这边撞上限：写进共用的 pause，别的应用也停', p and p[2] == 'verbatim' and p[0] > time.time() + 800, str(p))
 
 # 给人自己留额度：最近 5 小时「三个应用 + 人自己在 Claude Code 里用的」合计到了 LIMIT - KEEP，批量 / 普通的等着，问照常
@@ -62,7 +62,7 @@ os.makedirs(appdir)
 with open(os.path.join(appdir, 'a.jsonl'), 'w') as f:
     f.write(_json.dumps({'timestamp': now_iso, 'requestId': 'r2', 'message': {'id': 'm2', 'model': 'claude-opus-5-5',
                                                                               'usage': {'input_tokens': 10_000_000, 'output_tokens': 0}}}) + '\n')
-sqlite3.connect(claude_gate.path(), isolation_level=None).execute('DELETE FROM pause')
+sqlite3.connect(claude_gate.path(), isolation_level=None).execute('DELETE FROM pauses')
 claude_cli.use_runner(runner)
 os.environ['CLAUDE_GATE_LIMIT_5H'] = '140'
 os.environ['CLAUDE_GATE_KEEP'] = '100'

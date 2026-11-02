@@ -176,6 +176,19 @@ def claude_text(prompt, purpose, web=False):
 _claude_text = claude_text
 
 
+def codex_text(prompt, purpose):
+    """Claude 用不了时让 GPT（codex exec，ChatGPT 订阅）顶上：开了（CODEX_ENGINE=on）、不是批量的用途才走；
+    失败返回 None（接着走 DeepSeek）。2026-11-03。"""
+    import codex_cli
+    if _base(purpose) in CLAUDE_SKIP or not codex_cli.fits(_base(purpose)) or not codex_cli.on():
+        return None
+    try:
+        return codex_cli.text(prompt, purpose=purpose, effort=_claude_effort(purpose)) or None
+    except Exception as e:  # noqa: BLE001
+        print(f'[llmroute] Codex {purpose} failed, falling back: {str(e)[:120]}')
+        return None
+
+
 def _claude_stream(prompt, purpose):
     """先拿到第一段字再交出去：还没出字就失败了返回 None（调用方接着走 DeepSeek），不会让前端看到两段拼起来的话。"""
     import claude_cli
@@ -195,8 +208,8 @@ def _claude_stream(prompt, purpose):
 
 
 def text(prompt, purpose):
-    """先 Claude（开了的话），再 DeepSeek，返回文字；都不能走或失败返回 None（调用方接着用 Gemini）。"""
-    out = _claude_text(prompt, purpose)
+    """先 Claude（开了的话），再 GPT（开了的话），再 DeepSeek，返回文字；都不能走或失败返回 None（调用方接着用 Gemini）。"""
+    out = _claude_text(prompt, purpose) or codex_text(prompt, purpose)
     if out:
         return out
     if not use_cheap(prompt, purpose):
@@ -219,6 +232,9 @@ def stream(prompt, purpose):
     claude = _claude_stream(prompt, purpose)
     if claude is not None:
         return claude
+    gpt = codex_text(prompt, purpose)              # GPT 不流式：一次拿全文，当一段交出去
+    if gpt:
+        return iter([gpt])
     if not use_cheap(prompt, purpose):
         return None
     import requests
