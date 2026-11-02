@@ -26,6 +26,21 @@ data = {'steps': [{'content': [{'text': 'Hi there. New point', 'annotations': [
     {'type': 'word_info', 'speaker': '2', 'start_offset': '5.0s', 'end_offset': '5.8s', 'start_index': 10, 'end_index': 19}]}]}]}
 segs35 = tg35._parse_response(data, 3600)
 t.check('gemini35：按说话人分段、加块起点', [s['timestamp'] for s in segs35] == ['01:00:01', '01:00:05'], str(segs35))
+# 11-02 实测：start_index / end_index 是 UTF-8 字节偏移（一个汉字 3 字节）。按字符切会让每段多吃两倍的字，
+# 字在前三分之一的段里就用完、后面的段切出空串被丢 → 20 分钟的视频时间轴只到 6 分 51 秒
+zh = '大家好，欢迎来到我的频道。今天聊三个学科'
+
+
+def _wi(a, b, t0, t1):
+    return {'type': 'word_info', 'speaker': 'spk:0', 'start_offset': f'{t0}s', 'end_offset': f'{t1}s',
+            'start_index': len(zh[:a].encode()), 'end_index': len(zh[:b].encode())}
+
+
+segs_zh = tg35._parse_response({'steps': [{'content': [{'text': zh, 'annotations': [
+    _wi(0, 4, 0.6, 1.0), _wi(4, 13, 1.0, 3.0), _wi(13, 20, 10.0, 12.0)]}]}]}, 0)
+t.check('gemini35：中文按字节偏移切，段落文字和时间对得上',
+        [(s['timestamp'], s['text']) for s in segs_zh] == [
+            ('00:00:00', '说话人1：大家好，欢迎来到我的频道。'), ('00:00:10', '说话人1：今天聊三个学科')], str(segs_zh))
 t.check('gemini35：没有标注时整段兜底', tg35._parse_response(
     {'steps': [{'content': [{'text': 'only text'}]}]}, 65) == [{'timestamp': '00:01:05', 'text': 'only text'}])
 
