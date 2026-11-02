@@ -301,10 +301,22 @@ def _parse_response(data, offset_sec, chunk_seconds=None):
             cur = [w]
     groups.append(cur)
 
+    # start_index / end_index 现在是 UTF-8 字节偏移（11-02 实测：'大' 是 0–3）。按字符切的话中文每段
+    # 多吃两倍的字、后三分之二的段切成空串被丢，时间轴只剩真实的 1/3。早期返回过字符偏移，
+    # 所以按「下标有没有超出字符数」判断单位：超出就是字节；纯 ASCII 两种单位一样，怎么切都对。
+    raw = full_text.encode('utf-8')
+    max_idx = max((w.get('end_index') or 0) for w in words)
+    if max_idx > len(full_text):
+        def _slice(a, b):
+            return raw[a:b].decode('utf-8', errors='ignore')
+    else:
+        def _slice(a, b):
+            return full_text[a:b]
+
     segments = []
     for g in groups:
         start_idx, end_idx = g[0].get('start_index'), g[-1].get('end_index')
-        text = full_text[start_idx:end_idx].strip() if start_idx is not None else \
+        text = _slice(start_idx, end_idx).strip() if start_idx is not None else \
             ' '.join(w.get('text', '') for w in g)
         if not text:
             continue
