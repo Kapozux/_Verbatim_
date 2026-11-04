@@ -88,5 +88,7 @@ def first_ts(d):
 d35, dg = new_episode('gemini35'), new_episode('gemini')
 t.check('gemini35：补完时间轴就把段落时间改好', first_ts(d35) == '00:00:10')
 t.check('别的引擎：段落时间不动', first_ts(dg) == '00:00:03')
+daf = new_episode('agy_flash')
+t.check('agy_flash（模型写的时间）：也按时间轴改', first_ts(daf) == '00:00:10')
 
 t.finish()

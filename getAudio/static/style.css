@@ -317,6 +317,7 @@ details.find-trace summary { cursor: pointer; width: fit-content; }
 .engine-badge { flex-shrink: 0; font-size: 11.5px; padding: 3px 8px; border-radius: 5px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; white-space: nowrap; }
 .engine-gemini    { background: var(--coral-soft); color: var(--coral-deep); }
 .engine-gemini35  { background: var(--coral-line); color: var(--coral-deep); }
+.engine-agy_flash, .engine-agy_argon { background: var(--coral-line); color: var(--coral-deep); }
 .engine-dashscope { background: var(--run-bg); color: var(--run); }
 .engine-qwenasr   { background: var(--tint-blue-bg); color: var(--tint-blue); }
 .engine-subtitle  { background: var(--line); color: var(--ink-soft); }

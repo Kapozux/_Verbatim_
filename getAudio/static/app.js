@@ -282,12 +282,15 @@ if (showMainlandBtn && mainlandEngines) {
         showMainlandBtn.classList.toggle('open');
     });
 }
+// 能自己标说话人的引擎：gemini35 原生分离；agy 两个按提示词标「说话人N：」（跟 OpenRouter 后备一样）
+const SPEAKER_ENGINES = ['gemini35', 'agy_flash', 'agy_argon'];
 document.querySelectorAll('input[name="engine"][value="qwenasr"], input[name="engine"][value="precise"]')
     .forEach(radio => {
         radio.addEventListener('change', () => {
             if (radio.checked && !confirm(T('confirm.mainlandWarning'))) {
-                // 拒绝 → 退回 Gemini 3.5 Transcribe（云端，不吃本地 CPU/电池）
-                const w = document.querySelector('input[name="engine"][value="gemini35"]');
+                // 拒绝 → 退回默认的云端引擎（订阅里的 Gemini Flash，没装 agy 就 Gemini 3.5；都不吃本地 CPU/电池）
+                const w = document.querySelector('input[name="engine"][value="agy_flash"]')
+                    || document.querySelector('input[name="engine"][value="gemini35"]');
                 w.checked = true;
                 w.dispatchEvent(new Event('change'));
             }
@@ -1647,7 +1650,7 @@ function nfEstimate() {
     const newTx = speakers ? sel : sel.filter(v => !v.transcribed);
     const txSecs = newTx.reduce((a, v) => a + (v.duration || avg), 0);
     const p = nf.data.prices;
-    const engine = speakers && chainEngine.value !== 'gemini35' ? 'qwenasr' : chainEngine.value;
+    const engine = speakers && !SPEAKER_ENGINES.includes(chainEngine.value) ? 'qwenasr' : chainEngine.value;
     let cost = (txSecs / 3600) * (p.transcribe_per_hour[engine] ?? 0.3);
     if (analyze && sel.length) {
         cost += sel.length * p.analysis_per_episode + (secs / 3600) * p.analysis_per_hour + p.portrait;
@@ -1684,7 +1687,7 @@ async function nfStart() {
         avatar: (nf.data.channel || {}).avatar || '', followers: (nf.data.channel || {}).followers || 0,
         targets: sel.map(v => ({ video_url: v.video_url, title: v.title, video_id: v.video_id, thumbnail: v.thumbnail,
                                  view_count: v.view_count, upload_date: v.upload_date, duration: v.duration })),
-        engine: speakers && chainEngine.value !== 'gemini35' ? 'qwenasr' : chainEngine.value,
+        engine: speakers && !SPEAKER_ENGINES.includes(chainEngine.value) ? 'qwenasr' : chainEngine.value,
         require_speakers: speakers,
         analyze, auto_predict: analyze && document.getElementById('nf-predict').checked,
         sync_interval_h: syncOn ? +document.getElementById('nf-sync-iv').value : 0,

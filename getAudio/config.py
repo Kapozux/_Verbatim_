@@ -88,7 +88,28 @@ ENGINE_CONCURRENCY = {
     # Gemini 3.5 Transcribe：2026-08 才公开预览的新端点，配额/稳定性还没摸透，
     # 先保守给 6（后面观察没问题再跟 gemini 引擎的 12 看齐）。
     'gemini35': 6,
+    # agy（Antigravity CLI，走用户自己的 Gemini 订阅，2026-11-04）：每个任务内部再按 15 分钟块开 3 路，
+    # 这里是同时几个任务。Flash 几乎不耗额度；Argon 有单独的周额度（44 分钟约 2.7%），压低。
+    'agy_flash': int(os.environ.get('AGY_FLASH_CONCURRENCY') or 4),
+    'agy_argon': int(os.environ.get('AGY_ARGON_CONCURRENCY') or 2),
 }
+
+
+def agy_installed():
+    """本机有没有 agy（Antigravity CLI）。launchd 的 PATH 常常没有 Homebrew，所以几个默认位置也看。"""
+    import shutil as _shutil
+    if (os.environ.get('AGY_BIN') or '').strip():
+        return True
+    return bool(_shutil.which('agy')) or any(
+        os.path.isfile(p) for p in ('/opt/homebrew/bin/agy', '/usr/local/bin/agy', os.path.expanduser('~/.local/bin/agy')))
+
+
+def default_engine():
+    """新建转写默认用哪个引擎：DEFAULT_ENGINE 环境变量 > 装了 agy 就 agy_flash（用户 11-04：默认 Flash，走订阅不花钱）> gemini35。"""
+    e = (os.environ.get('DEFAULT_ENGINE') or '').strip()
+    if e:
+        return e
+    return 'agy_flash' if agy_installed() else 'gemini35'
 
 # 链条（URL→下载→转写→分析）的全局限流：所有链条共享，不按每条链条算。
 # 这样开 1 条还是 5 条链，对 YouTube 和 Gemini 的瞬时压力恒定，多开只是排队更长、不会叠加超标。

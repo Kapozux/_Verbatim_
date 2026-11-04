@@ -3,12 +3,13 @@
 谁在做什么、做到哪、下一步是什么，都在这一张表里。**每个窗口开工先读这张表**，认领一件事就在「谁」里写上自己的窗口名；收工前更新状态和下一步。
 新冒出来的 bug、想法、要用户拍板的事，也先记到这里，不要只写在聊天里或别的交接文档里。规矩见 `getAudio/CLAUDE.md`「多窗口一起开发」。
 
-最后更新：2026-10-19
+最后更新：2026-11-04
 
 ## 正在做
 
 | 事 | 谁 | 在哪 | 状态 |
 |---|---|---|---|
+| 转写走 Gemini 订阅：新引擎 `agy_flash`（默认）/ `agy_argon`，用 Antigravity CLI，不花 API 的钱（用户 11-04：「Verbatim 先增加一下 Flash 和 Argon 选项（默认 Flash）」） | agy-engine 窗口（kapozux-9e） | worktree `.claude/worktrees/agy-engine`，分支 feature/agy-engine | 写完、本地提交；19 项新测试过，全量 65/67（`test_custom_llm` / `test_llmroute` 在 main 上本来就挂）；真 agy 实测 44 分钟课 Flash 15,151 字；1700 / 1000 / 400 截图过。还没合进 main、5001 没重启。交接 `docs/handoff/agy-engine.md`，ADR 0022 |
 | 官方 Gemini 转不了（撞月度上限等）先改走 OpenRouter 上的 Gemini，再落 Whisper（用户 10-28：「如果 google 官方的不行就用 OR」） | or-fallback 窗口（getaudio-28） | main（10-28 合进、5001 已重启） | 上线。65 个测试文件全过（test_or_fallback 26 项）；「CLL 伤逝」15:40 实测 74 秒、$0.052、19 段。5 分钟一块、时间戳太稀再要一次、静音块不算失败。说话人基本不标、有时出繁体。约 $0.2–0.25 / 小时音频。交接 `docs/handoff/openrouter-fallback.md` |
 | 资料库勾选几份转写，合并成一个 .md（用户 10-19：「模仿墨页将那个选择功能（合并 md）放进来」） | lib-pick 窗口（getaudio-d3） | main（10-19 合进、5001 已重启） | 上线。64 个测试文件全过（新增 test_merge_md 8 项）；5048 实测勾两份 → 下载合并 .md，1700 / 1000 / 400 × 浅深截图过。交接 `docs/handoff/library-pick.md` |
 | 资料库的「问」：一句话描述 → 最像的几份转写 + 理由 + 跳到那一秒（用户 10-19：「借鉴 Ephemeris 的问，但是用来找转写」「Moye 也做了个，互相参考」） | find-ask 窗口（getaudio-d3） | main（10-19 合进、5001 已重启） | 上线。63 个测试文件全过（新增 test_libask 38 项）；真库 3574 份实测 12–17 秒、订阅额度 $0；5048 上 1700 / 1000 / 400 × 浅深截图过。顺手修了点出处跳到那一秒时被摘要顶到屏幕外。下一步：用户真用几次看找得准不准。交接 `docs/handoff/library-ask.md`，ADR 0021 |
@@ -125,7 +126,8 @@
 | 0019 | B 站评论区：评论是来源的一部分，整理是产出；登录态自动从浏览器续 | 分支 feature/comments |
 | 0020 | 浏览器插件：跨站防护只多放行这一个固定 ID 的插件 | main |
 | 0021 | 资料库的「问」：本机 Claude 跑只读的 look.py 找转写，没有 Claude 退回只看目录 | main |
-| 0022 | （下一个可用） | |
+| 0022 | 转写默认走 Gemini 订阅（agy_flash），API 只做后备 | 分支 feature/agy-engine |
+| 0023 | （下一个可用） | |
 
 ## 最近做完（10-02 ~ 10-03）
 
