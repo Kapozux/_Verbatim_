@@ -1,7 +1,7 @@
 // 插件和本机 Verbatim 之间的全部往来：设置、提交链接、查进度、记下提交过的任务。
 // 后台（background.js）和弹窗（popup.js）都用这一份，别各写一套。
 
-const DEFAULTS = { server: 'http://localhost:5001', password: '', engine: 'gemini35', subs: 'auto' };
+const DEFAULTS = { server: 'http://localhost:5001', password: '', engine: '', subs: 'auto' };
 const JOBS_KEY = 'jobs';
 const MAX_JOBS = 30;
 

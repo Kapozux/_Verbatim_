@@ -707,7 +707,7 @@ async function asAddFiles(files) {
     if (media.length) {
         const fd = new FormData();
         media.forEach(f => fd.append('audios', f));
-        fd.append('engine', (document.querySelector('input[name="engine"]:checked') || {}).value || 'gemini35');
+        fd.append('engine', (document.querySelector('input[name="engine"]:checked') || {}).value || '');
         const r = await srcPost(`/api/chain/${id}/sources/upload`, { method: 'POST', body: fd });
         if (r) ok += (r.tasks || []).filter(t => t.task_id).length;
     }
@@ -740,7 +740,7 @@ async function asAddLink() {
     }
     const r = await srcPost('/api/transcribe_urls', { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ urls: url, project_id: cx.id,
-            engine: (document.querySelector('input[name="engine"]:checked') || {}).value || 'gemini35' }) });
+            engine: (document.querySelector('input[name="engine"]:checked') || {}).value || '' }) });
     msg.textContent = '';
     if (r) {
         showToast(T('as.queued', { n: (r.tasks || []).length }));
@@ -1545,7 +1545,7 @@ async function dscAdd() {
     if (vids.length) {
         const r = await srcPost('/api/transcribe_urls', { method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ urls: vids.join('\n'), project_id: cx.id,
-                engine: (document.querySelector('input[name="engine"]:checked') || {}).value || 'gemini35' }) });
+                engine: (document.querySelector('input[name="engine"]:checked') || {}).value || '' }) });
         if (r) added += (r.tasks || []).length;
     }
     if (added) showToast(T('dsc.added', { n: added }));

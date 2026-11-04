@@ -320,7 +320,8 @@ def _run_whisper_queue():
                 words = whisper_words(p)
                 if words:
                     save(tid, [(s + off, w) for s, w in words], source='whisper')
-                    if _engine(tid) == 'gemini35':      # 它的段落时间不可信：按时间轴改
+                    # 这几个引擎的段落时间是模型自己写的、不可信：按时间轴改（agy 两个 11-04 加：Flash 实测标得偏短/偏长都有）
+                    if _engine(tid) in RETIME_ENGINES:
                         apply_retime(tid)
         except Exception:
             pass
@@ -335,6 +336,7 @@ def _run_whisper_queue():
 # 资料库 920 期 gemini35 短文件「最后一段时间 ÷ 时长」中位数 0.337，转成 16k 单声道再送一遍还是 0.337；
 # 看着正常的几期也前后乱跳。所以有了逐词时间轴后，拿每段开头的话按顺序去时间轴里找，把段落时间换成真的。
 
+RETIME_ENGINES = ('gemini35', 'agy_flash', 'agy_argon')
 _SPK_RE = re.compile(r'^\s*说话人[\d?？]+\s*[:：]\s*')
 
 

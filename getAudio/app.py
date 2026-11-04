@@ -748,7 +748,8 @@ _CONTENT_BLOCK_MARKERS = (
 # 用户：「不是 monthly cap 那就用 whisper 啊，自动 fallback 啊」——所以无视「失败兜底 Whisper」开关直接落本地 Whisper，
 # 并记下这个引擎撞上限的时间：一小时内后面排队的期不再先去碰云端（每期白等一轮），直接用 Whisper；过了一小时再探一次。
 _QUOTA_MARKERS = ('spending cap', 'spend cap', 'exceeded your current quota', 'insufficient_quota',
-                  'billing', 'perday', 'per day', 'credit balance is too low')
+                  'billing', 'perday', 'per day', 'credit balance is too low',
+                  'agy quota')        # transcribe_agy：订阅额度剩得太少（/usage 读的）
 _QUOTA_HOLD_S = 3600
 _quota_out = {}          # engine -> 撞上限的时间戳
 
@@ -1097,7 +1098,7 @@ def _run_transcription(task_id, filepath, engine, original_filename, q,
                     wordtime.save(task_id, [(s + (offset_sec or 0), w) for s, w in word_track], source='qwen')
                 except Exception:
                     pass
-            elif (engine_used in ('gemini', 'gemini35') and not DEMO_MODE
+            elif (engine_used in ('gemini', 'gemini35', 'agy_flash', 'agy_argon') and not DEMO_MODE
                   and not wordtime.is_youtube((extra_meta or {}).get('source_url'))):
                 # Gemini 的时间点是模型写的：本机 Whisper 后台补逐词时间（YouTube 的走字幕，更省）。
                 # 目录先建好：后台线程看到没有结果目录会当成删掉了的期跳过（_save_results 还没跑到）
@@ -1356,6 +1357,21 @@ def _run_transcription(task_id, filepath, engine, original_filename, q,
             _verify(segments)
             summary_data = _summary(full_text)
 
+        elif engine in ('agy_flash', 'agy_argon'):
+            # Antigravity CLI 跑 Gemini（用户自己的订阅，不花 API 的钱；11-04 用户：默认 Flash）。
+            # 15 分钟一块 mp3、各块并行；Flash 某块被安全过滤误拦就那块换 Argon。见 transcribe_agy.py。
+            import transcribe_agy
+            q.put(json.dumps({
+                'type': 'progress', 'percent': 0,
+                'message': f"正在用订阅里的 {'Gemini Flash' if engine == 'agy_flash' else 'Gemini Argon'} 转写...",
+            }))
+            segments, full_text = transcribe_agy.transcribe_audio(
+                input_path, engine, progress_callback=progress_cb)
+            for seg in segments:
+                q.put(json.dumps({'type': 'segment', **seg}))
+            _verify(segments)
+            summary_data = _summary(full_text)
+
         else:
             taskdb.set_status(task_id, 'failed', error=f'Unknown engine: {engine}')
             q.put(json.dumps({
@@ -1393,7 +1409,7 @@ def _run_transcription(task_id, filepath, engine, original_filename, q,
         # 官方 Gemini 不行（撞月度上限、调用失败、白卷）→ 先试 OpenRouter 上的 Gemini，再轮到 Whisper。
         # 10-28 用户：「如果 google 官方的不行就用 OR」。内容拦截不试：OR 背后是同一个 Gemini，拦截照旧。
         import transcribe_openrouter
-        if (not requeued and engine in ('gemini', 'gemini35') and not content_block
+        if (not requeued and engine in ('gemini', 'gemini35', 'agy_flash', 'agy_argon') and not content_block
                 and transcribe_openrouter.api_key()):
             try:
                 q.put(json.dumps({
@@ -1501,7 +1517,7 @@ def _static_version():
 def index():
     import citations
     return render_template('index.html', static_version=_static_version(), demo=DEMO_MODE, cite_id=citations.ID,
-                           demo_ask=DEMO_ASK)
+                           demo_ask=DEMO_ASK, default_engine=config.default_engine(), agy_ok=config.agy_installed())
 
 
 # ========== Upload & Stream ==========
@@ -1741,7 +1757,7 @@ def recover_unfinished_tasks():
 @app.route('/upload', methods=['POST'])
 def upload():
     file = request.files.get('audio')
-    engine = request.form.get('engine', 'gemini35')
+    engine = request.form.get('engine') or config.default_engine()
     speaker_count = _parse_speaker_count(request.form.get('speaker_count'))
 
     task_id, error = _enqueue_task(file, engine, speaker_count)
@@ -1756,7 +1772,7 @@ def api_transcribe_local():
     """本地文件直采：给个本机路径，零上传（软链，不拷贝、不删原件）。适合大视频。"""
     body = request.get_json(silent=True) or {}
     task_id, error = _enqueue_local_task(
-        body.get('path'), body.get('engine', 'gemini35'),
+        body.get('path'), body.get('engine') or config.default_engine(),
         _parse_speaker_count(body.get('speaker_count')))
     if error:
         return jsonify({'error': error}), 400
@@ -1937,7 +1953,7 @@ def api_transcribe_urls():
     每条链接行尾可加 ' @10:00-25:00' 只转那一段（时间戳会还原成原视频位置）。
     """
     body = request.get_json(silent=True) or {}
-    engine = body.get('engine', 'gemini35')
+    engine = body.get('engine') or config.default_engine()
     sub_mode = _clean_sub_mode(body.get('subs'))
     project_id = str(body.get('project_id') or '')          # 在项目里贴的：转完加进那个项目
     project_id = project_id if _chain_ok(project_id) else None
@@ -1996,7 +2012,7 @@ def upload_batch():
     就返回 200；全部失败返回 400。
     """
     files = request.files.getlist('audios')
-    engine = request.form.get('engine', 'gemini35')
+    engine = request.form.get('engine') or config.default_engine()
     speaker_count = _parse_speaker_count(request.form.get('speaker_count'))
 
     if not files:
@@ -3709,7 +3725,7 @@ def api_chain_create():
     state = {
         'id': chain_id,
         'url': url,
-        'engine': data.get('engine') or 'gemini35',
+        'engine': data.get('engine') or config.default_engine(),
         'max_videos': max_videos,
         'analyze': bool(data.get('analyze', True)),
         'prefer_subs': bool(data.get('prefer_subs', False)),
@@ -3840,7 +3856,7 @@ def api_chain_preview():
     host = re.sub(r'^www\.', '', (re.match(r'https?://([^/]+)', url) or [None, ''])[1])
     data['platform'] = 'bilibili' if 'bilibili' in host else 'youtube' if 'youtu' in host else host
     # 估价用的单价（美元）：转写按音频小时，分析按期 + 按小时，画像一次
-    data['prices'] = {'transcribe_per_hour': {'gemini35': 0.35, 'gemini': 0.19, 'qwenasr': 0.015, 'whisper': 0},
+    data['prices'] = {'transcribe_per_hour': {'agy_flash': 0, 'agy_argon': 0, 'gemini35': 0.35, 'gemini': 0.19, 'qwenasr': 0.015, 'whisper': 0},
                       'analysis_per_episode': 0.03, 'analysis_per_hour': 0.07, 'portrait': 0.12}
     return Response(json.dumps(data, ensure_ascii=False), mimetype='application/json')
 
@@ -4696,7 +4712,7 @@ def api_project_upload(chain_id):
     """往项目里直接传录音 / 视频：照常转写，转完自己加进这个项目。multipart: audios, engine"""
     if not _chain_ok(chain_id):
         return jsonify({'error': 'Not found'}), 404
-    engine = request.form.get('engine', 'gemini35')
+    engine = request.form.get('engine') or config.default_engine()
     results = []
     for f in request.files.getlist('audios'):
         tid, err = _enqueue_task(f, engine, _parse_speaker_count(request.form.get('speaker_count')),
@@ -7344,7 +7360,7 @@ def api_chain_retranscribe(chain_id, index):
         return jsonify({'ok': False, 'error': '这个视频正在处理'}), 409
 
     body = request.get_json(silent=True) or {}
-    engine = body.get('engine') or 'gemini35'
+    engine = body.get('engine') or config.default_engine()
     target = _video_target(v)
     if not target['video_url']:
         return jsonify({'ok': False, 'error': '没有可用的视频链接，无法重下'}), 400
