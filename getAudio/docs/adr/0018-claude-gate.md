@@ -22,3 +22,12 @@
 
 - 各自原来的并发上限（`CLAUDE_PARALLEL` 等）照旧在，分配器管的是三边加起来。
 - 占不到位子最多等 30 分钟，再等不到就当 Claude 用不了、走原来的模型（会花钱，日志里有）。
+
+## 补充（2026-11-05）：第三家 agy，正本 + 同步脚本
+
+用户：「能不能同时让多个项目都能监控，不只有 claude gate，应该加入 Codex + AG（Gemini）」。
+
+- 加 provider `agy`（Antigravity CLI，用户的 Gemini 订阅）：并发 `CLAUDE_GATE_CAP_AGY` / `CLAUDE_GATE_RESERVE_AGY`（6 / 1）；`slot(provider='agy', model=…)` 按模型看额度桶（Argon 一个周桶；Flash / Pro 看 Gemini 的 5 小时 + 周桶）。
+- 用户平时自己也用 Gemini，所以给他留：桶剩得少于 `CLAUDE_GATE_AGY_KEEP`（默认 0.4）普通 / 批量的活就不起，交互的到 `CLAUDE_GATE_AGY_KEEP_LIVE`（0.1）。读数来自 `agy -p /usage`（不花额度），五分钟最多探一次，存在 meta 里三边共用；探不到不挡。
+- 表结构不变（读数放 meta，账记在 calls、provider = agy、usd 0），墨页 Node 版不用跟着改。
+- 副本变成四份（加了 uni-globe），手动三处一起改容易漏：定 `getAudio/claude_gate.py` 为正本，`scripts/sync_gate.py` 复制过去、`--check` 查有没有不一样。

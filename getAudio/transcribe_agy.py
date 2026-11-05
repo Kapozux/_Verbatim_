@@ -15,6 +15,8 @@
   · m4a 不认（audio/mp4a-latm）；ogg/opus 读进去只转了最后几秒；mp3 稳。所以这里自己切 mp3，不复用 Gemini 那个切 ogg 的。
   · 额度：`agy -p /usage --output-format json` 给每个桶剩几成（Gemini 桶有 5 小时 + 周，Argon 单独一个周桶）。
     剩得少于 AGY_MIN_REMAINING（默认 5%）就当撞了上限，交给 app 的后备（OpenRouter → Whisper）。
+  · 11-05 接进共用的闸（claude_gate 第三家 agy）：开了 CLAUDE_GATE 就由闸管额度（默认给用户留四成，他平时自己也用 Gemini；
+    CLAUDE_GATE_AGY_KEEP 改）、占并发位子、记进共用账本，撞上限三边一起停；上面 AGY_MIN_REMAINING 那套只在没开闸时用。
 """
 
 import json
@@ -27,6 +29,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_EXCEPTION
 
+import claude_gate
 import config
 import usage
 from transcribe_gemini import _get_audio_duration_seconds, parse_timestamped_text, shift_timestamps
@@ -118,6 +121,11 @@ def quota(force=False):
 
 
 def check_quota(engine):
+    if claude_gate.enabled():                      # 闸开着：额度由闸看（给用户留几成、三边共用一份读数）
+        short = claude_gate.agy_short(MODELS[engine])
+        if short:
+            raise AgyQuotaOut(f'agy quota: {short}')
+        return
     q = quota()
     if not q:
         return
@@ -172,8 +180,14 @@ def _prompt(path, strict=False):
 
 
 def _ask(model, path, cwd, strict=False):
-    d = _run_json(['-p', _prompt(path, strict), '--model', model, '--print-timeout', f'{_TIMEOUT_S}s'],
-                  timeout=_TIMEOUT_S + 60, cwd=cwd)
+    t0 = time.time()
+    try:
+        with claude_gate.slot('verbatim', 'transcribe', 'normal', provider='agy', model=model):
+            d = _run_json(['-p', _prompt(path, strict), '--model', model, '--print-timeout', f'{_TIMEOUT_S}s'],
+                          timeout=_TIMEOUT_S + 60, cwd=cwd)
+    except claude_gate.Paused as e:
+        raise AgyQuotaOut(f'agy quota: {e}') from e
+    claude_gate.record('verbatim', 'transcribe', model, d, time.time() - t0, 'normal', provider='agy')
     u = d.get('usage') or {}
     usage.record('agy', model, 'transcribe', input_tokens=u.get('input_tokens') or 0,
                  output_tokens=u.get('output_tokens') or 0, thinking_tokens=u.get('thinking_tokens') or 0,
@@ -188,6 +202,7 @@ def _ask(model, path, cwd, strict=False):
     if str(d.get('status') or '').upper() != 'SUCCESS':
         raise RuntimeError(f"agy 状态 {d.get('status')}: {text[:200]}")
     if 'quota' in low and any(w in low for w in ('exceed', 'exhaust', 'reached', 'limit')) and not _TS.search(text):
+        claude_gate.pause(time.time() + 1800, text.strip()[:200], 'verbatim', provider='agy')    # 三边一起停半小时
         raise AgyQuotaOut(f'agy quota: {text.strip()[:200]}')
     return text
 

@@ -196,4 +196,43 @@ row, eng = run('agy_flash', 'c.mp3')
 t.check('app：Flash 额度用完 → 落 Whisper', row.get('status') == 'done' and eng == 'whisper' and whisper_calls[0] == 1,
         f"{row.get('status')} {eng} {row.get('error')}")
 
+# ---- 接上共用的闸（claude_gate 第三家 agy，11-05）：额度看闸、记进共用账本、撞上限三边一起停 ----
+import sqlite3  # noqa: E402
+import time  # noqa: E402
+import claude_gate  # noqa: E402
+
+os.environ['CLAUDE_GATE'] = os.path.join(TMP, 'gate', 'gate.db')
+gate_q = {'gemini-5h': (0.9, 0), 'gemini-weekly': (0.9, 0), 'gemini-argon-wtu-weekly': (0.9, 0)}
+claude_gate._agy_probe = lambda: dict(gate_q)
+TA._run_json = fake_run
+quota_now.update({'gemini-5h': 0.9, 'argon': 0.9})
+TA._quota_cache.update(t=0, data=None)
+calls.clear()
+TA.transcribe_audio(src, 'agy_flash')
+g = sqlite3.connect(claude_gate.path(), isolation_level=None)
+rows = g.execute("SELECT app, purpose, model FROM calls WHERE provider='agy'").fetchall()
+t.check('开了闸：每块记进共用账本（provider=agy）', len(rows) == 2 and rows[0][:2] == ('verbatim', 'transcribe'), str(rows))
+
+gate_q['gemini-weekly'] = (0.3, 0)            # 给用户留四成：Flash 周额度只剩 30%
+g.execute('DELETE FROM meta')
+try:
+    TA.transcribe_audio(src, 'agy_flash')
+    err = None
+except Exception as e:  # noqa: BLE001
+    err = e
+t.check('闸说 Gemini 额度要留给用户 → 当撞上限（app 认得、落后备）', isinstance(err, TA.AgyQuotaOut) and A._is_quota_out(err), str(err))
+gate_q['gemini-weekly'] = (0.9, 0)
+g.execute('DELETE FROM meta')
+
+TA._run_json = lambda args, timeout, cwd=None: ({'status': 'SUCCESS', 'response': 'You have exhausted your quota limit.', 'usage': {}}
+                                                if '--model' in args else fake_run(args, timeout, cwd))
+try:
+    TA.transcribe_audio(src, 'agy_flash')
+except Exception:  # noqa: BLE001
+    pass
+t.check('agy 回撞上限 → 写进共用的 pause（只停 agy）', claude_gate.paused_until('agy') > time.time()
+        and not claude_gate.paused_until('claude'))
+TA._run_json = fake_run
+g.execute('DELETE FROM pauses')
+
 t.finish()

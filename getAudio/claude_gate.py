@@ -20,6 +20,16 @@
 并发上限各算各的（codex 用 CLAUDE_GATE_CAP_CODEX / CLAUDE_GATE_RESERVE_CODEX，默认 4 / 1，Plus 额度小），
 撞上限也只停那一家（表 pauses）；账记在同一张 calls 里（provider 一列），`python3 claude_gate.py` 一页看两家。
 老的 pause 表（只有 Claude 一行）还读，没升级的应用写进去也认。
+
+11-05 加了第三家 agy（Antigravity CLI，用户的 Gemini 订阅；用户：「不只有 claude gate，应该加入 Codex + AG」）：
+并发 CLAUDE_GATE_CAP_AGY / CLAUDE_GATE_RESERVE_AGY（默认 6 / 1）。用户平时自己也用 Gemini，所以给他留额度：
+看 `agy -p /usage` 的真数（每个桶剩几成；五分钟最多探一次，三边共用 meta 里那份），slot(provider='agy', model=…)
+按模型看对应的桶（Argon 单独一个周桶，Flash / Pro 看 Gemini 的 5 小时 + 周桶），剩得少于 CLAUDE_GATE_AGY_KEEP
+（默认 0.4：应用最多用到六成）就抛 Paused；交互的到 CLAUDE_GATE_AGY_KEEP_LIVE（默认 0.1）才让。探不到（agy 坏了 / 没装）不挡。
+
+这份是正本：getAudio/claude_gate.py。Ephemeris（ephemeris/src）、uni-globe（uni-globe/server）各有一份副本，
+改完跑 `python3 getAudio/scripts/sync_gate.py` 同步（`--check` 只看有没有不一样）；别直接改副本。
+墨页的 Node 版（pdf2md-web/server/claude-gate.mjs）手写的，只要表结构不变就不用跟着改。
 """
 import os
 import sqlite3
@@ -39,8 +49,8 @@ CREATE INDEX IF NOT EXISTS cc_calls_ts ON cc_calls(ts);
 CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v REAL);
 CREATE TABLE IF NOT EXISTS pauses (provider TEXT PRIMARY KEY, until REAL, reason TEXT, app TEXT);
 """
-PROVIDERS = ('claude', 'codex')
-NAMES = {'claude': 'Claude', 'codex': 'GPT（Codex）'}
+PROVIDERS = ('claude', 'codex', 'agy')
+NAMES = {'claude': 'Claude', 'codex': 'GPT（Codex）', 'agy': 'Gemini（agy）'}
 STALE_S = 2 * 3600          # 占了两个小时还没还的位子当它死了（进程崩了没走到 finally）
 
 
@@ -82,6 +92,8 @@ def _db():
 def _cap(provider):
     if provider == 'claude':
         return int(_num('CLAUDE_GATE_CAP', 24)), int(_num('CLAUDE_GATE_RESERVE', 4))
+    if provider == 'agy':
+        return int(_num('CLAUDE_GATE_CAP_AGY', 6)), int(_num('CLAUDE_GATE_RESERVE_AGY', 1))
     return int(_num('CLAUDE_GATE_CAP_CODEX', 4)), int(_num('CLAUDE_GATE_RESERVE_CODEX', 1))
 
 
@@ -233,6 +245,91 @@ def week(c):
     return got or have
 
 
+AGY_EVERY = 300
+_AGY_PATHS = ('/opt/homebrew/bin/agy', '/usr/local/bin/agy')
+
+
+def agy_buckets(model):
+    """这个模型用的是 agy 的哪几个桶。Claude / GPT 走 agy 的另一组（3p-*）。"""
+    m = str(model or '').lower()
+    if 'argon' in m:
+        return ('gemini-argon-wtu-weekly',)
+    if 'claude' in m or 'gpt' in m:
+        return ('3p-5h', '3p-weekly')
+    return ('gemini-5h', 'gemini-weekly')
+
+
+def _agy_probe():
+    """跑一次 agy -p /usage：{桶 id: (剩几成, 重置时间)}；读不到 None。不花额度。"""
+    import calendar
+    import json
+    import shutil
+    import subprocess
+    exe = os.environ.get('AGY_BIN') or shutil.which('agy') or next((p for p in _AGY_PATHS if os.path.exists(p)), None)
+    if not exe:
+        return None
+    try:
+        r = subprocess.run([exe, '-p', '/usage', '--output-format', 'json', '--print-timeout', '60s'],
+                           stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding='utf-8', errors='replace',
+                           timeout=90, cwd=os.path.dirname(path()))
+        line = next(l for l in reversed(r.stdout.splitlines()) if l.lstrip().startswith('{'))
+        groups = ((json.loads(line).get('command') or {}).get('data') or {}).get('groups') or []
+    except (OSError, subprocess.SubprocessError, StopIteration, ValueError, AttributeError):
+        return None
+    out = {}
+    for g in groups:
+        for b in g.get('buckets') or []:
+            try:
+                reset = calendar.timegm(time.strptime(str(b.get('reset_time', ''))[:19], '%Y-%m-%dT%H:%M:%S'))
+            except ValueError:
+                reset = 0.0
+            if 'remaining_fraction' in b:
+                out[b['id']] = (float(b['remaining_fraction']), float(reset))
+    return out or None
+
+
+def agy_quota(c, force=False):
+    """{桶 id: (剩几成, 重置时间)}，五分钟内三边共用 meta 里那份；探不到是 {}。"""
+    rows = dict(c.execute("SELECT k, v FROM meta WHERE k LIKE 'agy:%'").fetchall())
+    now = time.time()
+    if not force and rows.get('agy:ts', 0) > now - AGY_EVERY:
+        have = {}
+        for k, v in rows.items():
+            if k.endswith(':rem'):
+                b = k[4:-4]
+                have[b] = (v, rows.get(f'agy:{b}:reset', 0.0))
+        return have
+    c.execute("INSERT INTO meta (k, v) VALUES ('agy:ts', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v", (now,))
+    got = _agy_probe() or {}
+    c.execute("DELETE FROM meta WHERE k LIKE 'agy:%' AND k <> 'agy:ts'")
+    c.executemany("INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+                  [(f'agy:{b}:{x}', v) for b, (rem, reset) in got.items() for x, v in (('rem', rem), ('reset', reset))])
+    return got
+
+
+def _agy_short(c, prio, model):
+    """额度不够给应用的：返回说明（抛 Paused 用）；够就 None。"""
+    keep = _num('CLAUDE_GATE_AGY_KEEP_LIVE', 0.1) if prio == 'live' else _num('CLAUDE_GATE_AGY_KEEP', 0.4)
+    q = agy_quota(c)
+    for b in agy_buckets(model):
+        if b in q and q[b][0] < keep:
+            rem, reset = q[b]
+            when = time.strftime('%m-%d %H:%M', time.localtime(reset)) if reset else '?'
+            return f'Gemini（agy）额度 {b} 只剩 {rem:.0%}，剩下的留给你自己（{when} 重置）'
+    return None
+
+
+def agy_short(model, prio='normal'):
+    """应用起 agy 之前先看一眼：额度要留给用户了就返回说明，够用 None。没开闸 None。"""
+    if not enabled():
+        return None
+    c = _db()
+    try:
+        return _agy_short(c, prio, model)
+    finally:
+        c.close()
+
+
 def _paused(c, provider, now):
     """(停到几点, 原因, 哪个应用撞的)；没停着是 None。Claude 也看老的 pause 表。"""
     rows = [c.execute('SELECT until, reason, app FROM pauses WHERE provider = ?', (provider,)).fetchone()]
@@ -278,8 +375,9 @@ def _may(c, prio, provider='claude'):
 
 
 @contextmanager
-def slot(app, purpose='', prio='normal', wait=1800, provider='claude'):
-    """占一个位子再起 claude / codex 进程。prio：live（交互）/ normal / batch（批量）。停着就抛 Paused；等了 wait 秒还没轮到也抛。"""
+def slot(app, purpose='', prio='normal', wait=1800, provider='claude', model=None):
+    """占一个位子再起 claude / codex / agy 进程。prio：live（交互）/ normal / batch（批量）。停着就抛 Paused；等了 wait 秒还没轮到也抛。
+    model：agy 用来挑看哪个额度桶（Argon 和 Flash 是分开的），别家不看。"""
     if not enabled():
         yield
         return
@@ -290,6 +388,11 @@ def slot(app, purpose='', prio='normal', wait=1800, provider='claude'):
         if w and w[0] >= 1 - keep:
             c.close()
             raise Paused(f'Claude 7 天额度已用 {w[0]:.0%}，剩下的留给你自己（{time.strftime("%m-%d %H:%M", time.localtime(w[1]))} 重置）')
+    if provider == 'agy':
+        short = _agy_short(c, prio, model)
+        if short:
+            c.close()
+            raise Paused(short)
     if provider == 'claude' and prio != 'live' and _num('CLAUDE_GATE_LIMIT_5H', 0):
         sync_cc(c)
     who = NAMES.get(provider, provider)
@@ -325,13 +428,16 @@ def slot(app, purpose='', prio='normal', wait=1800, provider='claude'):
 
 def record(app, purpose, model, d, secs=0.0, prio='normal', provider='claude'):
     """d：claude -p 的 result（--output-format json 的整个对象，或 stream-json 的最后一个 result 事件）；
-    codex：{'usage': turn.completed 里的 usage, 'is_error': …}（订阅不按钱算，usd 记 0）。"""
+    codex：{'usage': turn.completed 里的 usage, 'is_error': …}；agy：agy -p --output-format json 的整个对象（都是订阅，usd 记 0）。"""
     if not enabled():
         return
     u = (d or {}).get('usage') or {}
     if provider == 'codex':
         u = {'input_tokens': u.get('input_tokens'), 'output_tokens': (u.get('output_tokens') or 0) + (u.get('reasoning_output_tokens') or 0),
              'cache_read_input_tokens': u.get('cached_input_tokens'), 'cache_creation_input_tokens': u.get('cache_write_input_tokens')}
+    elif provider == 'agy':
+        u = {'input_tokens': u.get('input_tokens'), 'output_tokens': (u.get('output_tokens') or 0) + (u.get('thinking_tokens') or 0),
+             'cache_read_input_tokens': u.get('cache_read_tokens')}
     try:
         c = _db()
         c.execute('INSERT INTO calls (ts, app, purpose, prio, model, input_tokens, output_tokens, cache_read, cache_write, usd, secs, ok, provider) '
@@ -378,7 +484,7 @@ def status():
            'cc_7d': c.execute('SELECT COALESCE(SUM(usd), 0) FROM cc_calls WHERE ts > ?', (now - 7 * 86400,)).fetchone()[0],
            'slots': c.execute("SELECT app, purpose, prio, ROUND(? - started), COALESCE(provider, 'claude') FROM slots ORDER BY started",
                               (now,)).fetchall(),
-           'pause': {p: _paused(c, p, now) for p in PROVIDERS}}
+           'pause': {p: _paused(c, p, now) for p in PROVIDERS}, 'agy_quota': agy_quota(c)}
     for name, span in (('5h', 5 * 3600), ('7d', 7 * 86400)):
         out[name] = c.execute("SELECT app, model, COUNT(*), ROUND(SUM(usd), 3), SUM(ok = 0), COALESCE(provider, 'claude'), "
                               'SUM(input_tokens + output_tokens) FROM calls WHERE ts > ? '
@@ -400,6 +506,11 @@ if __name__ == '__main__':
         if s['pause'][p]:
             u, why, app = s['pause'][p]
             print(f'  停着：到 {time.strftime("%m-%d %H:%M", time.localtime(u))}（{app}：{(why or "")[:80]}）')
+    if s['agy_quota']:
+        print('Gemini（agy）额度剩下：' + '，'.join(
+            f'{b} {rem:.0%}' + (f'（{time.strftime("%m-%d %H:%M", time.localtime(reset))} 重置）' if reset else '')
+            for b, (rem, reset) in sorted(s['agy_quota'].items()) if not b.startswith('3p-')))
+        print(f'  应用最多用到剩 {_num("CLAUDE_GATE_AGY_KEEP", 0.4):.0%}（交互的到 {_num("CLAUDE_GATE_AGY_KEEP_LIVE", 0.1):.0%}）')
     cw = codex_week()
     if cw:
         seen = time.strftime("%m-%d %H:%M", time.localtime(cw[2]))
