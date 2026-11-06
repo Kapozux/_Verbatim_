@@ -1366,7 +1366,8 @@ def _run_transcription(task_id, filepath, engine, original_filename, q,
                 'message': f"正在用订阅里的 {'Gemini Flash' if engine == 'agy_flash' else 'Gemini Argon'} 转写...",
             }))
             segments, full_text = transcribe_agy.transcribe_audio(
-                input_path, engine, progress_callback=progress_cb)
+                input_path, engine, progress_callback=progress_cb,
+                should_stop=lambda: _chain_stopped(chain_id, task_id))     # 等 agy 额度时链条被停了就别再等
             for seg in segments:
                 q.put(json.dumps({'type': 'segment', **seg}))
             _verify(segments)
@@ -1400,6 +1401,8 @@ def _run_transcription(task_id, filepath, engine, original_filename, q,
                     'type': 'queued',
                     'message': f'网络出错，重新排队（第 {net_retry + 1} 次）：{str(e)[:60]}',
                 }))
+        # 链条被停了（例如在等 agy 额度时）：下面的后备（OpenRouter 花钱 / Whisper）都跳过，照常记失败
+        halted = type(e).__name__ == 'Stopped' or _chain_stopped(chain_id, task_id)
         content_block = _is_content_block(e)
         empty_out = isinstance(e, _EmptyTranscript)
         quota_out = not requeued and engine != 'whisper' and _is_quota_out(e)
@@ -1409,8 +1412,8 @@ def _run_transcription(task_id, filepath, engine, original_filename, q,
         # 官方 Gemini 不行（撞月度上限、调用失败、白卷）→ 先试 OpenRouter 上的 Gemini，再轮到 Whisper。
         # 10-28 用户：「如果 google 官方的不行就用 OR」。内容拦截不试：OR 背后是同一个 Gemini，拦截照旧。
         import transcribe_openrouter
-        if (not requeued and engine in ('gemini', 'gemini35', 'agy_flash', 'agy_argon') and not content_block
-                and transcribe_openrouter.api_key()):
+        if (not requeued and not halted and engine in ('gemini', 'gemini35', 'agy_flash', 'agy_argon')
+                and not content_block and transcribe_openrouter.api_key()):
             try:
                 q.put(json.dumps({
                     'type': 'progress', 'percent': 0,
@@ -1432,7 +1435,7 @@ def _run_transcription(task_id, filepath, engine, original_filename, q,
                 timing['openrouter_error'] = str(e_or)[:300]
                 print(f'[openrouter] {task_id}: {e_or}')
                 e = RuntimeError(f'{engine} 失败：{e}；OpenRouter 后备也失败：{e_or}')
-        if (not fell_back and not requeued and engine != 'whisper'
+        if (not fell_back and not requeued and not halted and engine != 'whisper'
                 and (fallback_whisper or content_block or empty_out or quota_out)):
             try:
                 why = ('Content-blocked by Gemini (deterministic)' if content_block

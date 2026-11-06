@@ -46,13 +46,69 @@ _QUOTA_TTL_S = 300
 _TS = re.compile(r'\[((?:\d{1,2}:)?\d{1,2}:\d{2})\]')
 _BLOCK_MARKERS = ("blocked by Gemini's filters", 'blocked by gemini', 'is not supported by the current model')
 
-_inflight = {e: threading.Semaphore(config.ENGINE_CONCURRENCY.get(e, 3)) for e in ENGINES}
+# 全局同时几个切片（所有视频加起来；config.AGY_CHUNKS）。Flash 被拦改走 Argon 时占的是 Argon 的位子
+_inflight = {e: threading.Semaphore(config.AGY_CHUNKS.get(e, 3)) for e in ENGINES}
 _quota_cache = {'t': 0.0, 'data': None}
 _quota_lock = threading.Lock()
 
 
 class AgyQuotaOut(RuntimeError):
     pass
+
+
+# 额度用到线时怎么办（2026-11-06，用户：「等额度恢复再转」，不改走付费的 OpenRouter）：
+# AGY_QUOTA_WAIT=on → 停下来，每 WAIT_POLL_S 秒看一次，恢复了接着转；链条被停了就不再等；最多等 WAIT_MAX_S。
+# 没开（默认）→ 照旧马上抛 AgyQuotaOut，交给 app 的后备（OpenRouter → Whisper）。
+WAIT_POLL_S = 300
+WAIT_MAX_S = 48 * 3600
+on_wait = None            # 测试 / 日志用：on_wait(原因)，每轮开始等的时候调一次
+
+
+def quota_wait_on():
+    return (os.environ.get('AGY_QUOTA_WAIT') or '').strip().lower() in ('on', '1', 'true', 'yes')
+
+
+class Stopped(RuntimeError):
+    pass
+
+
+def _nap(should_stop):
+    """睡一轮（WAIT_POLL_S），中途链条被停了就抛 Stopped。"""
+    end = time.time() + WAIT_POLL_S
+    while True:
+        if should_stop and should_stop():
+            raise Stopped('已随链条停止（当时在等 agy 额度恢复）')
+        left = end - time.time()
+        if left <= 0:
+            return
+        time.sleep(min(5.0, left))
+
+
+def _waiting(why, t0):
+    """开始 / 继续等一轮：开关没开就抛 AgyQuotaOut；等太久也抛。"""
+    why = str(why)
+    if not why.startswith('agy quota'):
+        why = f'agy quota: {why}'
+    if not quota_wait_on():
+        raise AgyQuotaOut(why)
+    if time.time() - t0 > WAIT_MAX_S:
+        raise AgyQuotaOut(f'{why}（等了 {WAIT_MAX_S // 3600} 小时还没恢复）')
+    if on_wait:
+        on_wait(why)
+    else:
+        print(f'[agy] 额度不够，等 {WAIT_POLL_S // 60} 分钟再看：{why[:160]}', flush=True)
+
+
+def wait_quota(engine, should_stop=None):
+    """转之前看额度；不够就按 AGY_QUOTA_WAIT 的规矩等（或马上抛）。"""
+    t0 = time.time()
+    while True:
+        try:
+            check_quota(engine)
+            return
+        except AgyQuotaOut as e:
+            _waiting(e, t0)
+            _nap(should_stop)
 
 
 class _Blocked(RuntimeError):
@@ -179,14 +235,18 @@ def _prompt(path, strict=False):
             + (_STRICT if strict else ''))
 
 
-def _ask(model, path, cwd, strict=False):
-    t0 = time.time()
-    try:
-        with claude_gate.slot('verbatim', 'transcribe', 'normal', provider='agy', model=model):
-            d = _run_json(['-p', _prompt(path, strict), '--model', model, '--print-timeout', f'{_TIMEOUT_S}s'],
-                          timeout=_TIMEOUT_S + 60, cwd=cwd)
-    except claude_gate.Paused as e:
-        raise AgyQuotaOut(f'agy quota: {e}') from e
+def _ask(model, path, cwd, strict=False, should_stop=None):
+    w0 = time.time()
+    while True:
+        t0 = time.time()
+        try:
+            with claude_gate.slot('verbatim', 'transcribe', 'normal', provider='agy', model=model):
+                d = _run_json(['-p', _prompt(path, strict), '--model', model, '--print-timeout', f'{_TIMEOUT_S}s'],
+                              timeout=_TIMEOUT_S + 60, cwd=cwd)
+            break
+        except claude_gate.Paused as e:          # 闸说额度要留给用户 / 三边一起停着：按规矩等或马上抛
+            _waiting(e, w0)
+            _nap(should_stop)
     claude_gate.record('verbatim', 'transcribe', model, d, time.time() - t0, 'normal', provider='agy')
     u = d.get('usage') or {}
     usage.record('agy', model, 'transcribe', input_tokens=u.get('input_tokens') or 0,
@@ -203,21 +263,24 @@ def _ask(model, path, cwd, strict=False):
         raise RuntimeError(f"agy 状态 {d.get('status')}: {text[:200]}")
     if 'quota' in low and any(w in low for w in ('exceed', 'exhaust', 'reached', 'limit')) and not _TS.search(text):
         claude_gate.pause(time.time() + 1800, text.strip()[:200], 'verbatim', provider='agy')    # 三边一起停半小时
-        raise AgyQuotaOut(f'agy quota: {text.strip()[:200]}')
+        _waiting(text.strip()[:200], w0)
+        _nap(should_stop)
+        return _ask(model, path, cwd, strict, should_stop)
     return text
 
 
-def _transcribe_chunk(engine, path, chunk_seconds, cwd):
+def _transcribe_chunk(engine, path, chunk_seconds, cwd, should_stop=None):
     """转一块。Flash 被安全过滤误拦就这一块先再试一次 Flash、还拦再换 Argon；还拦就当内容拦截报上去（SAFETY）。
-    时间戳太稀就带提醒再要一次。"""
+    时间戳太稀就带提醒再要一次。换 Argon 时先让出 Flash 的位子、再排 Argon 的（别占着一个干等）。"""
     model = MODELS[engine]
+    blocked = None
     with _inflight[engine]:
         try:
-            text = _ask(model, path, cwd)
+            text = _ask(model, path, cwd, should_stop=should_stop)
             # 时间戳太稀（11-04 实测：Flash 第一块 15 分钟只打了一个）→ 带「再强调一次」再要一遍，取时间戳多的那份
             if chunk_seconds and chunk_seconds >= 120 and len(_TS.findall(text)) < chunk_seconds / 90:
                 try:
-                    again = _ask(model, path, cwd, strict=True)
+                    again = _ask(model, path, cwd, strict=True, should_stop=should_stop)
                     if len(_TS.findall(again)) > len(_TS.findall(text)):
                         text = again
                 except _Blocked:
@@ -227,13 +290,16 @@ def _transcribe_chunk(engine, path, chunk_seconds, cwd):
                 raise RuntimeError(f'agy 内容被安全过滤 SAFETY：{e}') from e
             try:
                 # Flash 的误拦有随机性（11-04 同一块连跑两次：一次拦、一次正常 12 个时间戳），先原样再来一次，省 Argon 的周额度
-                text = _ask(model, path, cwd)
-            except _Blocked:
-                try:
-                    check_quota('agy_argon')
-                    text = _ask(MODELS['agy_argon'], path, cwd)
-                except _Blocked as e2:
-                    raise RuntimeError(f'agy 内容被安全过滤 SAFETY（Flash 两次、Argon 一次都拦）：{e2}') from e2
+                text = _ask(model, path, cwd, should_stop=should_stop)
+            except _Blocked as e2:
+                blocked = e2
+    if blocked is not None:
+        wait_quota('agy_argon', should_stop)
+        with _inflight['agy_argon']:
+            try:
+                text = _ask(MODELS['agy_argon'], path, cwd, should_stop=should_stop)
+            except _Blocked as e3:
+                raise RuntimeError(f'agy 内容被安全过滤 SAFETY（Flash 两次、Argon 一次都拦）：{e3}') from e3
     return rescale_timestamps(text, chunk_seconds)
 
 
@@ -256,11 +322,11 @@ def split_mp3(filepath, chunk_seconds, out_dir):
     return chunks, duration
 
 
-def transcribe_audio(filepath, engine='agy_flash', progress_callback=None):
+def transcribe_audio(filepath, engine='agy_flash', progress_callback=None, should_stop=None):
     """转写整个文件，返回 (segments, full_text)，跟 transcribe_openrouter.transcribe_audio 一样。"""
     if engine not in ENGINES:
         raise ValueError(f'不认识的 agy 引擎：{engine}')
-    check_quota(engine)
+    wait_quota(engine, should_stop)
     tmp = tempfile.mkdtemp(prefix='agy_chunks_')
     try:
         chunks, duration = split_mp3(filepath, CHUNK_SECONDS, tmp)
@@ -277,7 +343,7 @@ def transcribe_audio(filepath, engine='agy_flash', progress_callback=None):
         def _one(idx):
             path, offset = chunks[idx]
             n_len = _chunk_len(idx)
-            text = _transcribe_chunk(engine, path, n_len, tmp)
+            text = _transcribe_chunk(engine, path, n_len, tmp, should_stop)
             parts[idx] = shift_timestamps(text, offset, chunk_seconds=n_len).strip()
             if progress_callback:
                 with lock:
@@ -290,7 +356,8 @@ def transcribe_audio(filepath, engine='agy_flash', progress_callback=None):
         if total == 1:
             _one(0)
         else:
-            pool = ThreadPoolExecutor(max_workers=min(3, total))
+            # 有几片开几路，真正同时跑几片由 _inflight（全局切片位子）管：别的视频没在用时一个视频能用满
+            pool = ThreadPoolExecutor(max_workers=min(config.AGY_CHUNKS.get(engine, 3), total))
             try:
                 futures = [pool.submit(usage.bound(_one), i) for i in range(total)]
                 wait(futures, return_when=FIRST_EXCEPTION)
