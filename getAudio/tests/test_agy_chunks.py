@@ -260,4 +260,33 @@ t.check('偶尔读不到登录也重试', segs and flaky['n'] == 0)
 TA._run_json = fake_run
 TA.check_quota = real_check
 
+# 11. 长视频一片彻底失败：别的片马上停，不再对着删掉的临时目录重试
+calls = {'n': 0}
+
+
+def one_dies(args, timeout, cwd=None):
+    if args[:2] == ['-p', '/usage']:
+        return {'command': {'data': {'groups': []}}}
+    name = os.path.basename(args[1].split('：', 1)[1].split('\n', 1)[0])
+    with lock:
+        calls['n'] += 1
+    time.sleep(0.05)
+    if name == 'die_0000.mp3':                   # 这一片是「不重试」的错（权限被拒），马上失败
+        return {'status': 'SUCCESS', 'response': '', 'usage': {}, 'denied_actions': [{'action': 'read_file'}]}
+    return {'status': 'ERROR', 'response': '', 'usage': {}} if name == 'die_0001.mp3' else fake_run(args, timeout, cwd)
+
+
+TA.FLAKY_WAITS = (0.3, 0.3, 0.3)
+TA.check_quota = lambda engine: None
+TA._run_json = one_dies
+TA.split_mp3 = splitter(2, 'die')
+t0 = time.time()
+try:
+    TA.transcribe_audio(src, 'agy_flash')
+except Exception:  # noqa: BLE001
+    pass
+t.check('一片失败后同期别的片不再重试', calls['n'] <= 3 and time.time() - t0 < 1, (calls, round(time.time() - t0, 2)))
+TA._run_json = fake_run
+TA.check_quota = real_check
+
 t.finish()

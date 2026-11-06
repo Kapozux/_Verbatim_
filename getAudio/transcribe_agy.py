@@ -41,7 +41,7 @@ MODELS = {'agy_flash': 'gemini-3.8-flash-low', 'agy_argon': 'gemini-4-argon-low'
 BUCKETS = {'agy_flash': ('gemini-5h', 'gemini-weekly'), 'agy_argon': ('gemini-argon-wtu-weekly',)}
 
 CHUNK_SECONDS = 15 * 60
-_TIMEOUT_S = 600
+_TIMEOUT_S = int(os.environ.get('AGY_TIMEOUT_S') or 900)   # 11-06：5 路并发时 15 分钟一片偶尔 600 秒写不完，回半截稿 + ERROR
 _QUOTA_TTL_S = 300
 _TS = re.compile(r'\[((?:\d{1,2}:)?\d{1,2}:\d{2})\]')
 _BLOCK_MARKERS = ("blocked by Gemini's filters", 'blocked by gemini', 'is not supported by the current model')
@@ -275,6 +275,8 @@ def _ask_once(model, path, cwd, strict=False, should_stop=None):
         except claude_gate.Paused as e:          # 闸说额度要留给用户 / 三边一起停着：按规矩等或马上抛
             _waiting(e, w0)
             _nap(should_stop)
+        except FileNotFoundError:
+            raise                                # 切片 / 工作目录没了（这一期已经放弃），重试没用
         except (subprocess.TimeoutExpired, json.JSONDecodeError, OSError) as e:
             raise _Flaky(f'agy 没回结果：{type(e).__name__}: {str(e)[:120]}') from e
         except RuntimeError as e:                # 多个 agy 同时起，偶尔读不到登录（日志 You are not logged into Antigravity）
@@ -377,10 +379,19 @@ def transcribe_audio(filepath, engine='agy_flash', progress_callback=None, shoul
         done = [0]
         lock = threading.Lock()
 
+        gone = threading.Event()             # 一片彻底失败、整期放弃 → 其它片别再转 / 重试（临时目录马上删）
+
+        def stop():
+            return gone.is_set() or bool(should_stop and should_stop())
+
         def _one(idx):
             path, offset = chunks[idx]
             n_len = _chunk_len(idx)
-            text = _transcribe_chunk(engine, path, n_len, tmp, should_stop)
+            try:
+                text = _transcribe_chunk(engine, path, n_len, tmp, stop)
+            except BaseException:
+                gone.set()
+                raise
             parts[idx] = shift_timestamps(text, offset, chunk_seconds=n_len).strip()
             if progress_callback:
                 with lock:
