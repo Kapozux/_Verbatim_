@@ -2527,7 +2527,7 @@ CHAINS_DIR = os.path.join(config.RESULTS_FOLDER, '_chains')
 os.makedirs(CHAINS_DIR, exist_ok=True)
 
 _CHAIN_ID_RE = re.compile(r'^[0-9a-f]{32}$')
-_MAX_CHAIN_VIDEOS = 600  # 防手滑整个频道几千个视频全下下来
+_MAX_CHAIN_VIDEOS = int(os.environ.get("MAX_CHAIN_VIDEOS") or 600)  # 防手滑整个频道几千个视频全下下来；整频道要全转（11-06 邵艾伦 679 期）就在 .env 里调高
 _CHAIN_PROBE_COOLDOWN = 1800  # 同一条链两次真探测（打列表接口）之间的最短间隔（秒）：
                                # 防连点 Continue 把出口 IP 敲脏，已有完整缓存时冷却内直接复用
 
