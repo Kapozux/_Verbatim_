@@ -257,7 +257,10 @@ def whisper_words(path):
     if kind == 'mlx':
         import mlx_whisper
         with tw._mlx_gpu_lock:
-            r = mlx_whisper.transcribe(path, path_or_hf_repo=model, word_timestamps=True)
+            try:
+                r = mlx_whisper.transcribe(path, path_or_hf_repo=model, word_timestamps=True)
+            finally:
+                tw.free_gpu()
         segs = r.get('segments') or []
         return [(round(float(w['start']), 2), w['word'].strip()) for s in segs for w in s.get('words') or [] if w['word'].strip()]
     if kind == 'faster':
@@ -268,9 +271,11 @@ def whisper_words(path):
 
 
 def queue_whisper(task_id, audio_path, offset_sec=0):
-    """转写存好后调（Gemini 引擎、来源不是 YouTube）：留一份音频排队补逐词时间轴。WORDTIME_WHISPER=0 时不做。"""
+    """转写存好后调（Gemini 引擎、来源不是 YouTube）：留一份音频排队补逐词时间轴。
+    11-06 起默认不做（用户：「只要有这句原话就够了，具体几分几秒用得太少」），WORDTIME_WHISPER=1 才开；
+    点出处时现场对一小段（/api/cite/align）不受影响。"""
     global _wworker
-    if os.environ.get('WORDTIME_WHISPER', '1') != '1' or not task_id or has(task_id) or not os.path.isfile(audio_path or ''):
+    if os.environ.get('WORDTIME_WHISPER', '0') != '1' or not task_id or has(task_id) or not os.path.isfile(audio_path or ''):
         return False
     keep = os.path.join(align_dir(), f'{task_id}__{int(offset_sec or 0)}{os.path.splitext(audio_path)[1].lower()}')
     try:
