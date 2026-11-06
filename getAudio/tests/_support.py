@@ -74,6 +74,8 @@ def isolate(prefix, cheap_route=False, real_moye=False):
     os.environ['AGY_QUOTA_WAIT'] = ''          # 作者 .env 开着「等额度」：测试里不能真等
     os.environ['VOICES_AUTO'] = ''
     os.environ["CLAUDE_GATE"] = ""
+    for k in ('CLAUDE_GATE_AGY_KEEP', 'CLAUDE_GATE_AGY_KEEP_LIVE', 'CLAUDE_GATE_CAP_AGY', 'CLAUDE_GATE_RESERVE_AGY'):
+        os.environ[k] = ''                     # 作者 .env 改过闸的 agy 额度 / 位子（11-06 KEEP=0）：测试按默认值算
     if not real_moye:
         os.environ['MOYE_URL'] = 'http://127.0.0.1:9'   # 没人监听：moye_alive() 为假，走不连墨页的那条路
     os.environ["CLAUDE_GATE_CC_DIR"] = os.path.join(tmp, "no-claude-projects")   # 别读真的 ~/.claude

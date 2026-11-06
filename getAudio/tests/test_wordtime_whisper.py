@@ -23,6 +23,7 @@ def fake_whisper(path):
     return [(3.2, 'hello'), (3.6, 'world')]
 
 
+_real_ww = wordtime.whisper_words
 wordtime.whisper_words = fake_whisper
 
 
@@ -40,7 +41,33 @@ open(audio, 'wb').write(b'\0' * 4096)
 # ---- 开关 ----
 tid0 = str(uuid.uuid4())
 t.check('WORDTIME_WHISPER 没开（测试默认）：不排队', wordtime.queue_whisper(tid0, audio) is False)
+# 11-06 用户：逐词时间不要了，改成可选、默认关（本机 Whisper 跟着 600 期频道跑，GPU 显存涨到 35G、电脑卡死）
+os.environ.pop('WORDTIME_WHISPER', None)
+t.check('没设 WORDTIME_WHISPER：默认不排队', wordtime.queue_whisper(tid0, audio) is False)
 os.environ['WORDTIME_WHISPER'] = '1'
+
+# ---- 每跑完一次 mlx Whisper 就把 GPU 缓存还回去（不然 MLX 的缓存只涨不降）----
+import sys  # noqa: E402
+import types  # noqa: E402
+import transcribe_whisper as _tw  # noqa: E402
+cleared = []
+_fake_mx = types.ModuleType('mlx.core')
+_fake_mx.clear_cache = lambda: cleared.append(1)
+_fake_mlx = types.ModuleType('mlx')
+_fake_mlx.core = _fake_mx
+_fake_mw = types.ModuleType('mlx_whisper')
+_fake_mw.transcribe = lambda path, **kw: {'segments': [{'words': [{'start': 1.0, 'word': ' hi'}]}]}
+_saved = {k: sys.modules.get(k) for k in ('mlx', 'mlx.core', 'mlx_whisper')}
+sys.modules.update({'mlx': _fake_mlx, 'mlx.core': _fake_mx, 'mlx_whisper': _fake_mw})
+_orig_get_model = _tw._get_model
+_tw._get_model = lambda: ('fake-repo', 'mlx')
+t.check('mlx Whisper 跑完清 GPU 缓存', _real_ww(audio) == [(1.0, 'hi')] and cleared == [1], str(cleared))
+_tw._get_model = _orig_get_model
+for k, v in _saved.items():
+    if v is None:
+        sys.modules.pop(k, None)
+    else:
+        sys.modules[k] = v
 
 # ---- 排队：留一份音频 → Whisper → 存 words.json（偏移加上）→ 删那份音频 ----
 tid = str(uuid.uuid4())

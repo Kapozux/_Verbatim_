@@ -51,6 +51,16 @@ _model_lock = threading.Lock()
 _mlx_gpu_lock = threading.Lock()
 
 
+def free_gpu():
+    """MLX 用过的显存留作缓存、不还系统，每跑完一次就清掉。
+    11-06：逐词对齐跟着 600 期频道连轴跑，5001 的 GPU 显存涨到 35G、整机卡死。"""
+    try:
+        import mlx.core as mx
+        (getattr(mx, 'clear_cache', None) or mx.metal.clear_cache)()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _current_size():
     """运行时读 Whisper 型号（env 优先，Settings 保存写 env）。"""
     return (os.environ.get('WHISPER_MODEL_SIZE') or WHISPER_MODEL_SIZE).strip()
@@ -138,17 +148,20 @@ def _transcribe_mlx(repo, filepath, progress_callback=None):
         progress_callback(5)
     # 全局串行：并发调 Metal 会崩整个进程（见 _mlx_gpu_lock 注释）
     with _mlx_gpu_lock:
-        r = mlx_whisper.transcribe(
-            filepath,
-            path_or_hf_repo=repo,
-            language=WHISPER_LANGUAGE,          # None = 自动检测
-            temperature=0.0,                    # 不做温度回退（见上）
-            condition_on_previous_text=False,   # 每段独立解码 → 断掉自我喂养的复读
-            compression_ratio_threshold=2.4,    # 成片重复判为幻听
-            logprob_threshold=-1.0,             # 置信度过低丢弃
-            no_speech_threshold=0.6,            # 判定静音就不出字
-            word_timestamps=False,
-        )
+        try:
+            r = mlx_whisper.transcribe(
+                filepath,
+                path_or_hf_repo=repo,
+                language=WHISPER_LANGUAGE,          # None = 自动检测
+                temperature=0.0,                    # 不做温度回退（见上）
+                condition_on_previous_text=False,   # 每段独立解码 → 断掉自我喂养的复读
+                compression_ratio_threshold=2.4,    # 成片重复判为幻听
+                logprob_threshold=-1.0,             # 置信度过低丢弃
+                no_speech_threshold=0.6,            # 判定静音就不出字
+                word_timestamps=False,
+            )
+        finally:
+            free_gpu()
     results = []
     for seg in (r.get('segments') or []):
         text = (seg.get('text') or '').strip()
