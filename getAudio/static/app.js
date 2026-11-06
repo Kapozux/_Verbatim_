@@ -1491,8 +1491,51 @@ function settingsLine(c) {
 // 分析模型的用户可读名（analysis_preset 是内部字段，展示层别裸露）
 function brainLabel(preset) {
     const key = 'brain.' + (preset || 'gemini');
-    return STRINGS.en[key] ? T(key) : preset;
+    if (STRINGS.en[key]) return T(key);
+    const sub = /^(claude|codex|agy):(.+)$/.exec(preset || '');   // 三家订阅（claude:… / codex:… / agy:…）
+    if (sub) {
+        const hit = (subModels || []).find(m => m.id === preset);
+        const name = hit ? hit.label : sub[2];
+        return sub[1] === 'claude' ? 'Claude ' + name : sub[1] === 'agy' ? name + ' · agy' : name;
+    }
+    return preset;
 }
+function isSubPreset(preset) { return /^(claude|codex|agy):/.test(preset || ''); }
+
+// 添加频道「分析模型」：把三家订阅（Claude Code / Codex / Antigravity，记 $0）加成几组放在最上面，
+// 原来那些（Gemini、OpenRouter、阿里云、自己的模型）收进「API · 按量付费」一组（2026-11-06）
+let subModels = null;
+async function loadSubModels() {
+    const sel = document.getElementById('chain-provider');
+    if (!sel || sel.dataset.subs) return;
+    sel.dataset.subs = '1';
+    try { subModels = (await (await fetch('/api/analysis/models')).json()).models || []; } catch { subModels = []; }
+    if (!subModels.length) return;
+    const cur = sel.value;
+    const api = document.createElement('optgroup');
+    api.label = T('nf.brainApi');
+    api.dataset.g = 'api';
+    [...sel.querySelectorAll(':scope > option')].forEach(o => api.appendChild(o));
+    const groups = {};
+    for (const m of subModels) {
+        if (!groups[m.group]) {
+            groups[m.group] = document.createElement('optgroup');
+            groups[m.group].label = T('cx.mg.' + m.group);
+            groups[m.group].dataset.g = m.group;
+            sel.appendChild(groups[m.group]);
+        }
+        const o = document.createElement('option');
+        o.value = m.id;
+        o.textContent = brainLabel(m.id);
+        groups[m.group].appendChild(o);
+    }
+    sel.appendChild(api);
+    sel.value = cur;
+    document.addEventListener('langchange', () => {
+        sel.querySelectorAll('optgroup').forEach(g => { g.label = g.dataset.g === 'api' ? T('nf.brainApi') : T('cx.mg.' + g.dataset.g); });
+    });
+}
+loadSubModels();
 
 function stageLabel(stage) {
     const key = 'stage.' + stage;
@@ -1652,7 +1695,7 @@ function nfEstimate() {
     const p = nf.data.prices;
     const engine = speakers && !SPEAKER_ENGINES.includes(chainEngine.value) ? 'qwenasr' : chainEngine.value;
     let cost = (txSecs / 3600) * (p.transcribe_per_hour[engine] ?? 0.3);
-    if (analyze && sel.length) {
+    if (analyze && sel.length && !isSubPreset(chainProvider.value)) {   // 选了订阅的模型：分析不花钱
         cost += sel.length * p.analysis_per_episode + (secs / 3600) * p.analysis_per_hour + p.portrait;
         if (chainSelfVerify.checked) cost += 0.1;
         if (document.getElementById('nf-predict').checked) cost += sel.length * 0.006;
@@ -1767,7 +1810,7 @@ async function nfStart() {
     document.getElementById('nf-none').addEventListener('click', () => {
         nf.picked.clear(); nf.quick = 'custom'; nfRenderQuick(); nfRenderList(); nfEstimate();
     });
-    ['nf-speakers', 'chain-prefer-subs', 'nf-predict', 'nf-sync', 'chain-engine', 'chain-self-verify', 'chain-summarize']
+    ['nf-speakers', 'chain-prefer-subs', 'nf-predict', 'nf-sync', 'chain-engine', 'chain-provider', 'chain-self-verify', 'chain-summarize']
         .forEach(id => { const el = document.getElementById(id); if (el) el.addEventListener('change', nfEstimate); });
     document.querySelectorAll('input[name="nf-goal"]').forEach(r => r.addEventListener('change', nfEstimate));
     document.addEventListener('langchange', () => { if (nf.data) { nfRenderPreview(); nfRenderQuick(); nfRenderList(); nfEstimate(); } });

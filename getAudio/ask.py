@@ -1505,7 +1505,9 @@ def _all_threads(chain_dir):
             if isinstance(t, dict):
                 t['id'] = tid
                 out.append(t)
-    out.sort(key=lambda t: (str(t.get('updated') or ''), t['id']), reverse=True)
+    # 先按 ts（time.time()，同一秒里也分得出先后：刚问完马上点新对话），老文件没有 ts 就按 updated
+    out.sort(key=lambda t: (t.get('ts') or datetime.strptime(str(t.get('updated') or '1970-01-01 00:00:00')[:19],
+                                                             '%Y-%m-%d %H:%M:%S').timestamp(), t['id']), reverse=True)
     return out
 
 
@@ -1534,7 +1536,7 @@ def new_thread(chain_dir):
         os.makedirs(_chats_dir(chain_dir), exist_ok=True)
         tid, now = _new_tid(), _now()
         _write_json(_thread_path(chain_dir, tid), {'id': tid, 'title': '', 'named': False, 'created': now,
-                                                    'updated': now, 'messages': []})
+                                                    'updated': now, 'ts': time.time(), 'messages': []})
         return tid
 
 
@@ -1556,7 +1558,7 @@ def append_history(chain_dir, *msgs, thread=None):
         t['messages'] = ((t.get('messages') or []) + list(msgs))[-200:]
         if not t.get('named') and not t.get('title'):
             t['title'] = _title_from(t['messages'])
-        t['updated'] = _now()
+        t['updated'], t['ts'] = _now(), time.time()
         os.makedirs(_chats_dir(chain_dir), exist_ok=True)
         _write_json(path, t)
         return tid

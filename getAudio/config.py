@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 from dotenv import load_dotenv
 
@@ -260,6 +261,10 @@ def resolve_analysis(preset):
     运行时读 env（Settings 保存即生效，不用重启）：gemini 预设的两档模型
     可被 GEMINI_EXTRACT_MODEL / GEMINI_ANALYSIS_MODEL 覆盖。
     """
+    # 三家订阅（2026-11-06）：claude:<模型> / codex:<模型> / agy:<模型>，抽取和合成都用选的那个；记账 $0
+    sub = re.match(r'^(claude|codex|agy):([A-Za-z0-9][A-Za-z0-9._-]{0,60})$', preset or '')
+    if sub:
+        return (sub.group(1), sub.group(2), sub.group(2))
     if (preset or ANALYSIS_PRESET_DEFAULT) == 'custom':
         c = custom_llm()
         if c:

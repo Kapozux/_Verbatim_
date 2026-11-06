@@ -6701,6 +6701,19 @@ def _ask_thread_model(body):
     return tid, model, None
 
 
+@app.route('/api/analysis/models')
+def api_analysis_models():
+    """添加频道「分析模型」里三家订阅的那几组：id 就是 analysis_preset（claude:… / codex:… / agy:…）。"""
+    import ask
+    out = []
+    for m in ask.model_choices():
+        if m['group'] == 'claude':
+            out.append({**m, 'id': 'claude:' + m['id']})
+        elif m['group'] in ('codex', 'agy'):
+            out.append(m)
+    return jsonify({'models': out})
+
+
 @app.route('/api/chain/<chain_id>/ask/models')
 def api_chain_ask_models(chain_id):
     """对话栏设置里能挑的模型；default 是不挑时用的那个。"""
