@@ -71,6 +71,8 @@ def isolate(prefix, cheap_route=False, real_moye=False):
     os.environ['ASK_ENGINE'] = ''
     os.environ['TEXT_ENGINE'] = ''
     os.environ['CARDS_ENGINE'] = ''
+    os.environ['AGY_QUOTA_WAIT'] = ''          # 作者 .env 开着「等额度」：测试里不能真等
+    os.environ['VOICES_AUTO'] = ''
     os.environ["CLAUDE_GATE"] = ""
     if not real_moye:
         os.environ['MOYE_URL'] = 'http://127.0.0.1:9'   # 没人监听：moye_alive() 为假，走不连墨页的那条路

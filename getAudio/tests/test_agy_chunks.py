@@ -218,4 +218,46 @@ t.check('app：等额度时停了链条 → 失败、没去 OpenRouter / Whisper
 A._cancel_chains.discard(cid)
 TA.check_quota = real_check
 
+# 10. agy 偶尔断线（status ERROR、空回复 / 没回结果）：这一块隔一会儿再试 agy，不马上交给付费后备
+TA.FLAKY_WAITS = (0.01, 0.01, 0.01)
+TA.check_quota = lambda engine: None
+flaky = {'n': 2}
+real_run = TA._run_json
+
+
+def flaky_run(args, timeout, cwd=None):
+    if args[:2] != ['-p', '/usage'] and flaky['n'] > 0:
+        flaky['n'] -= 1
+        return {'status': 'ERROR', 'response': '', 'usage': {}}
+    return fake_run(args, timeout, cwd)
+
+
+TA._run_json = flaky_run
+TA.split_mp3 = splitter(1, 'flaky')
+segs, _ = TA.transcribe_audio(src, 'agy_flash')
+t.check('断线两次后第三次成功：照常用 agy 转完', segs and flaky['n'] == 0)
+
+flaky['n'] = 10 ** 6
+try:
+    TA.transcribe_audio(src, 'agy_flash')
+    got = 'ok'
+except Exception as e:  # noqa: BLE001
+    got = str(e)
+t.check('一直断：试满 4 次才往上抛（交给 app 的后备）', got.startswith('agy 状态 ERROR') and flaky['n'] == 10 ** 6 - 4, (got, flaky))
+
+
+def notlogged(args, timeout, cwd=None):
+    if args[:2] != ['-p', '/usage'] and flaky['n'] > 0:
+        flaky['n'] -= 1
+        raise RuntimeError('agy 没有返回结果（exit 1）：You are not logged into Antigravity.')
+    return fake_run(args, timeout, cwd)
+
+
+flaky['n'] = 1
+TA._run_json = notlogged
+segs, _ = TA.transcribe_audio(src, 'agy_flash')
+t.check('偶尔读不到登录也重试', segs and flaky['n'] == 0)
+TA._run_json = fake_run
+TA.check_quota = real_check
+
 t.finish()
