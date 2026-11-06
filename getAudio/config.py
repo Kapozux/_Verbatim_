@@ -73,6 +73,13 @@ ALLOWED_EXTENSIONS = AUDIO_EXTENSIONS | VIDEO_EXTENSIONS
 
 # 批量转录并发控制：一次可以丢进很多文件，但真正同时运行的数量按引擎区分。
 # 本地 Whisper 每个任务都吃满 CPU/内存，必须保守；云引擎只是提交请求，可以放开。
+# agy（Antigravity CLI，用户的 Gemini 订阅）全局同时几个切片（15 分钟一片，一片一个 agy 进程），所有视频加起来（2026-11-06）。
+# 以前用的是下面「同时几个视频」那个数，4 个视频一起转时每个视频平均只有 1 片在跑。Argon 有单独的周额度，压低。
+AGY_CHUNKS = {
+    'agy_flash': int(os.environ.get('AGY_FLASH_CHUNKS') or 6),
+    'agy_argon': int(os.environ.get('AGY_ARGON_CHUNKS') or 2),
+}
+
 ENGINE_CONCURRENCY = {
     # 本地 Whisper 并发。M 系多核（如 M4 Max 12 性能核）可开多路；配合下面的
     # WHISPER_CPU_THREADS，num_workers×cpu_threads ≈ 性能核数，避免多路互抢核。
@@ -89,10 +96,11 @@ ENGINE_CONCURRENCY = {
     # Gemini 3.5 Transcribe：2026-08 才公开预览的新端点，配额/稳定性还没摸透，
     # 先保守给 6（后面观察没问题再跟 gemini 引擎的 12 看齐）。
     'gemini35': 6,
-    # agy（Antigravity CLI，走用户自己的 Gemini 订阅，2026-11-04）：每个任务内部再按 15 分钟块开 3 路，
-    # 这里是同时几个任务。Flash 几乎不耗额度；Argon 有单独的周额度（44 分钟约 2.7%），压低。
-    'agy_flash': int(os.environ.get('AGY_FLASH_CONCURRENCY') or 4),
-    'agy_argon': int(os.environ.get('AGY_ARGON_CONCURRENCY') or 2),
+    # agy（Antigravity CLI，走用户自己的 Gemini 订阅，2026-11-04）：这里是同时几个视频。
+    # Flash 几乎不耗额度；Argon 有单独的周额度（44 分钟约 2.7%），压低。
+    # 同时几个视频：不少于切片上限，短视频（一片）也能把切片位子用满；真正限流的是上面的 AGY_CHUNKS
+    'agy_flash': int(os.environ.get('AGY_FLASH_CONCURRENCY') or max(4, AGY_CHUNKS['agy_flash'])),
+    'agy_argon': int(os.environ.get('AGY_ARGON_CONCURRENCY') or max(2, AGY_CHUNKS['agy_argon'])),
 }
 
 
