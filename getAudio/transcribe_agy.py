@@ -235,7 +235,35 @@ def _prompt(path, strict=False):
             + (_STRICT if strict else ''))
 
 
+# agy 偶尔连 Google 断线（11-06 邵艾伦频道实测：日志 `loadCodeAssist: EOF`，回 status ERROR、内容为空），
+# 以前一次就交给付费的 OpenRouter 后备。现在这一块先隔一会儿再试几次（订阅，不花钱），都不行才往上抛。
+FLAKY_WAITS = (20, 60, 180)
+
+
+class _Flaky(RuntimeError):
+    pass
+
+
 def _ask(model, path, cwd, strict=False, should_stop=None):
+    for i, w in enumerate((*FLAKY_WAITS, None)):
+        try:
+            return _ask_once(model, path, cwd, strict, should_stop)
+        except _Flaky as e:
+            if w is None:
+                raise RuntimeError(str(e)) from e
+            print(f'[agy] {os.path.basename(path)} 第 {i + 1} 次出错（{str(e)[:80]}），{w} 秒后重试', flush=True)
+            _sleep(w, should_stop)
+
+
+def _sleep(secs, should_stop):
+    end = time.time() + secs
+    while time.time() < end:
+        if should_stop and should_stop():
+            raise Stopped('已随链条停止（当时在等 agy 重试）')
+        time.sleep(min(1.0, max(0.0, end - time.time())))
+
+
+def _ask_once(model, path, cwd, strict=False, should_stop=None):
     w0 = time.time()
     while True:
         t0 = time.time()
@@ -247,6 +275,12 @@ def _ask(model, path, cwd, strict=False, should_stop=None):
         except claude_gate.Paused as e:          # 闸说额度要留给用户 / 三边一起停着：按规矩等或马上抛
             _waiting(e, w0)
             _nap(should_stop)
+        except (subprocess.TimeoutExpired, json.JSONDecodeError, OSError) as e:
+            raise _Flaky(f'agy 没回结果：{type(e).__name__}: {str(e)[:120]}') from e
+        except RuntimeError as e:                # 多个 agy 同时起，偶尔读不到登录（日志 You are not logged into Antigravity）
+            if str(e).startswith(('agy 没有返回结果', 'agy 没登录')):
+                raise _Flaky(str(e)[:200]) from e
+            raise
     claude_gate.record('verbatim', 'transcribe', model, d, time.time() - t0, 'normal', provider='agy')
     u = d.get('usage') or {}
     usage.record('agy', model, 'transcribe', input_tokens=u.get('input_tokens') or 0,
@@ -259,13 +293,16 @@ def _ask(model, path, cwd, strict=False, should_stop=None):
     low = text.lower()
     if any(m.lower() in low for m in _BLOCK_MARKERS):
         raise _Blocked(text.strip()[:200])
+    quota_txt = 'quota' in low and any(w in low for w in ('exceed', 'exhaust', 'reached', 'limit'))
     if str(d.get('status') or '').upper() != 'SUCCESS':
+        if not quota_txt:
+            raise _Flaky(f"agy 状态 {d.get('status')}: {text[:200]}")
         raise RuntimeError(f"agy 状态 {d.get('status')}: {text[:200]}")
     if 'quota' in low and any(w in low for w in ('exceed', 'exhaust', 'reached', 'limit')) and not _TS.search(text):
         claude_gate.pause(time.time() + 1800, text.strip()[:200], 'verbatim', provider='agy')    # 三边一起停半小时
         _waiting(text.strip()[:200], w0)
         _nap(should_stop)
-        return _ask(model, path, cwd, strict, should_stop)
+        return _ask_once(model, path, cwd, strict, should_stop)
     return text
 
 
