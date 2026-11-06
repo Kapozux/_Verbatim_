@@ -832,9 +832,10 @@ function askModel() {
     const m = cxStore('cx.model') || '';
     return askModels.list && m && !askModels.list.some(x => x.id === m) ? '' : m;   // 那个模型现在不能用了（没装 / 撞上限）：用默认
 }
-function askModelLabel(id) {
+function askModelLabel(id) {                // 回答下面那行：带上是哪家（「Opus 5.5」→「Claude Opus 5.5」）
     const hit = (askModels.list || []).find(x => x.id === id);
-    return hit ? hit.label : (id || '');
+    if (!hit) return id === 'codex' ? 'GPT' : String(id || '').replace(/^(codex|agy):/, '');
+    return hit.group === 'claude' ? 'Claude ' + hit.label : hit.group === 'agy' ? hit.label + ' · agy' : hit.label;
 }
 async function askLoadModels() {
     try {
@@ -880,11 +881,19 @@ function askCfgHtml() {
 function askModelsHtml(first) {
     if (!askModels.list || !askModels.list.length) return '';
     const cur = askModel() || askModels.def;
-    return `<div class="cx-cfg-t${first ? '' : ' cx-cfg-t2'}">${T('cx.model')}</div>
-        <div class="cx-model-list">${askModels.list.map(x => `<label class="cx-model-opt${x.id === cur ? ' on' : ''}">
+    // 按家分组：组头写是哪家、怎么付钱；一行一个模型
+    let html = '', last = null;
+    for (const x of askModels.list) {
+        if (x.group !== last) { html += `<div class="cx-model-g" data-g="${x.group}">${T('cx.mg.' + x.group)}</div>`; last = x.group; }
+        html += `<label class="cx-model-opt${x.id === cur ? ' on' : ''}">
             <input type="radio" name="cx-model" value="${escapeHtml(x.id)}" ${x.id === cur ? 'checked' : ''}>
-            <span class="cx-model-n">${escapeHtml(x.label)}${x.id === askModels.def ? ` <span class="cx-muted">· ${T('cx.modelDefault')}</span>` : ''}</span>
-            <span class="cx-muted">${T(x.billing === 'sub' ? 'cx.billSub' : 'cx.billApi')}</span></label>`).join('')}</div>`;
+            <span class="cx-model-n">${escapeHtml(x.label)}${x.id === askModels.def ? ` <span class="cx-muted">· ${T('cx.modelDefault')}</span>` : ''}</span></label>`;
+    }
+    const groups = [...new Set(askModels.list.map(x => x.group))];
+    const jump = groups.length > 1 ? `<div class="cx-model-jump">${groups.map(g =>
+        `<button type="button" data-jump="${g}">${T('cx.mj.' + g)}</button>`).join('')}</div>` : '';
+    return `<div class="cx-cfg-t${first ? '' : ' cx-cfg-t2'}">${T('cx.model')}</div>${jump}
+        <div class="cx-model-list" id="cx-model-list">${html}</div>`;
 }
 
 // 对话开头那块：表情 / 头像、项目名、「N 个来源 · 日期」、一句话。项目数据可能比对话区晚到，到了再补一遍（cxFillHead）
@@ -1122,9 +1131,17 @@ function askCfgRender() {
     pop.innerHTML = askCfgHtml();
     pop.querySelectorAll('input[name="cx-mode"]').forEach(r => r.onchange = () => { askSetMode(r.value); askCfgRender(); });
     pop.querySelectorAll('[data-persona]').forEach(b => b.onclick = () => { askSetMode('as', b.dataset.persona); askCfgRender(); });
+    pop.querySelectorAll('[data-jump]').forEach(b => b.onclick = () => {   // 跳到那一家（列表长，后面几家要滚才看得到）
+        const ml = document.getElementById('cx-model-list');
+        const h = ml && ml.querySelector(`.cx-model-g[data-g="${b.dataset.jump}"]`);
+        if (h) ml.scrollTo({ top: h.offsetTop, behavior: 'smooth' });
+    });
     pop.querySelectorAll('input[name="cx-model"]').forEach(r => r.onchange = () => {
         cxStore('cx.model', r.value === askModels.def ? '' : r.value);
+        const top = (document.getElementById('cx-model-list') || {}).scrollTop || 0;
         askCfgRender();
+        const ml = document.getElementById('cx-model-list');
+        if (ml) ml.scrollTop = top;
         askModeUi();
     });
 }

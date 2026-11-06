@@ -14,6 +14,7 @@ import app as A  # noqa: E402
 import ask  # noqa: E402
 import claude_cli  # noqa: E402
 import codex_cli  # noqa: E402
+import agy_cli  # noqa: E402
 
 CID = make_creator(A, 'Y Combinator', 'ycombinator', [
     ['Solo founders are rising fast.', 'Experienced founders are back.', 'Talk to users every week.'],
@@ -21,7 +22,7 @@ CID = make_creator(A, 'Y Combinator', 'ycombinator', [
 CDIR = A._chain_dir(CID)
 client = A.app.test_client()
 t = Checks()
-seen = {'gemini': [], 'claude': [], 'codex': 0, 'prompts': []}
+seen = {'gemini': [], 'claude': [], 'codex': 0, 'codex_models': [], 'agy': [], 'prompts': []}
 
 
 def ids(prompt):
@@ -44,14 +45,25 @@ def claude_ok(args, stdin):
 
 def codex_ok(args, stdin):
     seen['codex'] += 1
+    seen['codex_models'].append(args[args.index('-m') + 1] if '-m' in args else None)
     return [{'type': 'item.completed', 'item': {'type': 'agent_message', 'text': f'GPT: ship small [#{ids(stdin)[0]}].'}},
             {'type': 'turn.completed', 'usage': {'input_tokens': 10, 'output_tokens': 5}}], ''
+
+
+def agy_ok(args):
+    seen['agy'].append(args[args.index('--model') + 1])
+    prompt = args[args.index('-p') + 1]
+    return {'status': 'SUCCESS', 'response': f'Argon: agents need tools [#{ids(prompt)[1]}].',
+            'usage': {'input_tokens': 10, 'output_tokens': 5}}
 
 
 analyze._call_gemini_stream = fake_gemini
 ask._llm = lambda prompt, **k: prompt
 claude_cli.BIN = 'no-such-claude-binary'   # 本机装了 claude / codex 也当没装：要用的地方用 runner 打桩
 codex_cli.BIN = 'no-such-codex-binary'
+agy_cli.BIN = 'no-such-agy-binary'
+os.environ.pop('AGY_BIN', None)
+agy_cli.installed = lambda: False
 
 
 def stream(q, **extra):
@@ -111,12 +123,19 @@ t.check('没 Claude 时只列 Gemini、默认 ASK_MODEL', m['default'] == ask.AS
         and all(x['id'].startswith('gemini') for x in m['models']), m)
 claude_cli.use_runner(claude_ok)
 codex_cli.use_runner(codex_ok)
+agy_cli.use_runner(agy_ok)
+agy_cli.installed = lambda: True
+codex_cli.models_cache_path = lambda: write_json(os.path.join(os.environ['GETAUDIO_DATA_DIR'], 'mc.json'), {'models': [
+    {'slug': 'gpt-6.1-sol', 'display_name': 'GPT-6.1-Sol', 'visibility': 'list'},
+    {'slug': 'gpt-reserve', 'display_name': 'GPT-Reserve', 'visibility': 'hide'}]}) or os.path.join(os.environ['GETAUDIO_DATA_DIR'], 'mc.json')
 os.environ['ASK_ENGINE'] = 'claude'
 os.environ['CODEX_ENGINE'] = 'on'
 m = client.get(f'/api/chain/{CID}/ask/models').get_json()
 mids = [x['id'] for x in m['models']]
-t.check('有 Claude / GPT 时列出来、默认 Opus', m['default'] == claude_cli.MODEL
-        and {'claude-sonnet-5-5', 'claude-haiku-5-5', 'codex', ask.ASK_MODEL} <= set(mids), m)
+t.check('三家订阅都列出来、默认 Opus', m['default'] == claude_cli.MODEL
+        and {'claude-sonnet-5-5', 'claude-haiku-5-5', 'codex:gpt-6.1-sol', 'agy:gemini-4-argon-high',
+             'agy:gemini-3.8-flash-low', ask.ASK_MODEL} <= set(mids) and 'codex:gpt-reserve' not in mids, mids)
+t.check('每个都标了是哪家', {x['group'] for x in m['models']} == {'claude', 'codex', 'agy', 'gemini'}, m['models'])
 
 # 7. 选了哪个就用哪个，回答上记着是谁答的
 code, ev = stream('Harness?', thread=new_tid, model='claude-haiku-5-5')
@@ -126,9 +145,17 @@ n = len(seen['gemini'])
 code, ev = stream('Shipping?', thread=new_tid, model='gemini-3.5-flash')
 t.check('选 Gemini 3.5 Flash 就走它', seen['gemini'][n:] == ['gemini-3.5-flash']
         and ev[-1]['message']['model'] == 'gemini-3.5-flash')
-code, ev = stream('GPT please', thread=new_tid, model='codex')
-t.check('选 GPT 走 codex', seen['codex'] == 1 and ev[-1]['message']['model'] == 'codex'
-        and 'GPT: ship small' in ev[-1]['message']['content'], ev[-1])
+code, ev = stream('GPT please', thread=new_tid, model='codex:gpt-6.1-sol')
+t.check('选 GPT-6.1 走 codex -m gpt-6.1-sol', seen['codex_models'] == ['gpt-6.1-sol']
+        and ev[-1]['message']['model'] == 'codex:gpt-6.1-sol' and 'GPT: ship small' in ev[-1]['message']['content'], ev[-1])
+code, ev = stream('Argon please', thread=new_tid, model='agy:gemini-4-argon-high')
+t.check('选 Argon 走 agy --model gemini-4-argon-high', seen['agy'] == ['gemini-4-argon-high']
+        and ev[-1]['message']['model'] == 'agy:gemini-4-argon-high' and 'Argon: agents' in ev[-1]['message']['content']
+        and ev[-1]['message']['citations'], ev[-1])
+agy_cli.use_runner(lambda a: {'status': 'ERROR', 'response': 'quota exhausted'})
+n = len(seen['gemini'])
+code, ev = stream('Argon down', thread=new_tid, model='agy:gemini-3.8-flash-low')
+t.check('agy 挂了退回 Gemini API', len(seen['gemini']) == n + 1 and ev[-1]['message']['model'] == ask.ASK_MODEL, ev[-1])
 nc = len(seen['claude'])
 code, ev = stream('Default model?', thread=new_tid)
 t.check('不选 = 默认（ASK_ENGINE=claude → Opus）', seen['claude'][nc:] == [claude_cli.MODEL])

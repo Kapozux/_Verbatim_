@@ -29,6 +29,7 @@ from collections import Counter
 from datetime import datetime
 
 import citations
+import agy_cli
 import claude_cli
 import codex_cli
 import config
@@ -1338,10 +1339,13 @@ def _finish(raw, ctx, rewrite=True, model=None):
     }
 
 
-# 对话栏设置里能挑的模型（2026-11-06）。Claude / GPT 走本机订阅（$0），只在装了、没撞上限时列；
-# Gemini 走 API 按量付费。没挑 = 默认，跟以前一样：ASK_ENGINE=claude → Opus，否则 ASK_MODEL。
-CLAUDE_ASK_MODELS = (('claude-opus-5-5', 'Claude Opus 5.5'), ('claude-sonnet-5-5', 'Claude Sonnet 5.5'),
-                     ('claude-haiku-5-5', 'Claude Haiku 5.5'))
+# 对话栏设置里能挑的模型（2026-11-06）。三家订阅（$0）：Claude Code、Codex（ChatGPT）、Antigravity（agy，Gemini），
+# 只在装了、没撞上限时列；再加 Gemini API（按量付费）。不挑 = 默认，跟以前一样：ASK_ENGINE=claude → Opus，否则 ASK_MODEL。
+# id：Claude 直接写模型名；GPT 是 codex:<slug>（老的 'codex' = config 里那个）；agy 是 agy:<模型>；Gemini API 直接写模型名。
+CLAUDE_ASK_MODELS = (('claude-opus-5-5', 'Opus 5.5'), ('claude-sonnet-5-5', 'Sonnet 5.5'), ('claude-haiku-5-5', 'Haiku 5.5'),
+                     ('claude-opus-5', 'Opus 5'), ('claude-opus-4-8', 'Opus 4.8'), ('claude-opus-4-7', 'Opus 4.7'),
+                     ('claude-opus-4-6', 'Opus 4.6'), ('claude-sonnet-5', 'Sonnet 5'), ('claude-sonnet-4-6', 'Sonnet 4.6'),
+                     ('claude-haiku-4-5', 'Haiku 4.5'))      # 跟 Ephemeris 聊天页同一张表
 GEMINI_ASK_MODELS = (('gemini-3.5-flash-lite', 'Gemini 3.5 Flash-Lite'), ('gemini-3.5-flash', 'Gemini 3.5 Flash'))
 
 
@@ -1350,34 +1354,40 @@ def default_model():
 
 
 def model_choices():
-    """[{id, label, billing: 'sub'|'api'}]，默认那个排第一。"""
+    """[{id, label, group: claude|codex|agy|gemini, billing: sub|api}]，按家排；前端按 group 分组。"""
     out = []
     if claude_cli.available():
-        out += [{'id': m, 'label': n, 'billing': 'sub'} for m, n in CLAUDE_ASK_MODELS]
+        out += [{'id': m, 'label': n, 'group': 'claude', 'billing': 'sub'} for m, n in CLAUDE_ASK_MODELS]
     if codex_cli.on():
-        cm = codex_cli.model()
-        out.append({'id': 'codex', 'label': f'GPT ({cm})' if cm else 'GPT', 'billing': 'sub'})
+        out += [{'id': f'codex:{m}', 'label': n, 'group': 'codex', 'billing': 'sub'} for m, n in codex_cli.list_models()]
+    out += [{'id': f'agy:{m}', 'label': n, 'group': 'agy', 'billing': 'sub'} for m, n in agy_cli.models()]
     gem = list(GEMINI_ASK_MODELS)
     if ASK_MODEL not in dict(gem):
         gem.insert(0, (ASK_MODEL, ASK_MODEL))
-    out += [{'id': m, 'label': n, 'billing': 'api'} for m, n in gem]
-    d = default_model()
-    return sorted(out, key=lambda x: x['id'] != d)
+    out += [{'id': m, 'label': n, 'group': 'gemini', 'billing': 'api'} for m, n in gem]
+    return out
 
 
 def known_model(model):
-    return not model or model in {x['id'] for x in model_choices()} or model in dict(CLAUDE_ASK_MODELS + GEMINI_ASK_MODELS)
+    if not model:
+        return True
+    if model == 'codex' or model.startswith(('codex:', 'agy:')):
+        return bool(re.match(r'^[a-z]+(:[A-Za-z0-9._-]{1,60})?$', model))
+    return model in dict(CLAUDE_ASK_MODELS + GEMINI_ASK_MODELS) or model == ASK_MODEL
 
 
 def _write_with(prompt, model):
-    """按挑的模型写，边写边 yield (模型, 一段字)。Claude / GPT 还没出字就失败：退回 Gemini 默认那个。"""
+    """按挑的模型写，边写边 yield (模型, 一段字)。订阅那三家还没出字就失败：退回 Gemini API 默认那个。"""
     from analyze import _call_gemini_stream
     model = model or default_model()
-    if model.startswith('claude-') or model == 'codex':
+    if model.startswith(('claude-', 'codex', 'agy:')):
         got = False
         try:
-            if model == 'codex':
-                yield model, codex_cli.text(prompt, purpose='ask')
+            if model == 'codex' or model.startswith('codex:'):
+                yield model, codex_cli.text(prompt, purpose='ask', model_id=model.partition(':')[2] or None)
+                return
+            if model.startswith('agy:'):
+                yield model, agy_cli.text(prompt, model.partition(':')[2], purpose='ask')
                 return
             for t in claude_cli.stream(prompt, purpose='ask', model=model):
                 got = True

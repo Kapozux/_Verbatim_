@@ -2710,8 +2710,15 @@ body.demo .creator-hide { display: none; }
 .cx-cfg-who { margin-top: 10px; }
 /* 设置里的模型列表（2026-11-06）：比回答方式紧凑，一行一个 */
 .cx-cfg-t2 { margin-top: 8px; }
-.cx-model-list { display: flex; flex-direction: column; gap: 2px; }
-.cx-model-opt { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 7px 10px;
+.cx-model-list { display: flex; flex-direction: column; gap: 2px; max-height: min(380px, 50vh); overflow-y: auto; margin: 0 -4px; padding: 0 4px; }
+.cx-model-jump { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 0 4px; }
+.cx-model-jump button { font: inherit; font-size: 13px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px;
+  background: none; color: var(--ink); cursor: pointer; }
+.cx-model-jump button:hover { background: var(--code-bg); }
+.cx-model-list { position: relative; }
+.cx-model-g { font-size: 12.5px; color: var(--muted); padding: 8px 10px 2px; position: sticky; top: 0; background: var(--card); z-index: 1; }
+.cx-model-g:first-child { padding-top: 2px; }
+.cx-model-opt { display: grid; grid-template-columns: 20px minmax(0, 1fr); align-items: center; gap: 8px; padding: 7px 10px;
   border-radius: 10px; cursor: pointer; font-size: 14.5px; }
 .cx-model-opt:hover { background: var(--code-bg); }
 .cx-model-opt.on { background: var(--code-bg); }
