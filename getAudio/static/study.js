@@ -581,7 +581,8 @@ async function stSaveNote(m, btn) {
         // 服务端按时间 + 开头几个字从聊天记录里找这条回答（内容和出处以记录为准）
         const r = await fetch(`/api/chain/${stState.id}/studio/note`, { method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ at: m.at, head: String(m.content || '').slice(0, 80) }) });
+            body: JSON.stringify({ at: m.at, head: String(m.content || '').slice(0, 80),
+                                  thread: (typeof askState !== 'undefined' && askState.thread) || undefined }) });
         const j = await r.json();
         if (!r.ok) throw new Error(j.error || r.status);
         btn.innerHTML = `<span>✓ ${escapeHtml(T('st.saved1'))}</span>`;
