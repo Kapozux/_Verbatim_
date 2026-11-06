@@ -2708,6 +2708,41 @@ body.demo .creator-hide { display: none; }
 .cx-cfg-opt b { display: block; font-weight: 500; font-size: 15px; }
 .cx-cfg-opt .cx-muted { display: block; font-size: 13.5px; line-height: 1.45; margin-top: 2px; }
 .cx-cfg-who { margin-top: 10px; }
+/* 设置里的模型列表（2026-11-06）：比回答方式紧凑，一行一个 */
+.cx-cfg-t2 { margin-top: 8px; }
+.cx-model-list { display: flex; flex-direction: column; gap: 2px; max-height: min(380px, 50vh); overflow-y: auto; margin: 0 -4px; padding: 0 4px; }
+.cx-model-jump { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 0 4px; }
+.cx-model-jump button { font: inherit; font-size: 13px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px;
+  background: none; color: var(--ink); cursor: pointer; }
+.cx-model-jump button:hover { background: var(--code-bg); }
+.cx-model-list { position: relative; }
+.cx-model-g { font-size: 12.5px; color: var(--muted); padding: 8px 10px 2px; position: sticky; top: 0; background: var(--card); z-index: 1; }
+.cx-model-g:first-child { padding-top: 2px; }
+.cx-model-opt { display: grid; grid-template-columns: 20px minmax(0, 1fr); align-items: center; gap: 8px; padding: 7px 10px;
+  border-radius: 10px; cursor: pointer; font-size: 14.5px; }
+.cx-model-opt:hover { background: var(--code-bg); }
+.cx-model-opt.on { background: var(--code-bg); }
+.cx-model-opt input { margin: 0; accent-color: var(--coral-strong, var(--coral)); }
+.cx-model-opt .cx-muted { font-size: 12.5px; white-space: nowrap; }
+.cx-model-n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 历史对话（栏头时钟图标）：新对话 + 一段一行，点开换过去 */
+.cx-hist-pop { width: min(340px, calc(100vw - 48px)); }
+.cx-hist-pop > .cx-hist-new { font-weight: 500; }
+.cx-hist-pop > .cx-hist-new:disabled { opacity: .5; cursor: default; }
+.cx-hist-list { max-height: min(420px, 60vh); overflow-y: auto; display: flex; flex-direction: column; gap: 1px; }
+.cx-hist-row { display: flex; align-items: center; border-radius: 10px; }
+.cx-hist-row:hover, .cx-hist-row.on { background: var(--code-bg); }
+.cx-hist-open { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; text-align: left; padding: 7px 10px;
+  border: none; background: none; color: var(--ink); font: inherit; cursor: pointer; }
+.cx-hist-t { font-size: 14.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cx-hist-row.on .cx-hist-t { font-weight: 600; }
+.cx-hist-open .cx-muted { font-size: 12.5px; }
+.cx-hist-ic { flex: none; width: 28px; height: 28px; border: none; border-radius: 50%; background: none; color: var(--muted);
+  cursor: pointer; font-size: 15px; opacity: 0; }
+.cx-hist-row:hover .cx-hist-ic, .cx-hist-row:focus-within .cx-hist-ic { opacity: 1; }
+.cx-hist-ic:hover { background: var(--card); color: var(--ink); }
+@media (hover: none) { .cx-hist-ic { opacity: 1; } }
+.cx-hist-empty { padding: 8px 12px; font-size: 13.5px; }
 /* 模拟中：输入框里一直挂着「XX 的口吻 ×」 */
 .cx-mode-chip { flex: none; display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 4px 0 5px; margin-right: 4px;
   border-radius: 999px; background: var(--coral-soft, var(--code-bg)); color: var(--ink); font-size: 14px; white-space: nowrap; }

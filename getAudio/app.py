@@ -186,7 +186,7 @@ DEMO_MODE = os.environ.get('VERBATIM_DEMO') == '1'
 
 
 _DEMO_LENS_POST = re.compile(r'^/api/chain/([0-9a-f]{32})/lens$')
-_DEMO_ASK_POST = re.compile(r'^/api/chain/[0-9a-f]{32}/ask(/stream)?$')
+_DEMO_ASK_POST = re.compile(r'^/api/chain/[0-9a-f]{32}/ask(/stream|/threads)?$')
 DEMO_ASK = DEMO_MODE and os.environ.get('VERBATIM_DEMO_ASK') == '1'
 
 
@@ -6042,8 +6042,11 @@ def api_studio_note(chain_id):
     import ask
     import study
     cdir = _chain_dir(chain_id)
-    msgs = ask.load_history(cdir)
     body = request.get_json(silent=True) or {}
+    tid = body.get('thread') or None
+    if tid and not ask.valid_thread(tid):
+        return jsonify({'error': 'Bad thread'}), 400
+    msgs = ask.load_history(cdir, tid)
     at, head = str(body.get('at') or ''), str(body.get('head') or '')[:80]
     i = next((k for k in range(len(msgs) - 1, -1, -1)
               if msgs[k].get('role') == 'assistant' and msgs[k].get('content') and at
@@ -6674,8 +6677,74 @@ def api_chain_ask_history(chain_id):
     if not _chain_ok(chain_id):
         return jsonify({'error': 'Not found'}), 404
     import ask
-    return Response(json.dumps({'messages': ask.retime_citations(ask.load_history(_chain_dir(chain_id)))},
-                               ensure_ascii=False), mimetype='application/json')
+    cdir = _chain_dir(chain_id)
+    tid = request.args.get('thread') or None
+    if tid and not ask.valid_thread(tid):
+        return jsonify({'error': 'Bad thread'}), 400
+    threads = ask.threads(cdir)
+    if tid and tid not in {t['id'] for t in threads} and tid != ask.current_thread(cdir):
+        tid = None                             # 删掉了 / 别的浏览器收掉了：打开最近那段
+    tid = tid or ask.current_thread(cdir)
+    return Response(json.dumps({'messages': ask.retime_citations(ask.load_history(cdir, tid) if tid else []),
+                                'thread': tid, 'threads': threads}, ensure_ascii=False), mimetype='application/json')
+
+
+def _ask_thread_model(body):
+    """提问的 body 里的 thread / model：(thread, model, 出错信息)。"""
+    import ask
+    tid = body.get('thread') or None
+    if tid and not ask.valid_thread(tid):
+        return None, None, 'Bad thread'
+    model = str(body.get('model') or '').strip() or None
+    if model and not ask.known_model(model):
+        return None, None, f'Unknown model: {model}'
+    return tid, model, None
+
+
+@app.route('/api/analysis/models')
+def api_analysis_models():
+    """添加频道「分析模型」里三家订阅的那几组：id 就是 analysis_preset（claude:… / codex:… / agy:…）。"""
+    import ask
+    out = []
+    for m in ask.model_choices():
+        if m['group'] == 'claude':
+            out.append({**m, 'id': 'claude:' + m['id']})
+        elif m['group'] in ('codex', 'agy'):
+            out.append(m)
+    return jsonify({'models': out})
+
+
+@app.route('/api/chain/<chain_id>/ask/models')
+def api_chain_ask_models(chain_id):
+    """对话栏设置里能挑的模型；default 是不挑时用的那个。"""
+    import ask
+    return jsonify({'models': ask.model_choices(), 'default': ask.default_model()})
+
+
+@app.route('/api/chain/<chain_id>/ask/threads', methods=['POST'])
+def api_chain_ask_new_thread(chain_id):
+    """新对话：以前的留在历史对话里。"""
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    import ask
+    return jsonify({'thread': ask.new_thread(_chain_dir(chain_id))})
+
+
+@app.route('/api/chain/<chain_id>/ask/threads/<tid>', methods=['POST'])
+def api_chain_ask_rename_thread(chain_id, tid):
+    if not _chain_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    import ask
+    if not ask.valid_thread(tid):
+        return jsonify({'error': 'Bad thread'}), 400
+    cdir = _chain_dir(chain_id)
+    try:
+        ask.rename_thread(cdir, tid, (request.get_json(silent=True) or {}).get('title'))
+    except FileNotFoundError:
+        return jsonify({'error': 'Not found'}), 404
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    return jsonify({'ok': True, 'threads': ask.threads(cdir)})
 
 
 @app.route('/api/chain/<chain_id>/ask', methods=['POST'])
@@ -6694,12 +6763,15 @@ def api_chain_ask(chain_id):
     topic = str(body.get('topic') or '').strip() or None
     scope = body.get('scope') if isinstance(body.get('scope'), dict) else None
     cdir = _chain_dir(chain_id)
-    history = [] if body.get('ephemeral') else ask.load_history(cdir)
+    tid, model, err = _ask_thread_model(body)
+    if err:
+        return jsonify({'error': err}), 400
+    history = [] if body.get('ephemeral') else ask.load_history(cdir, tid)
     try:
         ref = f'ask:{uuid.uuid4().hex[:12]}'      # 单独一个 ref 才数得出这一问花了多少
         with usage.scope(ref=ref, chain=chain_id):
             r = ask.answer(cdir, q, mode=mode, history=history, topic=topic,
-                           ui_lang=body.get('ui_lang'), scope=scope, persona=body.get('persona'))
+                           ui_lang=body.get('ui_lang'), scope=scope, persona=body.get('persona'), model=model)
         r['cost_usd'] = (usage.cost_for(ref=ref) or {}).get('cost_usd', 0)
     except Exception as e:  # noqa: BLE001
         return jsonify({'error': str(e)[:300]}), 502
@@ -6714,8 +6786,8 @@ def api_chain_ask(chain_id):
     bot_msg = {'role': 'assistant', 'content': r['answer'], 'mode': mode, 'topic': topic,
                'citations': r['citations'], 'coverage': r['coverage'],
                'dropped_citations': r['dropped_citations'], 'dropped_ids': r.get('dropped_ids'),
-               'cost_usd': r['cost_usd'], 'at': at}
-    ask.append_history(cdir, user_msg, bot_msg)
+               'cost_usd': r['cost_usd'], 'model': r.get('model'), 'at': at}
+    bot_msg['thread'] = ask.append_history(cdir, user_msg, bot_msg, thread=tid)
     return Response(json.dumps({'ok': True, 'message': bot_msg}, ensure_ascii=False),
                     mimetype='application/json')
 
@@ -6738,7 +6810,11 @@ def api_chain_ask_stream(chain_id):
     scope = body.get('scope') if isinstance(body.get('scope'), dict) else None
     ui_lang = body.get('ui_lang')
     cdir = _chain_dir(chain_id)
-    history = ask.load_history(cdir)
+    tid, model, err = _ask_thread_model(body)
+    if err:
+        return jsonify({'error': err}), 400
+    tid = tid or ask.current_thread(cdir) or ask.new_thread(cdir)     # 先定下是哪段：写的时候别处开了新对话也不串
+    history = ask.load_history(cdir, tid)
     at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     user_msg = {'role': 'user', 'content': q, 'mode': mode, 'topic': topic, 'at': at}
 
@@ -6753,14 +6829,15 @@ def api_chain_ask_stream(chain_id):
                 **({'persona': r.get('persona')} if r.get('persona') else {}),
                 'citations': r['citations'], 'coverage': r['coverage'],
                 'dropped_citations': r['dropped_citations'], 'dropped_ids': r.get('dropped_ids'),
-                'cost_usd': (usage.cost_for(ref=ref) or {}).get('cost_usd', 0), 'at': at, **extra}
+                'cost_usd': (usage.cost_for(ref=ref) or {}).get('cost_usd', 0), 'model': r.get('model'),
+                'thread': tid, 'at': at, **extra}
 
     def gen():
         ref = f'ask:{uuid.uuid4().hex[:12]}'      # 单独一个 ref 才数得出这一问花了多少
         ctx, parts, finished = None, [], False
         with usage.scope(ref=ref, chain=chain_id):
             stream = ask.answer_stream(cdir, q, mode=mode, history=history, topic=topic, ui_lang=ui_lang,
-                                       scope=scope, persona=persona)
+                                       scope=scope, persona=persona, model=model)
             try:
                 for ev in stream:
                     if ev['type'] == 'ctx':
@@ -6771,7 +6848,7 @@ def api_chain_ask_stream(chain_id):
                     if ev['type'] == 'result':
                         r = {k: v for k, v in ev.items() if k != 'type'}
                         msg = bot_msg(r, ref)
-                        ask.append_history(cdir, user_msg, msg)
+                        ask.append_history(cdir, user_msg, msg, thread=tid)
                         finished = True
                         yield line({'type': 'done', 'message': msg})
                         continue
@@ -6786,8 +6863,8 @@ def api_chain_ask_stream(chain_id):
                         else:                  # 还在挑卡就停了：留一条空的，记录仍是一问一答成对
                             msg = {'role': 'assistant', 'content': '', 'mode': mode, 'topic': topic,
                                    'citations': {}, 'stopped': True, 'at': at,
-                                   'cost_usd': (usage.cost_for(ref=ref) or {}).get('cost_usd', 0)}
-                        ask.append_history(cdir, user_msg, msg)
+                                   'cost_usd': (usage.cost_for(ref=ref) or {}).get('cost_usd', 0), 'thread': tid}
+                        ask.append_history(cdir, user_msg, msg, thread=tid)
                     except Exception:  # noqa: BLE001
                         pass
                 raise
@@ -6803,8 +6880,13 @@ def api_chain_ask_clear(chain_id):
     if not _chain_ok(chain_id):
         return jsonify({'error': 'Not found'}), 404
     import ask
-    ask.clear_history(_chain_dir(chain_id))
-    return jsonify({'ok': True})
+    cdir = _chain_dir(chain_id)
+    tid = request.args.get('thread') or ask.current_thread(cdir)     # 删这一段；别的历史对话留着
+    if tid and not ask.valid_thread(tid):
+        return jsonify({'error': 'Bad thread'}), 400
+    if tid:
+        ask.delete_thread(cdir, tid)
+    return jsonify({'ok': True, 'thread': ask.current_thread(cdir), 'threads': ask.threads(cdir)})
 
 
 @app.route('/api/chain/<chain_id>/ask/starters')

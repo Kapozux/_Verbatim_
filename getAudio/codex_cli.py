@@ -53,6 +53,26 @@ def model():
     return ''
 
 
+def models_cache_path():
+    return os.path.expanduser('~/.codex/models_cache.json')
+
+
+def list_models():
+    """[(slug, 名字)]：codex 自己缓存的模型表里能列的那些（visibility=list），读不到就只有 config 里那个。"""
+    try:
+        with open(models_cache_path(), encoding='utf-8') as f:
+            d = json.load(f)
+        ms = d.get('models', d) if isinstance(d, dict) else d
+        got = [(m['slug'], m.get('display_name') or m['slug']) for m in ms
+               if isinstance(m, dict) and m.get('slug') and m.get('visibility', 'list') == 'list']
+    except (OSError, ValueError, KeyError, TypeError):
+        got = []
+    cur = model()
+    if cur and cur not in dict(got):
+        got.insert(0, (cur, cur))
+    return got
+
+
 def on():
     if (os.environ.get('CODEX_ENGINE') or '').strip().lower() not in ('on', '1', 'true', 'yes'):
         return False
@@ -81,8 +101,8 @@ def _exec(args, stdin):
     return events, r.stderr
 
 
-def text(prompt, purpose='summary', effort='medium'):
-    m = model()
+def text(prompt, purpose='summary', effort='medium', model_id=None):
+    m = model_id or model()
     args = ['exec', '--json', '--ephemeral', '--skip-git-repo-check', '--ignore-user-config', '--ignore-rules',
             '-s', 'read-only', '-C', CWD, '-c', f'model_reasoning_effort="{EFFORT.get(effort, "medium")}"',
             '--disable', 'apps', '--disable', 'browser_use', '--disable', 'computer_use']

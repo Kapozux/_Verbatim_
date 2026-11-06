@@ -476,6 +476,18 @@ def _llm(prompt, provider, model, grounded=False, purpose='analysis'):
             return _call_openai_compat(prompt, model, c[0], c[1] or 'none', label='Your own model', purpose=purpose)
         except Exception as e:  # noqa: BLE001
             raise RuntimeError(f'Your own model ({model} at {c[0]}) failed: {str(e)[:200]}') from e
+    if provider in SUB_PROVIDERS and not grounded:
+        # 添加频道时选了三家订阅之一（2026-11-06）：就用它，不再让 CARDS_ENGINE / TEXT_ENGINE 换成 Claude 的默认档；
+        # 撞上限 / 报错：跟国内模型一样，这一次改用 Gemini 同档。要上网核实的（grounded）只有 Gemini 能做，往下走
+        try:
+            return _llm_sub(prompt, provider, model, purpose)
+        except Exception as e:  # noqa: BLE001
+            _, g_extract, g_synth = resolve_analysis('gemini')
+            print(f'[分析] {provider}:{model} 报错（{str(e)[:120]}），这次改用 Gemini')
+            return _call_gemini(prompt, model=g_extract if purpose in ('cards', 'review') else g_synth, purpose=purpose)
+    if provider in SUB_PROVIDERS:
+        _, _, model = resolve_analysis('gemini')
+        provider = 'gemini'
     if purpose == 'cards':
         out = _claude_cards(prompt)
         if out:
@@ -496,6 +508,20 @@ def _llm(prompt, provider, model, grounded=False, purpose='analysis'):
             return _call_gemini(prompt, grounded=grounded, model=g_extract if purpose in ('cards', 'review') else g_synth,
                                 purpose=purpose)
     return _llm_other(prompt, provider, model, grounded, purpose)
+
+
+SUB_PROVIDERS = ('claude', 'codex', 'agy')
+
+
+def _llm_sub(prompt, provider, model, purpose):
+    if provider == 'claude':
+        import claude_cli
+        return claude_cli.text(prompt, purpose=purpose, effort='medium', model=model)
+    if provider == 'codex':
+        import codex_cli
+        return codex_cli.text(prompt, purpose=purpose, model_id=model)
+    import agy_cli
+    return agy_cli.text(prompt, model, purpose=purpose)
 
 
 # 抽证据卡交给本机 Claude Haiku（CARDS_ENGINE=claude，2026-10-13，ADR 0017）：订阅额度、记 $0。

@@ -9,6 +9,7 @@
 
 | 事 | 谁 | 在哪 | 状态 |
 |---|---|---|---|
+| 笔记本对话：历史对话（多段对话，照 Ephemeris）+ 对话栏设置里选模型（用户 11-06：「notebook 里的模型能不能搞一个选择模型的功能+一个可以看历史对话的设置」） | chat-threads 窗口 | worktree `.claude/worktrees/chat-threads`，分支 feature/chat-threads | 本地已提交，没合 main。新测试 21 项过；三家订阅都能选（Claude 10 个、GPT 8 个、agy Gemini 6 个）+ Gemini API；添加频道的「分析模型」也加了三家订阅（`claude:` / `codex:` / `agy:` 预设）；scratch 副本 5063 实测 Haiku / GPT-6.1 / agy Argon 各问一次（订阅 $0）、换对话、1700 / 1000 / 400 截图过。下一步：等用户点头合 main、重启 5001。交接 `docs/handoff/chat-threads.md` |
 | 转写走 Gemini 订阅：新引擎 `agy_flash`（默认）/ `agy_argon`，用 Antigravity CLI，不花 API 的钱（用户 11-04：「Verbatim 先增加一下 Flash 和 Argon 选项（默认 Flash）」） | agy-engine 窗口（kapozux-9e） | worktree `.claude/worktrees/agy-engine`，分支 feature/agy-engine | 上线：11-04 23:4x 合进 main（`2f4fa45`）、5001 已重启，首页默认勾 Flash。19 项新测试过，全量 65/67（`test_custom_llm` / `test_llmroute` 在 main 上本来就挂）；真 agy 实测 44 分钟课 Flash 15,151 字；1700 / 1000 / 400 截图过。下一步：用户真转几期，看额度和误拦率。交接 `docs/handoff/agy-engine.md`，ADR 0022 |
 | 官方 Gemini 转不了（撞月度上限等）先改走 OpenRouter 上的 Gemini，再落 Whisper（用户 10-28：「如果 google 官方的不行就用 OR」） | or-fallback 窗口（getaudio-28） | main（10-28 合进、5001 已重启） | 上线。65 个测试文件全过（test_or_fallback 26 项）；「CLL 伤逝」15:40 实测 74 秒、$0.052、19 段。5 分钟一块、时间戳太稀再要一次、静音块不算失败。说话人基本不标、有时出繁体。约 $0.2–0.25 / 小时音频。交接 `docs/handoff/openrouter-fallback.md` |
 | 资料库勾选几份转写，合并成一个 .md（用户 10-19：「模仿墨页将那个选择功能（合并 md）放进来」） | lib-pick 窗口（getaudio-d3） | main（10-19 合进、5001 已重启） | 上线。64 个测试文件全过（新增 test_merge_md 8 项）；5048 实测勾两份 → 下载合并 .md，1700 / 1000 / 400 × 浅深截图过。交接 `docs/handoff/library-pick.md` |
@@ -61,6 +62,7 @@
 | P2 | 只转写没分析的博主（`analyze: False`、没开 `index_transcripts`）放进笔记本后，对话 / 工作台点了只报「Nothing to work from」：应该先说清楚，并给一个「把原文加进检索（约 $X）」的按钮。马督工 10-03 已手动补上（17,859 段向量，$1.0） | 笔记本 | `docs/handoff/notebook-fixes.md` |
 | P3 | 追问「你确定吗」有时接到更早的那张闪卡上（聊天记录里贴过好几张时） | 问答 | `docs/handoff/notebook-fixes.md` |
 | P3 | 镜头输出偶尔是繁体中文 | 分析 | 10-01 记的 |
+| P2 | `tests/_support.isolate()` 没把 `CODEX_ENGINE` 置空：`.env` 开着时 `test_custom_llm` / `test_llmroute` 会真起 codex（用订阅额度、结果不定，这两个在 main 上一直挂可能就是这个） | 测试 | 11-06 chat-threads 窗口发现 |
 | P3 | 全量测试偶尔有一个文件失败，重跑就过（10-04 跑了 4 遍没复现，第一次是哪个文件没记下） | 测试 | — |
 | P3 | 414 条转写时间戳中途乱跳 | 转写 | 10-01 开过单独任务，状态待查 |
 | P3 | 演示实例 5002 一直崩（launchd 读不了 `~/Documents`） | 演示 | 用户说先把 5001 稳定了再管 |

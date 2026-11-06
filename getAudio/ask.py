@@ -21,13 +21,17 @@ import json
 import math
 import os
 import re
+import shutil
 import threading
 import time
+import uuid
 from collections import Counter
 from datetime import datetime
 
 import citations
+import agy_cli
 import claude_cli
+import codex_cli
 import config
 import timecode
 import wordtime
@@ -1335,18 +1339,82 @@ def _finish(raw, ctx, rewrite=True, model=None):
     }
 
 
-def answer(chain_dir, question, mode='about', history=None, topic=None, ui_lang=None, scope=None, persona=None):
+# 对话栏设置里能挑的模型（2026-11-06）。三家订阅（$0）：Claude Code、Codex（ChatGPT）、Antigravity（agy，Gemini），
+# 只在装了、没撞上限时列；再加 Gemini API（按量付费）。不挑 = 默认，跟以前一样：ASK_ENGINE=claude → Opus，否则 ASK_MODEL。
+# id：Claude 直接写模型名；GPT 是 codex:<slug>（老的 'codex' = config 里那个）；agy 是 agy:<模型>；Gemini API 直接写模型名。
+CLAUDE_ASK_MODELS = (('claude-opus-5-5', 'Opus 5.5'), ('claude-sonnet-5-5', 'Sonnet 5.5'), ('claude-haiku-5-5', 'Haiku 5.5'),
+                     ('claude-opus-5', 'Opus 5'), ('claude-opus-4-8', 'Opus 4.8'), ('claude-opus-4-7', 'Opus 4.7'),
+                     ('claude-opus-4-6', 'Opus 4.6'), ('claude-sonnet-5', 'Sonnet 5'), ('claude-sonnet-4-6', 'Sonnet 4.6'),
+                     ('claude-haiku-4-5', 'Haiku 4.5'))      # 跟 Ephemeris 聊天页同一张表
+GEMINI_ASK_MODELS = (('gemini-3.5-flash-lite', 'Gemini 3.5 Flash-Lite'), ('gemini-3.5-flash', 'Gemini 3.5 Flash'))
+
+
+def default_model():
+    return claude_cli.MODEL if claude_cli.engine() else ASK_MODEL
+
+
+def model_choices():
+    """[{id, label, group: claude|codex|agy|gemini, billing: sub|api}]，按家排；前端按 group 分组。"""
+    out = []
+    if claude_cli.available():
+        out += [{'id': m, 'label': n, 'group': 'claude', 'billing': 'sub'} for m, n in CLAUDE_ASK_MODELS]
+    if codex_cli.on():
+        out += [{'id': f'codex:{m}', 'label': n, 'group': 'codex', 'billing': 'sub'} for m, n in codex_cli.list_models()]
+    out += [{'id': f'agy:{m}', 'label': n, 'group': 'agy', 'billing': 'sub'} for m, n in agy_cli.models()]
+    gem = list(GEMINI_ASK_MODELS)
+    if ASK_MODEL not in dict(gem):
+        gem.insert(0, (ASK_MODEL, ASK_MODEL))
+    out += [{'id': m, 'label': n, 'group': 'gemini', 'billing': 'api'} for m, n in gem]
+    return out
+
+
+def known_model(model):
+    if not model:
+        return True
+    if model == 'codex' or model.startswith(('codex:', 'agy:')):
+        return bool(re.match(r'^[a-z]+(:[A-Za-z0-9._-]{1,60})?$', model))
+    return model in dict(CLAUDE_ASK_MODELS + GEMINI_ASK_MODELS) or model == ASK_MODEL
+
+
+def _write_with(prompt, model):
+    """按挑的模型写，边写边 yield (模型, 一段字)。订阅那三家还没出字就失败：退回 Gemini API 默认那个。"""
+    from analyze import _call_gemini_stream
+    model = model or default_model()
+    if model.startswith(('claude-', 'codex', 'agy:')):
+        got = False
+        try:
+            if model == 'codex' or model.startswith('codex:'):
+                yield model, codex_cli.text(prompt, purpose='ask', model_id=model.partition(':')[2] or None)
+                return
+            if model.startswith('agy:'):
+                yield model, agy_cli.text(prompt, model.partition(':')[2], purpose='ask')
+                return
+            for t in claude_cli.stream(prompt, purpose='ask', model=model):
+                got = True
+                yield model, t
+            return
+        except Exception:  # noqa: BLE001
+            if got:                               # 写了一半断了：跟原来的模型中途出错一样往上抛
+                raise
+        model = ASK_MODEL                         # 还没出字：照旧用原来的模型
+    for t in _call_gemini_stream(prompt, model=model, purpose='ask'):
+        yield model, t
+
+
+def answer(chain_dir, question, mode='about', history=None, topic=None, ui_lang=None, scope=None, persona=None,
+           model=None):
     """问一次。topic 给了就只在这个话题的卡里找（立场时间线的「他怎么变的」）。"""
     ctx = _prepare(chain_dir, question, mode, history, topic, ui_lang, scope, persona)
-    if claude_cli.engine():                       # ASK_ENGINE=claude：本机 Claude Code 写；不行就照旧
-        try:
-            return _finish(claude_cli.text(ctx['prompt'], purpose='ask'), ctx, model=claude_cli.MODEL)
-        except Exception:  # noqa: BLE001
-            pass
-    return _finish(_llm(ctx['prompt'], purpose='ask'), ctx)
+    if not model and not claude_cli.engine():      # 老路子：一次拿全文（MCP / 脚本走这条）
+        return _finish(_llm(ctx['prompt'], purpose='ask'), ctx)
+    parts, used = [], None
+    for used, t in _write_with(ctx['prompt'], model):
+        parts.append(t)
+    return _finish(''.join(parts), ctx, model=used)
 
 
-def answer_stream(chain_dir, question, mode='about', history=None, topic=None, ui_lang=None, scope=None, persona=None):
+def answer_stream(chain_dir, question, mode='about', history=None, topic=None, ui_lang=None, scope=None, persona=None,
+                  model=None):
     """流式问一次，按顺序 yield 事件：
       {'type': 'stage', 'stage': 'search'}                      在挑卡
       {'type': 'ctx', 'ctx': …}                                 内部用（中途停止时收尾要它），别发给前端
@@ -1354,31 +1422,20 @@ def answer_stream(chain_dir, question, mode='about', history=None, topic=None, u
       {'type': 'delta', 'text': …}                              一段字
       {'type': 'stage', 'stage': 'rewrite'}                     答错语言，在改写
       {'type': 'result', **_finish 的结果}                       最终版（出处已校验）
+    model：对话栏设置里挑的（model_choices 的 id）；没给 = 默认。
     """
-    from analyze import _call_gemini_stream
     yield {'type': 'stage', 'stage': 'search'}
     ctx = _prepare(chain_dir, question, mode, history, topic, ui_lang, scope, persona)
     yield {'type': 'ctx', 'ctx': ctx}
     yield {'type': 'stage', 'stage': 'write', 'coverage': ctx['cov']}
-    parts, model = [], None
-    if claude_cli.engine():                       # ASK_ENGINE=claude：本机 Claude Code 写
-        model = claude_cli.MODEL
-        try:
-            for t in claude_cli.stream(ctx['prompt'], purpose='ask'):
-                parts.append(t)
-                yield {'type': 'delta', 'text': t}
-        except Exception:  # noqa: BLE001
-            if parts:                             # 写了一半断了：跟原来的模型中途出错一样往上抛
-                raise
-            model = None                          # 还没出字：照旧用原来的模型
-    if not parts:
-        for t in _call_gemini_stream(ctx['prompt'], model=ASK_MODEL, purpose='ask'):
-            parts.append(t)
-            yield {'type': 'delta', 'text': t}
+    parts, used = [], None
+    for used, t in _write_with(ctx['prompt'], model):
+        parts.append(t)
+        yield {'type': 'delta', 'text': t}
     raw = ''.join(parts)
     if _wrong_lang(raw, ctx['lang']):      # 先告诉前端在改写，再去改（要几秒）
         yield {'type': 'stage', 'stage': 'rewrite'}
-    yield {'type': 'result', **_finish(raw, ctx, model=model)}
+    yield {'type': 'result', **_finish(raw, ctx, model=used)}
 
 
 def finish_partial(raw, ctx):
@@ -1389,27 +1446,152 @@ def finish_partial(raw, ctx):
 
 # ================= 聊天记录 =================
 
-def history_path(chain_dir):
+# 一个笔记本可以有好几段对话（2026-11-06，照 Ephemeris 的「问」）：chats/<thread>.json 一段一个文件，
+# {id, title, named, created, updated, messages}。「当前那段」= 最近动过的那段。以前只有一段 chat.json，
+# 第一次读的时候挪成第一段。新对话先建一个空文件（刷新页面还在），空的不进列表，再开新的会把空的收掉。
+_TID = re.compile(r'^[0-9a-z]{8,40}$')
+
+
+def history_path(chain_dir):           # 老的单段记录（只用来迁移）
     return os.path.join(chain_dir, 'chat.json')
 
 
-def load_history(chain_dir):
-    return (_read_json(history_path(chain_dir), {}) or {}).get('messages') or []
+def _chats_dir(chain_dir):
+    return os.path.join(chain_dir, 'chats')
 
 
-def append_history(chain_dir, *msgs):
+def valid_thread(tid):
+    return bool(tid) and bool(_TID.match(str(tid)))
+
+
+def _thread_path(chain_dir, tid):
+    if not valid_thread(tid):
+        raise ValueError('bad thread id')
+    return os.path.join(_chats_dir(chain_dir), f'{tid}.json')
+
+
+def _new_tid():
+    return datetime.now().strftime('%Y%m%d%H%M%S') + uuid.uuid4().hex[:6]
+
+
+def _title_from(msgs):
+    q = next((m.get('content') or '' for m in msgs if m.get('role') == 'user'), '')
+    return ' '.join(str(q).split())[:40]
+
+
+def _migrate(chain_dir):
+    """老的 chat.json → chats/ 里的第一段。调用方拿着 chat 锁。"""
+    old = history_path(chain_dir)
+    if not os.path.isfile(old):
+        return
+    msgs = (_read_json(old, {}) or {}).get('messages') or []
+    if msgs:
+        os.makedirs(_chats_dir(chain_dir), exist_ok=True)
+        first = str(msgs[0].get('at') or '') or _now()
+        last = str(msgs[-1].get('at') or '') or first
+        tid = re.sub(r'\D', '', first)[:14].ljust(14, '0') + uuid.uuid4().hex[:6]
+        _write_json(_thread_path(chain_dir, tid), {'id': tid, 'title': _title_from(msgs), 'named': False,
+                                                    'created': first, 'updated': last, 'messages': msgs})
+    os.remove(old)
+
+
+def _all_threads(chain_dir):
+    d = _chats_dir(chain_dir)
+    out = []
+    for fn in os.listdir(d) if os.path.isdir(d) else ():
+        tid = fn[:-5]
+        if fn.endswith('.json') and valid_thread(tid):
+            t = _read_json(os.path.join(d, fn), None)
+            if isinstance(t, dict):
+                t['id'] = tid
+                out.append(t)
+    # 先按 ts（time.time()，同一秒里也分得出先后：刚问完马上点新对话），老文件没有 ts 就按 updated
+    out.sort(key=lambda t: (t.get('ts') or datetime.strptime(str(t.get('updated') or '1970-01-01 00:00:00')[:19],
+                                                             '%Y-%m-%d %H:%M:%S').timestamp(), t['id']), reverse=True)
+    return out
+
+
+def threads(chain_dir):
+    """历史对话列表（不含消息），最近的在前；空的那段不列。"""
     with chain_lock(chain_dir, 'chat'):
-        msgs_all = load_history(chain_dir) + list(msgs)
-        _write_json(history_path(chain_dir), {'messages': msgs_all[-200:]})
-        return msgs_all
+        _migrate(chain_dir)
+        return [{'id': t['id'], 'title': t.get('title') or '', 'created': t.get('created'), 'updated': t.get('updated'),
+                 'n': len(t.get('messages') or [])} for t in _all_threads(chain_dir) if t.get('messages')]
+
+
+def current_thread(chain_dir):
+    """最近动过的那段（可能是刚开的空对话）；一段都没有 → None。"""
+    with chain_lock(chain_dir, 'chat'):
+        _migrate(chain_dir)
+        ts = _all_threads(chain_dir)
+        return ts[0]['id'] if ts else None
+
+
+def new_thread(chain_dir):
+    with chain_lock(chain_dir, 'chat'):
+        _migrate(chain_dir)
+        for t in _all_threads(chain_dir):          # 之前开了没问的空对话：收掉，免得越攒越多
+            if not t.get('messages'):
+                os.remove(_thread_path(chain_dir, t['id']))
+        os.makedirs(_chats_dir(chain_dir), exist_ok=True)
+        tid, now = _new_tid(), _now()
+        _write_json(_thread_path(chain_dir, tid), {'id': tid, 'title': '', 'named': False, 'created': now,
+                                                    'updated': now, 'ts': time.time(), 'messages': []})
+        return tid
+
+
+def load_history(chain_dir, thread=None):
+    tid = thread or current_thread(chain_dir)
+    if not tid:
+        return []
+    with chain_lock(chain_dir, 'chat'):
+        _migrate(chain_dir)
+        return (_read_json(_thread_path(chain_dir, tid), {}) or {}).get('messages') or []
+
+
+def append_history(chain_dir, *msgs, thread=None):
+    """接在 thread 那段后面（没给 = 当前那段；一段都没有就新开一段）。返回写进去的是哪段。"""
+    tid = thread or current_thread(chain_dir) or new_thread(chain_dir)
+    with chain_lock(chain_dir, 'chat'):
+        path = _thread_path(chain_dir, tid)
+        t = _read_json(path, None) or {'id': tid, 'title': '', 'named': False, 'created': _now()}
+        t['messages'] = ((t.get('messages') or []) + list(msgs))[-200:]
+        if not t.get('named') and not t.get('title'):
+            t['title'] = _title_from(t['messages'])
+        t['updated'], t['ts'] = _now(), time.time()
+        os.makedirs(_chats_dir(chain_dir), exist_ok=True)
+        _write_json(path, t)
+        return tid
+
+
+def rename_thread(chain_dir, tid, title):
+    title = ' '.join(str(title or '').split())[:80]
+    if not title:
+        raise ValueError('empty title')
+    with chain_lock(chain_dir, 'chat'):
+        path = _thread_path(chain_dir, tid)
+        t = _read_json(path, None)
+        if not t:
+            raise FileNotFoundError(tid)
+        t.update(title=title, named=True)
+        _write_json(path, t)
+
+
+def delete_thread(chain_dir, tid):
+    with chain_lock(chain_dir, 'chat'):
+        try:
+            os.remove(_thread_path(chain_dir, tid))
+        except FileNotFoundError:
+            pass
 
 
 def clear_history(chain_dir):
+    """全部对话都删掉（测试 / 重置用；界面上删的是一段：delete_thread）。"""
     with chain_lock(chain_dir, 'chat'):
-        try:
-            os.remove(history_path(chain_dir))
-        except FileNotFoundError:
-            pass
+        for p in (history_path(chain_dir),):
+            if os.path.exists(p):
+                os.remove(p)
+        shutil.rmtree(_chats_dir(chain_dir), ignore_errors=True)
 
 
 # ================= 开场问题 =================

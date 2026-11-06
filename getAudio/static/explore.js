@@ -825,7 +825,24 @@ const cxCiteCache = {};
 function rememberCites(cites) { Object.assign(cxCiteCache, cites || {}); }
 
 // ================= 问 =================
-let askState = { mode: 'about', persona: null, busy: false, messages: [], starters: [] };
+let askState = { mode: 'about', persona: null, busy: false, messages: [], starters: [], thread: null, threads: [] };
+// 对话栏设置里挑的模型（2026-11-06）：全局记在这个浏览器里，''= 默认。列表从 /ask/models 拿，开设置时才拉
+let askModels = { list: null, def: '' };
+function askModel() {
+    const m = cxStore('cx.model') || '';
+    return askModels.list && m && !askModels.list.some(x => x.id === m) ? '' : m;   // 那个模型现在不能用了（没装 / 撞上限）：用默认
+}
+function askModelLabel(id) {                // 回答下面那行：带上是哪家（「Opus 5.5」→「Claude Opus 5.5」）
+    const hit = (askModels.list || []).find(x => x.id === id);
+    if (!hit) return id === 'codex' ? 'GPT' : String(id || '').replace(/^(codex|agy):/, '');
+    return hit.group === 'claude' ? 'Claude ' + hit.label : hit.group === 'agy' ? hit.label + ' · agy' : hit.label;
+}
+async function askLoadModels() {
+    try {
+        const r = await (await fetch(`/api/chain/${cx.id}/ask/models`)).json();
+        askModels = { list: r.models || [], def: r.default || '' };
+    } catch { /* 拉不到就只显示回答方式 */ }
+}
 
 // ----- 回答方式（原来输入框上面那个「问关于他的事 / 模拟他回答」切换）-----
 // 跟 NotebookLM 的「配置对话」一样收进对话栏右上角的设置里：默认状态不占地方；
@@ -855,9 +872,28 @@ function askCfgHtml() {
         <span><b>${t}</b><span class="cx-muted">${d}</span>${extra}</span></label>`;
     const who = ppl.length > 1 ? `<div class="pp-bar cx-cfg-who">${ppl.map(p => `<button type="button" class="pp-chip${cur && p.chain_id === cur.chain_id ? ' on' : ''}"
         data-persona="${escapeHtml(p.chain_id)}">${personFace(p)}<span>${escapeHtml(personName(p))}</span></button>`).join('')}</div>` : '';
+    if (!ppl.length) return askModelsHtml(true) || `<div class="cx-muted">${T('cx.loading')}</div>`;   // 纯资料笔记本：没有回答方式可选
     return `<div class="cx-cfg-t">${T('cx.cfg')}</div>
         ${opt('about', T('cx.cfgAbout'), T((cx.people || []).length > 1 ? 'cx.cfgAboutDP' : 'cx.cfgAboutD'))}
-        ${opt('as', T('cx.cfgAs'), T('cx.cfgAsD'), askState.mode === 'as' ? who : '')}`;
+        ${opt('as', T('cx.cfgAs'), T('cx.cfgAsD'), askState.mode === 'as' ? who : '')}
+        ${askModelsHtml()}`;
+}
+function askModelsHtml(first) {
+    if (!askModels.list || !askModels.list.length) return '';
+    const cur = askModel() || askModels.def;
+    // 按家分组：组头写是哪家、怎么付钱；一行一个模型
+    let html = '', last = null;
+    for (const x of askModels.list) {
+        if (x.group !== last) { html += `<div class="cx-model-g" data-g="${x.group}">${T('cx.mg.' + x.group)}</div>`; last = x.group; }
+        html += `<label class="cx-model-opt${x.id === cur ? ' on' : ''}">
+            <input type="radio" name="cx-model" value="${escapeHtml(x.id)}" ${x.id === cur ? 'checked' : ''}>
+            <span class="cx-model-n">${escapeHtml(x.label)}${x.id === askModels.def ? ` <span class="cx-muted">· ${T('cx.modelDefault')}</span>` : ''}</span></label>`;
+    }
+    const groups = [...new Set(askModels.list.map(x => x.group))];
+    const jump = groups.length > 1 ? `<div class="cx-model-jump">${groups.map(g =>
+        `<button type="button" data-jump="${g}">${T('cx.mj.' + g)}</button>`).join('')}</div>` : '';
+    return `<div class="cx-cfg-t${first ? '' : ' cx-cfg-t2'}">${T('cx.model')}</div>${jump}
+        <div class="cx-model-list" id="cx-model-list">${html}</div>`;
 }
 
 // 对话开头那块：表情 / 头像、项目名、「N 个来源 · 日期」、一句话。项目数据可能比对话区晚到，到了再补一遍（cxFillHead）
@@ -895,7 +931,7 @@ async function askLoad() {
     const ch = cx.chain || {};
     const person = !!ch.url;
     askState = { mode: cxStore('cx.mode.' + id) === 'as' ? 'as' : 'about', persona: cxStore('cx.persona.' + id) || null,
-                 busy: false, messages: [], starters: [] };
+                 busy: false, messages: [], starters: [], thread: null, threads: [] };
     if (!askPeople().length) askState.mode = 'about';
     const canAsk = !window.VERBATIM_DEMO || window.VERBATIM_DEMO_ASK;
     const nSrc = typeof srcAllIds === 'function' && srcState.data ? srcAllIds(srcState.data).length : (ch.n_sources || 0);
@@ -947,10 +983,13 @@ async function askLoad() {
             askSend(text);
         });
     }
+    await askLoadModels();                 // 回答下面写的是哪个模型答的：要它的名字
     try {
-        const h = await (await fetch(`/api/chain/${id}/ask`)).json();
+        const h = await (await fetch(`/api/chain/${id}/ask?thread=${encodeURIComponent(cxStore('cx.thread.' + id) || '')}`)).json();
         if (cx.id !== id) return;
         askState.messages = h.messages || [];
+        askState.thread = h.thread || null;
+        askState.threads = h.threads || [];
     } catch { /* 读不到历史就当新对话 */ }
     askRenderThread();
     askLoadStarters(id);
@@ -969,29 +1008,122 @@ const CX_TUNE_SVG = '<svg viewBox="0 0 24 24" width="19" height="19" fill="none"
 function askHeadWire(id) {
     const head = document.getElementById('cx-chat-h');
     if (!head) return;
-    const can = askPeople().length > 0 && CAN_ASK();
+    const can = CAN_ASK();
     head.innerHTML = `<b>${T('cx.chat')}</b><span class="cx-foot-sp"></span>
+        ${can ? `<details class="cx-hd-menu" id="cx-hist"><summary class="cx-ic-btn" title="${escapeHtml(T('cx.history'))}" aria-label="${escapeHtml(T('cx.history'))}">${CX_HIST_SVG}</summary>
+            <div class="cx-hd-pop cx-hist-pop" id="cx-hist-pop"></div></details>` : ''}
         ${can ? `<details class="cx-hd-menu" id="cx-cfg"><summary class="cx-ic-btn" title="${escapeHtml(T('cx.cfg'))}" aria-label="${escapeHtml(T('cx.cfg'))}">${CX_TUNE_SVG}</summary>
             <div class="cx-hd-pop cx-cfg-pop" id="cx-cfg-pop"></div></details>` : ''}
         <details class="cx-hd-menu" id="cx-more"><summary class="cx-ic-btn" title="${escapeHtml(T('cx.more'))}" aria-label="${escapeHtml(T('cx.more'))}">⋯</summary>
             <div class="cx-hd-pop">
                 <div class="cx-hd-label">${T('cx.exportConv')}</div>
                 <button type="button" data-cexp="pdf">PDF</button><button type="button" data-cexp="docx">Word</button><button type="button" data-cexp="md">Markdown</button>
-                <hr><button type="button" data-clear class="danger">${T('cx.clear')}</button>
+                ${can ? `<hr><button type="button" data-clear class="danger">${T('cx.deleteChat')}</button>` : ''}
             </div></details>`;
     const cfg = head.querySelector('#cx-cfg');
-    if (cfg) cfg.addEventListener('toggle', () => { if (cfg.open) askCfgRender(); });
+    if (cfg) cfg.addEventListener('toggle', async () => {
+        if (!cfg.open) return;
+        askCfgRender();
+        if (!askModels.list) { await askLoadModels(); if (cfg.open) askCfgRender(); }
+    });
+    const hist = head.querySelector('#cx-hist');
+    if (hist) hist.addEventListener('toggle', () => { if (hist.open) askHistRender(true); });
     head.querySelectorAll('[data-cexp]').forEach(b => b.onclick = () => {
         head.querySelector('#cx-more').open = false;
         if (typeof runExport === 'function') runExport(b.dataset.cexp, askConvDoc());
     });
-    head.querySelector('[data-clear]').onclick = async () => {
+    const del = head.querySelector('[data-clear]');
+    if (del) del.onclick = async () => {
         head.querySelector('#cx-more').open = false;
-        if (!askState.messages.length || !confirm(T('cx.clearConfirm'))) return;
-        await fetch(`/api/chain/${id}/ask`, { method: 'DELETE' });
-        askState.messages = [];
-        askRenderThread();
+        if (askState.busy || !askState.messages.length || !confirm(T('cx.deleteChatConfirm'))) return;
+        await askDeleteThread(askState.thread);
     };
+}
+
+// ----- 历史对话（照 Ephemeris 的「问」：新对话不清掉旧的，旧的都在这里翻）-----
+const CX_HIST_SVG = '<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v4h4"/><path d="M12 8v4l3 2"/></svg>';
+function askWhen(s) {
+    const d = String(s || '');
+    const today = new Date().toISOString().slice(0, 10);
+    return d.slice(0, 10) === today ? d.slice(11, 16) : d.slice(5, 10);
+}
+async function askHistRender(refresh) {
+    const pop = document.getElementById('cx-hist-pop');
+    if (!pop) return;
+    if (refresh) {
+        try {
+            const r = await (await fetch(`/api/chain/${cx.id}/ask?thread=${encodeURIComponent(askState.thread || '')}`)).json();
+            askState.threads = r.threads || [];
+        } catch { /* 用手里的 */ }
+    }
+    const rows = askState.threads.map(t => `<div class="cx-hist-row${t.id === askState.thread ? ' on' : ''}" data-tid="${escapeHtml(t.id)}">
+            <button type="button" class="cx-hist-open"><span class="cx-hist-t">${escapeHtml(t.title || T('cx.untitled'))}</span>
+                <span class="cx-muted">${escapeHtml(askWhen(t.updated))} · ${T('cx.nMsgs', { n: Math.ceil((t.n || 0) / 2) })}</span></button>
+            <button type="button" class="cx-hist-ic" data-ren title="${escapeHtml(T('cx.rename'))}" aria-label="${escapeHtml(T('cx.rename'))}">✎</button>
+            <button type="button" class="cx-hist-ic" data-del title="${escapeHtml(T('cx.deleteChat'))}" aria-label="${escapeHtml(T('cx.deleteChat'))}">×</button>
+        </div>`).join('');
+    pop.innerHTML = `<button type="button" class="cx-hist-new" ${askState.busy ? 'disabled' : ''}>＋ ${T('cx.newChat')}</button>
+        <div class="cx-hd-label">${T('cx.history')}</div>
+        <div class="cx-hist-list">${rows || `<div class="cx-muted cx-hist-empty">${T('cx.noHistory')}</div>`}</div>`;
+    pop.querySelector('.cx-hist-new').onclick = () => { document.getElementById('cx-hist').open = false; askNewThread(); };
+    pop.querySelectorAll('.cx-hist-row').forEach(row => {
+        const tid = row.dataset.tid;
+        row.querySelector('.cx-hist-open').onclick = () => { document.getElementById('cx-hist').open = false; askOpenThread(tid); };
+        row.querySelector('[data-ren]').onclick = async () => {
+            const t = askState.threads.find(x => x.id === tid);
+            const name = prompt(T('cx.rename'), (t && t.title) || '');
+            if (!name || !name.trim()) return;
+            const r = await (await fetch(`/api/chain/${cx.id}/ask/threads/${tid}`, { method: 'POST',
+                headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: name }) })).json();
+            if (r.threads) askState.threads = r.threads;
+            askHistRender();
+        };
+        row.querySelector('[data-del]').onclick = async () => {
+            if (askState.busy && tid === askState.thread) return;
+            if (!confirm(T('cx.deleteChatConfirm'))) return;
+            await askDeleteThread(tid);
+            askHistRender();
+        };
+    });
+}
+async function askOpenThread(tid) {
+    if (askState.busy || !tid) return;
+    const id = cx.id;
+    try {
+        const r = await (await fetch(`/api/chain/${id}/ask?thread=${encodeURIComponent(tid)}`)).json();
+        if (cx.id !== id) return;
+        askState.thread = r.thread;
+        askState.threads = r.threads || [];
+        askState.messages = r.messages || [];
+        cxStore('cx.thread.' + id, r.thread || '');
+    } catch { return; }
+    askRenderThread();
+    const sc = document.getElementById('cx-scroll');
+    if (sc) sc.scrollTop = askState.messages.length ? sc.scrollHeight : 0;
+}
+async function askNewThread() {
+    if (askState.busy) return;
+    if (!askState.messages.length && askState.thread) { document.getElementById('cx-q')?.focus(); return; }   // 已经是空的新对话
+    const id = cx.id;
+    try {
+        const r = await (await fetch(`/api/chain/${id}/ask/threads`, { method: 'POST' })).json();
+        if (cx.id !== id || !r.thread) return;
+        askState.thread = r.thread;
+        askState.messages = [];
+        cxStore('cx.thread.' + id, r.thread);
+    } catch { return; }
+    askRenderThread();
+    document.getElementById('cx-q')?.focus();
+}
+async function askDeleteThread(tid) {
+    const id = cx.id;
+    const r = await (await fetch(`/api/chain/${id}/ask?thread=${encodeURIComponent(tid || '')}`, { method: 'DELETE' })).json().catch(() => ({}));
+    if (cx.id !== id) return;
+    askState.threads = r.threads || askState.threads.filter(t => t.id !== tid);
+    if (tid === askState.thread) {                 // 删的是正在看的那段：打开最近那段（没有就是空的新对话）
+        if (r.thread) await askOpenThread(r.thread);
+        else { askState.thread = null; askState.messages = []; askRenderThread(); }
+    }
 }
 function askCfgRender() {
     const pop = document.getElementById('cx-cfg-pop');
@@ -999,6 +1131,19 @@ function askCfgRender() {
     pop.innerHTML = askCfgHtml();
     pop.querySelectorAll('input[name="cx-mode"]').forEach(r => r.onchange = () => { askSetMode(r.value); askCfgRender(); });
     pop.querySelectorAll('[data-persona]').forEach(b => b.onclick = () => { askSetMode('as', b.dataset.persona); askCfgRender(); });
+    pop.querySelectorAll('[data-jump]').forEach(b => b.onclick = () => {   // 跳到那一家（列表长，后面几家要滚才看得到）
+        const ml = document.getElementById('cx-model-list');
+        const h = ml && ml.querySelector(`.cx-model-g[data-g="${b.dataset.jump}"]`);
+        if (h) ml.scrollTo({ top: h.offsetTop, behavior: 'smooth' });
+    });
+    pop.querySelectorAll('input[name="cx-model"]').forEach(r => r.onchange = () => {
+        cxStore('cx.model', r.value === askModels.def ? '' : r.value);
+        const top = (document.getElementById('cx-model-list') || {}).scrollTop || 0;
+        askCfgRender();
+        const ml = document.getElementById('cx-model-list');
+        if (ml) ml.scrollTop = top;
+        askModeUi();
+    });
 }
 function askConvDoc() {
     return { title: T('exp.convTitle', { name: chainDisplayName(cx.chain || {}) || '' }),
@@ -1027,7 +1172,7 @@ function askModeUi() {
     const disc = document.getElementById('cx-disc');
     if (disc) disc.textContent = as ? T('cx.disclaimerAs') : T(person ? 'cx.disclaimer' : 'cx.disclaimerP');
     const cfg = document.querySelector('#cx-cfg summary');
-    if (cfg) cfg.classList.toggle('on', as);
+    if (cfg) cfg.classList.toggle('on', as || !!askModel());
 }
 
 async function askLoadStarters(id) {
@@ -1081,7 +1226,7 @@ function msgHtml(m, i) {
     }
     rememberCites(m.citations);
     const sim = m.mode === 'as' ? `<div class="cx-sim">${T('cx.simLabel')}</div>` : '';
-    const cost = m.cost_usd ? ' · ' + fmtUsd(m.cost_usd) : '';
+    const cost = (m.model ? ' · ' + escapeHtml(askModelLabel(m.model)) : '') + (m.cost_usd ? ' · ' + fmtUsd(m.cost_usd) : '');
     const dropped = m.dropped_citations ? ' · ' + T('cx.dropped', { n: m.dropped_citations }) : '';
     const q = (askState.messages[i - 1] || {}).content || '';
     const exp = typeof exportMenuHtml === 'function' ? exportMenuHtml(() => ({
@@ -1193,6 +1338,7 @@ async function askSend(question, topic) {
         const resp = await fetch(`/api/chain/${id}/ask/stream`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ctrl.signal,
             body: JSON.stringify({ question, mode: askState.mode, topic: topic || undefined, ui_lang: currentLang,
+                                   thread: askState.thread || undefined, model: askModel() || undefined,
                                    persona: askState.mode === 'as' && askPersona() ? askPersona().chain_id : undefined,
                                    scope: typeof srcScopeBody === 'function' ? srcScopeBody() : undefined }),
         });
@@ -1237,6 +1383,7 @@ async function askSend(question, topic) {
     askSetBusy(false);
     if (cx.id !== id) return;
     askState.messages[askState.messages.indexOf(pending)] = msg;
+    if (msg.thread) { askState.thread = msg.thread; cxStore('cx.thread.' + id, msg.thread); }
     askRenderThread();
     const last = document.querySelector('#cx-thread .cx-msg:last-child');
     if (last) last.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -1250,7 +1397,7 @@ async function askSwapSaved(id, local) {
         await new Promise(r => setTimeout(r, wait));
         if (cx.id !== id || askState.busy) return;
         let saved;
-        try { saved = (await (await fetch(`/api/chain/${id}/ask`)).json()).messages || []; } catch { return; }
+        try { saved = (await (await fetch(`/api/chain/${id}/ask?thread=${encodeURIComponent(askState.thread || '')}`)).json()).messages || []; } catch { return; }
         const s = saved[saved.length - 1];
         const i = askState.messages.indexOf(local);
         if (i < 0) return;
