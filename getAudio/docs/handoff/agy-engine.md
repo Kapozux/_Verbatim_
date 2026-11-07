@@ -4,6 +4,7 @@
 - **怎么跑**：本机要有 agy（`brew install --cask antigravity-cli`），并在「终端」App 里运行一次 `agy`，用有 Gemini 订阅的账号登录。查额度：`agy -p /usage`。
 - **已知问题**：Flash 专有名词会听错、常被安全过滤误拦（误拦的块会换 Argon，吃 Argon 周额度）；时间戳靠事后本机 Whisper 对齐才准；`test_custom_llm` / `test_llmroute` 在 main 上本来就挂（不是这个分支弄的）。
 - **11-06 改动**（`3b81e04`、`7062ccc`）：并发按**切片**算——`AGY_FLASH_CHUNKS`（默认 6，作者本机 5，跟闸的非 live 上限对齐）/ `AGY_ARGON_CHUNKS`（默认 2）管全局同时几片，一个视频有空位就多拿；Flash 被拦改 Argon 时占 Argon 的位子。`AGY_QUOTA_WAIT=on`（默认关，作者本机开着）：额度到闸的保留线、或闸抛 Paused，就每 5 分钟看一次、最多等 48 小时，恢复了接着转，不改走付费 OpenRouter；等的时候链条被停 → 记失败，不落 OpenRouter / Whisper。注意：非额度类的 agy 失败仍会走 OpenRouter（老行为）。频道期数上限 `MAX_CHAIN_VIDEOS`（默认 600，作者本机 800）。测试 `tests/test_agy_chunks.py`（12 项）、`tests/test_chain_cap.py`。
+- **11-07 改动**（分支 `feature/agy-stuck`）：Flash 单片卡住就掐。gate.db 1319 次 Flash 实测：15 分钟一片中位 40–50 秒、九成 80 秒内；卡住的（思考绕圈、输出上万 token）要 300–500 秒才回 ERROR（11-07 一期 68 分钟录音被一片拖到 9 分钟，API 只要 3 分钟）。现在每分钟音频给 8 秒（15 分钟 = 120 秒，最少 30 秒），到点杀掉 agy 马上重来，最多掐 2 次，第 3 次按 `AGY_TIMEOUT_S`（900）等；Argon 不掐。`AGY_STUCK_PER_MIN` 调每分钟几秒，0 关掉。测试 `tests/test_agy_stuck.py`（13 项）。
 - **下一步**：看邵艾伦频道（679 期，链条 `bb8a3b68…`，11-06 14:4x 开跑）的实际吞吐、误拦率、额度；跑几周看每小时音频实际扣多少额度、误拦率多少；向量也想换本机（Qwen3-Embedding，在 Ephemeris 那边评测）。
 
 ## 实测（2026-11-04，伤逝那节课 44 分钟）
