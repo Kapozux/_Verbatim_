@@ -43,6 +43,22 @@ BUCKETS = {'agy_flash': ('gemini-5h', 'gemini-weekly'), 'agy_argon': ('gemini-ar
 CHUNK_SECONDS = 15 * 60
 _TIMEOUT_S = int(os.environ.get('AGY_TIMEOUT_S') or 900)   # 11-06：5 路并发时 15 分钟一片偶尔 600 秒写不完，回半截稿 + ERROR
 _QUOTA_TTL_S = 300
+# 卡住就掐（11-07，用户：「15 分钟的一个切片是不是有一个固定的转写时间…超过 1.5 倍时间，自动删了重试」）：
+# gate.db 1319 次 Flash 实测，15 分钟一片中位 40–50 秒、九成在 80 秒内；卡住的（思考绕圈、输出上万 token）
+# 要 300–500 秒才回 ERROR。按 80 秒的 1.5 倍：每分钟音频给 8 秒（15 分钟 = 120 秒，最少 30 秒），到点掐掉马上重来。
+STUCK_TRIES = 2                         # 最多掐几次；再往后按 _TIMEOUT_S 等，别把真慢的片掐成死循环
+_STUCK_MIN_S = 30
+
+
+def stuck_limit(chunk_seconds):
+    """Flash 这一片最多等几秒算卡住；AGY_STUCK_PER_MIN=0 关掉（返回 None）。"""
+    try:
+        per_min = float(os.environ.get('AGY_STUCK_PER_MIN') or 8)
+    except ValueError:
+        per_min = 8.0
+    if per_min <= 0:
+        return None
+    return max(_STUCK_MIN_S, int(round((chunk_seconds or CHUNK_SECONDS) / 60 * per_min)))
 _TS = re.compile(r'\[((?:\d{1,2}:)?\d{1,2}:\d{2})\]')
 _BLOCK_MARKERS = ("blocked by Gemini's filters", 'blocked by gemini', 'is not supported by the current model')
 
@@ -244,14 +260,26 @@ class _Flaky(RuntimeError):
     pass
 
 
-def _ask(model, path, cwd, strict=False, should_stop=None):
-    for i, w in enumerate((*FLAKY_WAITS, None)):
+class _Stuck(RuntimeError):
+    pass
+
+
+def _ask(model, path, cwd, strict=False, should_stop=None, limit=None):
+    """limit：这一片超过几秒算卡住（只有 Flash 传）。卡住掐掉马上重来，最多 STUCK_TRIES 次，之后按 _TIMEOUT_S 等。"""
+    flaky = stuck = 0
+    while True:
+        lim = limit if limit and stuck < STUCK_TRIES else None
         try:
-            return _ask_once(model, path, cwd, strict, should_stop)
+            return _ask_once(model, path, cwd, strict, should_stop, limit=lim)
+        except _Stuck:
+            stuck += 1
+            print(f'[agy] {os.path.basename(path)} 超过 {lim} 秒没回（卡住了），掐掉重来（第 {stuck} 次）', flush=True)
         except _Flaky as e:
-            if w is None:
+            if flaky >= len(FLAKY_WAITS):
                 raise RuntimeError(str(e)) from e
-            print(f'[agy] {os.path.basename(path)} 第 {i + 1} 次出错（{str(e)[:80]}），{w} 秒后重试', flush=True)
+            w = FLAKY_WAITS[flaky]
+            flaky += 1
+            print(f'[agy] {os.path.basename(path)} 第 {flaky} 次出错（{str(e)[:80]}），{w} 秒后重试', flush=True)
             _sleep(w, should_stop)
 
 
@@ -263,21 +291,25 @@ def _sleep(secs, should_stop):
         time.sleep(min(1.0, max(0.0, end - time.time())))
 
 
-def _ask_once(model, path, cwd, strict=False, should_stop=None):
+def _ask_once(model, path, cwd, strict=False, should_stop=None, limit=None):
     w0 = time.time()
     while True:
         t0 = time.time()
         try:
             with claude_gate.slot('verbatim', 'transcribe', 'normal', provider='agy', model=model):
                 d = _run_json(['-p', _prompt(path, strict), '--model', model, '--print-timeout', f'{_TIMEOUT_S}s'],
-                              timeout=_TIMEOUT_S + 60, cwd=cwd)
+                              timeout=limit or _TIMEOUT_S + 60, cwd=cwd)
             break
         except claude_gate.Paused as e:          # 闸说额度要留给用户 / 三边一起停着：按规矩等或马上抛
             _waiting(e, w0)
             _nap(should_stop)
         except FileNotFoundError:
             raise                                # 切片 / 工作目录没了（这一期已经放弃），重试没用
-        except (subprocess.TimeoutExpired, json.JSONDecodeError, OSError) as e:
+        except subprocess.TimeoutExpired as e:   # subprocess.run 到点会杀掉 agy
+            if limit:
+                raise _Stuck(str(e)[:120]) from e
+            raise _Flaky(f'agy 没回结果：{type(e).__name__}: {str(e)[:120]}') from e
+        except (json.JSONDecodeError, OSError) as e:
             raise _Flaky(f'agy 没回结果：{type(e).__name__}: {str(e)[:120]}') from e
         except RuntimeError as e:                # 多个 agy 同时起，偶尔读不到登录（日志 You are not logged into Antigravity）
             if str(e).startswith(('agy 没有返回结果', 'agy 没登录')):
@@ -312,14 +344,15 @@ def _transcribe_chunk(engine, path, chunk_seconds, cwd, should_stop=None):
     """转一块。Flash 被安全过滤误拦就这一块先再试一次 Flash、还拦再换 Argon；还拦就当内容拦截报上去（SAFETY）。
     时间戳太稀就带提醒再要一次。换 Argon 时先让出 Flash 的位子、再排 Argon 的（别占着一个干等）。"""
     model = MODELS[engine]
+    lim = stuck_limit(chunk_seconds) if engine == 'agy_flash' else None    # Argon 没实测过多久、额度也金贵，不掐
     blocked = None
     with _inflight[engine]:
         try:
-            text = _ask(model, path, cwd, should_stop=should_stop)
+            text = _ask(model, path, cwd, should_stop=should_stop, limit=lim)
             # 时间戳太稀（11-04 实测：Flash 第一块 15 分钟只打了一个）→ 带「再强调一次」再要一遍，取时间戳多的那份
             if chunk_seconds and chunk_seconds >= 120 and len(_TS.findall(text)) < chunk_seconds / 90:
                 try:
-                    again = _ask(model, path, cwd, strict=True, should_stop=should_stop)
+                    again = _ask(model, path, cwd, strict=True, should_stop=should_stop, limit=lim)
                     if len(_TS.findall(again)) > len(_TS.findall(text)):
                         text = again
                 except _Blocked:
@@ -329,7 +362,7 @@ def _transcribe_chunk(engine, path, chunk_seconds, cwd, should_stop=None):
                 raise RuntimeError(f'agy 内容被安全过滤 SAFETY：{e}') from e
             try:
                 # Flash 的误拦有随机性（11-04 同一块连跑两次：一次拦、一次正常 12 个时间戳），先原样再来一次，省 Argon 的周额度
-                text = _ask(model, path, cwd, should_stop=should_stop)
+                text = _ask(model, path, cwd, should_stop=should_stop, limit=lim)
             except _Blocked as e2:
                 blocked = e2
     if blocked is not None:
