@@ -46,7 +46,11 @@ _QUOTA_TTL_S = 300
 # 卡住就掐（11-07，用户：「15 分钟的一个切片是不是有一个固定的转写时间…超过 1.5 倍时间，自动删了重试」）：
 # gate.db 1319 次 Flash 实测，15 分钟一片中位 40–50 秒、九成在 80 秒内；卡住的（思考绕圈、输出上万 token）
 # 要 300–500 秒才回 ERROR。按 80 秒的 1.5 倍：每分钟音频给 8 秒（15 分钟 = 120 秒，最少 30 秒），到点掐掉马上重来。
-STUCK_TRIES = 2                         # 最多掐几次；再往后按 _TIMEOUT_S 等，别把真慢的片掐成死循环
+# 11-08 改：以前掐满 2 次就不计时、按 900 秒干等，实测一期卡住 + ERROR 轮着来，第 3 次一等 15 分钟。
+# 现在每次都计时、每掐一次限时放宽 1.5 倍（120 → 180 → 270），真慢的片也有机会跑完；
+# 这一片 Flash 卡住 + 回 status ERROR 合计 3 次就换 Argon 转这一片（跟被安全过滤拦时一样），不再死磕 Flash。
+STUCK_GROWTH = 1.5
+FLASH_GIVE_UP = 3
 _STUCK_MIN_S = 30
 
 
@@ -257,24 +261,39 @@ FLAKY_WAITS = (20, 60, 180)
 
 
 class _Flaky(RuntimeError):
-    pass
+    partial = False      # 回了 status ERROR 但带半截稿（模型那边绕圈 / 被掐断），不是断线
 
 
 class _Stuck(RuntimeError):
     pass
 
 
+class _GiveUp(RuntimeError):
+    """Flash 这一片卡住 / 回 ERROR 太多次，换 Argon。"""
+
+
 def _ask(model, path, cwd, strict=False, should_stop=None, limit=None):
-    """limit：这一片超过几秒算卡住（只有 Flash 传）。卡住掐掉马上重来，最多 STUCK_TRIES 次，之后按 _TIMEOUT_S 等。"""
-    flaky = stuck = 0
+    """limit：这一片超过几秒算卡住（只有 Flash 传）。卡住掐掉马上重来，每次限时放宽 STUCK_GROWTH 倍；
+    卡住 + 回 status ERROR 合计 FLASH_GIVE_UP 次抛 _GiveUp，由调用方换 Argon。"""
+    flaky = stuck = bad = 0
+    name = os.path.basename(path)
     while True:
-        lim = limit if limit and stuck < STUCK_TRIES else None
+        lim = int(round(limit * STUCK_GROWTH ** stuck)) if limit else None
         try:
             return _ask_once(model, path, cwd, strict, should_stop, limit=lim)
-        except _Stuck:
+        except _Stuck as e:
             stuck += 1
-            print(f'[agy] {os.path.basename(path)} 超过 {lim} 秒没回（卡住了），掐掉重来（第 {stuck} 次）', flush=True)
+            bad += 1
+            if bad >= FLASH_GIVE_UP:
+                print(f'[agy] {name} 超过 {lim} 秒没回，Flash 已卡住 {stuck} 次、出错 {bad - stuck} 次，换 Argon', flush=True)
+                raise _GiveUp(f'卡住 {stuck} 次、出错 {bad - stuck} 次') from e
+            print(f'[agy] {name} 超过 {lim} 秒没回（卡住了），掐掉重来（第 {stuck} 次）', flush=True)
         except _Flaky as e:
+            if limit and e.partial:      # 回了 ERROR + 半截稿：跟卡住一样算 Flash 这片不行（空 ERROR 是断线，换 Argon 也没用）
+                bad += 1
+                if bad >= FLASH_GIVE_UP:
+                    print(f'[agy] {name} Flash 已卡住 {stuck} 次、出错 {bad - stuck} 次（{str(e)[:60]}），换 Argon', flush=True)
+                    raise _GiveUp(f'卡住 {stuck} 次、出错 {bad - stuck} 次') from e
             if flaky >= len(FLAKY_WAITS):
                 raise RuntimeError(str(e)) from e
             w = FLAKY_WAITS[flaky]
@@ -330,7 +349,9 @@ def _ask_once(model, path, cwd, strict=False, should_stop=None, limit=None):
     quota_txt = 'quota' in low and any(w in low for w in ('exceed', 'exhaust', 'reached', 'limit'))
     if str(d.get('status') or '').upper() != 'SUCCESS':
         if not quota_txt:
-            raise _Flaky(f"agy 状态 {d.get('status')}: {text[:200]}")
+            e = _Flaky(f"agy 状态 {d.get('status')}: {text[:200]}")
+            e.partial = bool(text.strip())
+            raise e
         raise RuntimeError(f"agy 状态 {d.get('status')}: {text[:200]}")
     if 'quota' in low and any(w in low for w in ('exceed', 'exhaust', 'reached', 'limit')) and not _TS.search(text):
         claude_gate.pause(time.time() + 1800, text.strip()[:200], 'verbatim', provider='agy')    # 三边一起停半小时
@@ -345,7 +366,7 @@ def _transcribe_chunk(engine, path, chunk_seconds, cwd, should_stop=None):
     时间戳太稀就带提醒再要一次。换 Argon 时先让出 Flash 的位子、再排 Argon 的（别占着一个干等）。"""
     model = MODELS[engine]
     lim = stuck_limit(chunk_seconds) if engine == 'agy_flash' else None    # Argon 没实测过多久、额度也金贵，不掐
-    blocked = None
+    blocked = gave_up = None
     with _inflight[engine]:
         try:
             text = _ask(model, path, cwd, should_stop=should_stop, limit=lim)
@@ -355,8 +376,10 @@ def _transcribe_chunk(engine, path, chunk_seconds, cwd, should_stop=None):
                     again = _ask(model, path, cwd, strict=True, should_stop=should_stop, limit=lim)
                     if len(_TS.findall(again)) > len(_TS.findall(text)):
                         text = again
-                except _Blocked:
+                except (_Blocked, _GiveUp):           # 已经有一份稿了，再要一遍不成就用这份
                     pass
+        except _GiveUp as e:
+            gave_up = e
         except _Blocked as e:
             if engine != 'agy_flash':
                 raise RuntimeError(f'agy 内容被安全过滤 SAFETY：{e}') from e
@@ -365,6 +388,15 @@ def _transcribe_chunk(engine, path, chunk_seconds, cwd, should_stop=None):
                 text = _ask(model, path, cwd, should_stop=should_stop, limit=lim)
             except _Blocked as e2:
                 blocked = e2
+            except _GiveUp as e2:
+                gave_up = e2
+    if gave_up is not None and blocked is None:
+        wait_quota('agy_argon', should_stop)
+        with _inflight['agy_argon']:
+            try:
+                text = _ask(MODELS['agy_argon'], path, cwd, should_stop=should_stop)
+            except _Blocked as e3:
+                raise RuntimeError(f'agy 内容被安全过滤 SAFETY（Flash {gave_up}、Argon 拦了）：{e3}') from e3
     if blocked is not None:
         wait_quota('agy_argon', should_stop)
         with _inflight['agy_argon']:
