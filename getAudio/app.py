@@ -1098,7 +1098,7 @@ def _run_transcription(task_id, filepath, engine, original_filename, q,
                     wordtime.save(task_id, [(s + (offset_sec or 0), w) for s, w in word_track], source='qwen')
                 except Exception:
                     pass
-            elif (engine_used in ('gemini', 'gemini35', 'agy_flash', 'agy_argon') and not DEMO_MODE
+            elif (engine_used in ('gemini', 'gemini35', 'agy_flash', 'agy_argon', 'openrouter') and not DEMO_MODE
                   and not wordtime.is_youtube((extra_meta or {}).get('source_url'))):
                 # Gemini 的时间点是模型写的：本机 Whisper 后台补逐词时间（YouTube 的走字幕，更省）。
                 # 目录先建好：后台线程看到没有结果目录会当成删掉了的期跳过（_save_results 还没跑到）
@@ -1357,6 +1357,18 @@ def _run_transcription(task_id, filepath, engine, original_filename, q,
             _verify(segments)
             summary_data = _summary(full_text)
 
+        elif engine == 'openrouter':
+            # OpenRouter 上的 Gemini 3.8 Flash（11-09 起默认）：5 分钟一块并行，见 transcribe_openrouter.py。
+            # 失败了在下面的 except 里改走官方 Gemini API（同一个模型）。
+            import transcribe_openrouter
+            q.put(json.dumps({'type': 'progress', 'percent': 0,
+                              'message': '正在用 OpenRouter 上的 Gemini 3.8 Flash 转写...'}))
+            segments, full_text = transcribe_openrouter.transcribe_audio(input_path, progress_callback=progress_cb)
+            for seg in segments:
+                q.put(json.dumps({'type': 'segment', **seg}))
+            _verify(segments)
+            summary_data = _summary(full_text)
+
         elif engine in ('agy_flash', 'agy_argon'):
             # Antigravity CLI 跑 Gemini（用户自己的订阅，不花 API 的钱；11-04 用户：默认 Flash）。
             # 15 分钟一块 mp3、各块并行；Flash 某块被安全过滤误拦就那块换 Argon。见 transcribe_agy.py。
@@ -1435,6 +1447,26 @@ def _run_transcription(task_id, filepath, engine, original_filename, q,
                 timing['openrouter_error'] = str(e_or)[:300]
                 print(f'[openrouter] {task_id}: {e_or}')
                 e = RuntimeError(f'{engine} 失败：{e}；OpenRouter 后备也失败：{e_or}')
+        # 反过来：OpenRouter 不行（没余额、接口错）→ 官方 Gemini API 跑同一个模型。内容拦截照旧不试。
+        if (not fell_back and not requeued and not halted and engine == 'openrouter'
+                and not content_block and config.gemini_key()):
+            try:
+                q.put(json.dumps({'type': 'progress', 'percent': 0,
+                                  'message': f'OpenRouter 不行（{str(e)[:50]}）— 改用官方 Gemini API...'}))
+                timing['fallback_from'] = engine
+                timing.pop('transcribe_s', None)
+                import transcribe_gemini
+                segments, full_text = transcribe_gemini.transcribe_audio(input_path, progress_callback=progress_cb)
+                for seg in segments:
+                    q.put(json.dumps({'type': 'segment', **seg}))
+                _verify(segments)
+                summary_data = _summary(full_text)
+                _finish_ok(segments, summary_data, 'gemini')
+                fell_back = True
+            except Exception as e_g:  # noqa: BLE001
+                timing['gemini_error'] = str(e_g)[:300]
+                print(f'[openrouter→gemini] {task_id}: {e_g}')
+                e = RuntimeError(f'openrouter 失败：{e}；Gemini API 后备也失败：{e_g}')
         if (not fell_back and not requeued and not halted and engine != 'whisper'
                 and (fallback_whisper or content_block or empty_out or quota_out)):
             try:
@@ -3859,7 +3891,7 @@ def api_chain_preview():
     host = re.sub(r'^www\.', '', (re.match(r'https?://([^/]+)', url) or [None, ''])[1])
     data['platform'] = 'bilibili' if 'bilibili' in host else 'youtube' if 'youtu' in host else host
     # 估价用的单价（美元）：转写按音频小时，分析按期 + 按小时，画像一次
-    data['prices'] = {'transcribe_per_hour': {'agy_flash': 0, 'agy_argon': 0, 'gemini35': 0.35, 'gemini': 0.19, 'qwenasr': 0.015, 'whisper': 0},
+    data['prices'] = {'transcribe_per_hour': {'openrouter': 0.22, 'agy_flash': 0, 'agy_argon': 0, 'gemini35': 0.35, 'gemini': 0.19, 'qwenasr': 0.015, 'whisper': 0},
                       'analysis_per_episode': 0.03, 'analysis_per_hour': 0.07, 'portrait': 0.12}
     return Response(json.dumps(data, ensure_ascii=False), mimetype='application/json')
 

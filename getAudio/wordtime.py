@@ -341,7 +341,7 @@ def _run_whisper_queue():
 # 资料库 920 期 gemini35 短文件「最后一段时间 ÷ 时长」中位数 0.337，转成 16k 单声道再送一遍还是 0.337；
 # 看着正常的几期也前后乱跳。所以有了逐词时间轴后，拿每段开头的话按顺序去时间轴里找，把段落时间换成真的。
 
-RETIME_ENGINES = ('gemini35', 'agy_flash', 'agy_argon')
+RETIME_ENGINES = ('gemini35', 'agy_flash', 'agy_argon', 'openrouter')
 _SPK_RE = re.compile(r'^\s*说话人[\d?？]+\s*[:：]\s*')
 
 

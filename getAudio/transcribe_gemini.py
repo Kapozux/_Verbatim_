@@ -58,6 +58,15 @@ class _ContentBlocked(Exception):
     """Gemini 确定性拒绝（安全过滤等），重试无意义。"""
 
 
+
+# 转写用的模型（11-09 用户：「就只有模型」——跟 OpenRouter / 订阅 agy 用同一个 Gemini 3.8 Flash，只是走官方 API）。
+# 精准模式的合并、别处的 GEMINI_MODEL 不跟着变。
+TRANSCRIBE_MODEL = 'gemini-3.8-flash'
+
+
+def transcribe_model():
+    return (os.environ.get('GEMINI_TRANSCRIBE_MODEL') or '').strip() or TRANSCRIBE_MODEL
+
 def _diagnose_empty_response(response):
     """空文本时诊断真实原因，返回 (人类可读原因, 是否值得重试)。"""
     try:
@@ -266,7 +275,7 @@ def _transcribe_single_file_inner(client, filepath, progress_callback=None, stop
                 # 本次尝试的进度区间：30 -> 95。重试会从 30 重新开始，体现"再试一次"
                 progress_callback(min(95, 30 + attempt * 10))
 
-            model_name = os.environ.get('GEMINI_TRANSCRIBE_MODEL') or GEMINI_MODEL
+            model_name = transcribe_model()
             response = client.models.generate_content(
                 model=model_name,
                 contents=content_parts,

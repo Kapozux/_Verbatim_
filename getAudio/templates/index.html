@@ -108,17 +108,41 @@
                     </div>
 
                     <div class="form-group">
-                        <label class="group-label" data-i18n="transcribe.engine">Engine</label>
+                        <label class="group-label" data-i18n="transcribe.engine">Gemini 3.8 Flash · via</label>
                         <div class="radio-group">
+                            <label class="radio-option">
+                                <input type="radio" name="engine" value="openrouter"{% if default_engine == 'openrouter' %} checked{% endif %}>
+                                <span class="radio-custom"></span>
+                                <span class="radio-label">
+                                    <strong data-i18n="engine.openrouter">OpenRouter</strong>
+                                    <small data-i18n="transcribe.openrouterDesc">Default · fastest · ~$0.22 per audio hour</small>
+                                </span>
+                            </label>
+                            <label class="radio-option">
+                                <input type="radio" name="engine" value="gemini"{% if default_engine == 'gemini' %} checked{% endif %}>
+                                <span class="radio-custom"></span>
+                                <span class="radio-label">
+                                    <strong data-i18n="engine.gemini">Gemini API</strong>
+                                    <small data-i18n="transcribe.geminiDesc">Google’s own API · needs a Gemini key</small>
+                                </span>
+                            </label>
                             {% if agy_ok %}
                             <label class="radio-option">
                                 <input type="radio" name="engine" value="agy_flash"{% if default_engine == 'agy_flash' %} checked{% endif %}>
                                 <span class="radio-custom"></span>
                                 <span class="radio-label">
-                                    <strong data-i18n="engine.agy_flash">Gemini Flash (subscription)</strong>
-                                    <small data-i18n="transcribe.agyFlashDesc">Your Gemini plan via agy · no API cost</small>
+                                    <strong data-i18n="engine.agy_flash">Subscription (agy)</strong>
+                                    <small data-i18n="transcribe.agyFlashDesc">Your Gemini plan · free · slower</small>
                                 </span>
                             </label>
+                            {% endif %}
+                        </div>
+
+                        <button type="button" id="show-more-engines" class="reveal-link" data-i18n="transcribe.showMore">
+                            More engines ▾
+                        </button>
+                        <div class="radio-group hidden" id="more-engines">
+                            {% if agy_ok %}
                             <label class="radio-option">
                                 <input type="radio" name="engine" value="agy_argon"{% if default_engine == 'agy_argon' %} checked{% endif %}>
                                 <span class="radio-custom"></span>
@@ -129,7 +153,15 @@
                             </label>
                             {% endif %}
                             <label class="radio-option">
-                                <input type="radio" name="engine" value="whisper">
+                                <input type="radio" name="engine" value="gemini35"{% if default_engine == 'gemini35' %} checked{% endif %}>
+                                <span class="radio-custom"></span>
+                                <span class="radio-label">
+                                    <strong data-i18n="engine.gemini35">Gemini 3.5 Transcribe</strong>
+                                    <small data-i18n="transcribe.gemini35Desc">Cloud · built-in speaker labels</small>
+                                </span>
+                            </label>
+                            <label class="radio-option">
+                                <input type="radio" name="engine" value="whisper"{% if default_engine == 'whisper' %} checked{% endif %}>
                                 <span class="radio-custom"></span>
                                 <span class="radio-label">
                                     <strong data-i18n="engine.whisper">Whisper</strong>
@@ -137,29 +169,7 @@
                                 </span>
                             </label>
                             <label class="radio-option">
-                                <input type="radio" name="engine" value="gemini">
-                                <span class="radio-custom"></span>
-                                <span class="radio-label">
-                                    <strong data-i18n="engine.gemini">Gemini</strong>
-                                    <small data-i18n="transcribe.geminiDesc">Cloud · needs API key</small>
-                                </span>
-                            </label>
-                            <label class="radio-option">
-                                <input type="radio" name="engine" value="gemini35"{% if default_engine == 'gemini35' %} checked{% endif %}>
-                                <span class="radio-custom"></span>
-                                <span class="radio-label">
-                                    <strong data-i18n="engine.gemini35">Gemini 3.5 Transcribe</strong>
-                                    <small data-i18n="transcribe.gemini35Desc">Cloud · new · built-in speaker labels</small>
-                                </span>
-                            </label>
-                        </div>
-
-                        <button type="button" id="show-mainland" class="reveal-link" data-i18n="transcribe.showMainland">
-                            Show mainland-cloud engines ▾
-                        </button>
-                        <div class="radio-group hidden" id="mainland-engines">
-                            <label class="radio-option">
-                                <input type="radio" name="engine" value="qwenasr">
+                                <input type="radio" name="engine" value="qwenasr"{% if default_engine == 'qwenasr' %} checked{% endif %}>
                                 <span class="radio-custom"></span>
                                 <span class="radio-label">
                                     <strong data-i18n="engine.qwenasr">Qwen-ASR</strong>
@@ -167,7 +177,7 @@
                                 </span>
                             </label>
                             <label class="radio-option">
-                                <input type="radio" name="engine" value="precise">
+                                <input type="radio" name="engine" value="precise"{% if default_engine == 'precise' %} checked{% endif %}>
                                 <span class="radio-custom"></span>
                                 <span class="radio-label">
                                     <strong data-i18n="engine.precise">Precise</strong>
@@ -336,6 +346,7 @@
                                 </div>
                                 <div id="engine-filters" class="filter-chips">
                                     <button class="chip active" data-engine="" data-i18n="library.allEngines">All</button>
+                                    <button class="chip" data-engine="openrouter" data-i18n="engine.openrouter">OpenRouter</button>
                                     <button class="chip" data-engine="gemini" data-i18n="engine.gemini">Gemini</button>
                                     <button class="chip" data-engine="gemini35" data-i18n="engine.gemini35">Gemini 3.5 Transcribe</button>
                                     <button class="chip" data-engine="agy_flash" data-i18n="engine.agy_flash">Gemini Flash (subscription)</button>
@@ -694,14 +705,19 @@
             <label class="nf-field"><span data-i18n="nf.engine">Transcription engine</span>
             <select id="chain-engine" class="search-input chain-small"
             data-i18n-title="creators.engineTitle" title="Transcription engine.">
+            <option value="openrouter"{% if default_engine == 'openrouter' %} selected{% endif %} data-i18n="creators.engineOpenrouter">Gemini 3.8 Flash · OpenRouter (default)</option>
+            <option value="gemini"{% if default_engine == 'gemini' %} selected{% endif %} data-i18n="creators.engineGemini">Gemini 3.8 Flash · Gemini API</option>
             {% if agy_ok %}
-            <option value="agy_flash"{% if default_engine == 'agy_flash' %} selected{% endif %} data-i18n="creators.engineAgyFlash">Gemini Flash · subscription (default)</option>
+            <option value="agy_flash"{% if default_engine == 'agy_flash' %} selected{% endif %} data-i18n="creators.engineAgyFlash">Gemini 3.8 Flash · subscription (agy)</option>
+            {% endif %}
+            <optgroup label="More" data-g="more">
+            {% if agy_ok %}
             <option value="agy_argon"{% if default_engine == 'agy_argon' %} selected{% endif %} data-i18n="creators.engineAgyArgon">Gemini Argon · subscription (most accurate)</option>
             {% endif %}
-            <option value="gemini35"{% if default_engine == 'gemini35' %} selected{% endif %} data-i18n="creators.engineGemini35">Gemini 3.5 Transcribe (recommended)</option>
-            <option value="gemini" data-i18n="creators.engineGemini">Gemini</option>
+            <option value="gemini35"{% if default_engine == 'gemini35' %} selected{% endif %} data-i18n="creators.engineGemini35">Gemini 3.5 Transcribe (speaker labels)</option>
             <option value="whisper" data-i18n="creators.engineWhisper">Whisper (local)</option>
             <option value="qwenasr" data-i18n="creators.engineQwenasr">Alibaba Qwen-ASR (zh ASR · no Gemini filter)</option>
+            </optgroup>
             </select></label>
             <label class="nf-field"><span data-i18n="nf.brain">Analysis model</span>
             <select id="chain-provider" class="search-input chain-small"

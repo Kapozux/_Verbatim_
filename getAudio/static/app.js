@@ -272,25 +272,30 @@ document.querySelectorAll('input[name="engine"]').forEach(radio => {
     });
 });
 
-// ========== 国内云引擎（DashScope / Precise）：默认隐藏 + 风险确认 ==========
-// 这两个引擎把音频送阿里云，阿里强制内容审核 —— 敏感/政治内容会被拒或篡改。
-const showMainlandBtn = document.getElementById('show-mainland');
-const mainlandEngines = document.getElementById('mainland-engines');
-if (showMainlandBtn && mainlandEngines) {
-    showMainlandBtn.addEventListener('click', () => {
-        mainlandEngines.classList.toggle('hidden');
-        showMainlandBtn.classList.toggle('open');
+// ========== 引擎：外面只有 Gemini 3.8 Flash 的三条路（OR 默认 / Gemini API / 订阅 agy），别的收进「更多」 ==========
+// 11-09 用户：「就只有模型，默认都是 OR 去做」。国内云（Qwen / Precise）仍要风险确认：阿里强制内容审核。
+const showMoreBtn = document.getElementById('show-more-engines');
+const moreEngines = document.getElementById('more-engines');
+if (showMoreBtn && moreEngines) {
+    showMoreBtn.addEventListener('click', () => {
+        moreEngines.classList.toggle('hidden');
+        showMoreBtn.classList.toggle('open');
     });
 }
+function labelEngineMore() {
+    const g = document.querySelector('#chain-engine optgroup[data-g="more"]');
+    if (g) g.label = T('creators.engineMore');
+}
+labelEngineMore();
+document.addEventListener('langchange', labelEngineMore);
 // 能自己标说话人的引擎：gemini35 原生分离；agy 两个按提示词标「说话人N：」（跟 OpenRouter 后备一样）
-const SPEAKER_ENGINES = ['gemini35', 'agy_flash', 'agy_argon'];
+const SPEAKER_ENGINES = ['gemini35', 'agy_flash', 'agy_argon', 'openrouter'];
 document.querySelectorAll('input[name="engine"][value="qwenasr"], input[name="engine"][value="precise"]')
     .forEach(radio => {
         radio.addEventListener('change', () => {
             if (radio.checked && !confirm(T('confirm.mainlandWarning'))) {
-                // 拒绝 → 退回默认的云端引擎（订阅里的 Gemini Flash，没装 agy 就 Gemini 3.5；都不吃本地 CPU/电池）
-                const w = document.querySelector('input[name="engine"][value="agy_flash"]')
-                    || document.querySelector('input[name="engine"][value="gemini35"]');
+                // 拒绝 → 退回 OpenRouter（11-09 起的默认；不吃本地 CPU/电池）
+                const w = document.querySelector('input[name="engine"][value="openrouter"]');
                 w.checked = true;
                 w.dispatchEvent(new Event('change'));
             }
