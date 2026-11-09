@@ -96,6 +96,8 @@ ENGINE_CONCURRENCY = {
     # Gemini 3.5 Transcribe：2026-08 才公开预览的新端点，配额/稳定性还没摸透，
     # 先保守给 6（后面观察没问题再跟 gemini 引擎的 12 看齐）。
     'gemini35': 6,
+    # OpenRouter 上的 Gemini 3.8 Flash（11-09 起默认）：按量付费、没有订阅那种额度，跟官方 gemini 一样给 12
+    'openrouter': int(os.environ.get('OPENROUTER_CONCURRENCY') or 12),
     # agy（Antigravity CLI，走用户自己的 Gemini 订阅，2026-11-04）：这里是同时几个视频。
     # Flash 几乎不耗额度；Argon 有单独的周额度（44 分钟约 2.7%），压低。
     # 同时几个视频：不少于切片上限，短视频（一片）也能把切片位子用满；真正限流的是上面的 AGY_CHUNKS
@@ -114,10 +116,13 @@ def agy_installed():
 
 
 def default_engine():
-    """新建转写默认用哪个引擎：DEFAULT_ENGINE 环境变量 > 装了 agy 就 agy_flash（用户 11-04：默认 Flash，走订阅不花钱）> gemini35。"""
+    """新建转写默认用哪个引擎：DEFAULT_ENGINE 环境变量 > 填了 OpenRouter key 就 openrouter
+    （11-09 用户：agy 这两天每分钟音频 13–20 秒太慢，「默认都是 OR 去做」）> 装了 agy 就 agy_flash > gemini35。"""
     e = (os.environ.get('DEFAULT_ENGINE') or '').strip()
     if e:
         return e
+    if (os.environ.get('OPENROUTER_API_KEY') or '').strip():
+        return 'openrouter'
     return 'agy_flash' if agy_installed() else 'gemini35'
 
 # 链条（URL→下载→转写→分析）的全局限流：所有链条共享，不按每条链条算。
