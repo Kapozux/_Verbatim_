@@ -299,6 +299,71 @@ def _add_people(corpus, state):
     corpus['people'] = people
 
 
+class NotIndexed(RuntimeError):
+    """笔记本里没材料，是因为有博主只转写了、没分析也没把原文加进检索（GitHub #9）。
+    people：[{chain_id, name}]，接口带给前端，好在报错旁边指到左栏那一组。"""
+    def __init__(self, people):
+        self.people = people
+        names = ', '.join(p['name'] for p in people)
+        super().__init__(f"Nothing to search yet: {names} has transcripts but no evidence cards, and the "
+                         f"transcripts aren't searchable. In Sources on the left, click \"Make searchable\" "
+                         f"under {names}.")
+
+
+def unindexed_episodes(chain_dir, state=None):
+    """这个博主在笔记本里是不是「没材料」：有转写好的期，但没抽过证据卡、也没开 index_transcripts。
+    是 → 转写好的 task_id 列表；不是 → []。只看文件在不在，左栏每几秒轮询一次也不慢。"""
+    if state is None:
+        state = _read_json(os.path.join(chain_dir, 'chain.json'), {}) or {}
+    if state.get('index_transcripts') or glob.glob(os.path.join(chain_dir, 'cards_*.json')):
+        return []
+    return [v['task_id'] for v in state.get('videos') or [] if v.get('task_id') and v.get('status') == 'done']
+
+
+def unindexed_people(chain_dir):
+    """笔记本里「没材料」的博主：项目自己的频道（有 url 的）+ 引用的博主。→ [{chain_id, name}]"""
+    state = _read_json(os.path.join(chain_dir, 'chain.json'), {}) or {}
+    out = []
+    if state.get('url') and unindexed_episodes(chain_dir, state):
+        out.append({'chain_id': os.path.basename(chain_dir),
+                    'name': state.get('channel_name') or state.get('author') or 'this creator'})
+    reg = _read_json(os.path.join(chain_dir, 'sources.json'), {}) or {}
+    root = os.path.dirname(chain_dir)
+    for r in reg.get('channels') or []:
+        d = os.path.join(root, r.get('chain_id') or '')
+        st = _read_json(os.path.join(d, 'chain.json'), {}) or {}
+        if st and unindexed_episodes(d, st):
+            out.append({'chain_id': r['chain_id'], 'name': st.get('author') or r.get('tag') or 'a creator'})
+    return out
+
+
+def empty_error(chain_dir, default):
+    """没材料时抛哪个错：有没加进检索的博主就点名（NotIndexed），否则照旧。"""
+    people = unindexed_people(chain_dir)
+    return NotIndexed(people) if people else RuntimeError(default)
+
+
+_index_est = {}          # (task_id 们的指纹) -> {episodes, passages, usd}
+
+
+def index_estimate(task_ids):
+    """把这些转写的原文段落加进检索（算向量）要多少：→ {episodes, passages, usd}。
+    按 task_id 列表缓存（左栏轮询时不重读几百份转写）；段落切分本身也有 passages.json 缓存。"""
+    import sources
+    key = hashlib.sha1('|'.join(task_ids).encode()).hexdigest()
+    if key in _index_est:
+        return _index_est[key]
+    n = tok = 0
+    for tid in task_ids:
+        for p in sources.transcript_passages(tid):
+            n += 1
+            tok += est_tokens(p['text'][:700])           # 跟 _card_embed_text 一样截到 700 字
+    usd = usage.estimate_cost(EMBED_MODEL, input_tokens=tok) or 0
+    out = {'episodes': len(task_ids), 'passages': n, 'usd': round(usd, 6)}
+    _index_est[key] = out
+    return out
+
+
 def _stable_no(hex_id):
     """来源的固定编号：取 doc_id / task_id 开头 6 位十六进制。不能按列表位置编——删掉一个来源、
     或频道同步把新视频插到最前面，后面的编号全会挪，聊天记录里旧的出处就指错段落了。"""
@@ -1268,10 +1333,10 @@ def _prepare(chain_dir, question, mode='about', history=None, topic=None, ui_lan
     """挑卡 + 拼提示词（检索可能要调一次模型改写问题、算一次向量）。返回给 _finish 用的上下文。"""
     corpus = load(chain_dir, passages=True)
     if not corpus['cards']:
-        raise RuntimeError('No evidence cards yet — run the analysis first')
+        raise empty_error(chain_dir, 'No evidence cards yet — run the analysis first')
     pool = scope_pool(corpus, scope)
     if pool is not None and not pool:
-        raise RuntimeError('Nothing to search in the selected sources yet')
+        raise empty_error(chain_dir, 'Nothing to search in the selected sources yet')
     if topic:
         pool = [c for c in (pool if pool is not None else corpus['cards']) if c.get('topic') == topic]
         if not pool:

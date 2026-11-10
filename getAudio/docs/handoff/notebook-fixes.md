@@ -67,3 +67,12 @@
   改：`_episode_lines(full=True)` 列勾选范围里的全部来源（≤ 200 份时），文档标「(document, PPTX)」，提示词说明没段落的来源只是跟这个问题无关。勾了部分来源时只列勾的那些。
 - 19 份里 2 份 PPTX 失败：墨页先用 Office 把 PPTX 转 PDF，大的超时。改：PPTX / DOCX 直接从 zip 里的 XML 读字（`sources._office_text`，不装库；PPTX 按演示顺序一页一张、跳过空白页、带演讲者备注；DOCX 标题转 Markdown），0.01–0.04 秒；读出来几乎没字（整页是图）才交墨页 OCR。实测 15 份对比墨页字数相当，失败的两份读出 3.6 万 / 5.3 万字。PDF 照旧墨页 fast（读文字层），墨页没开用 pdftotext。
 - 待做：合进 5001 后，在左栏那两份失败的 PPTX 上点「重试」就会走新的读法（不花钱）。
+
+## 只转写的博主「Nothing to work from」（GitHub #9，11-10）
+以前（马督工那种 `analyze: False`、没开 `index_transcripts` 的博主）放进笔记本，对话 / 工作台只报「Nothing to work from」，中间还显示「建你的第一个笔记本」。
+- 判断：`ask.unindexed_episodes`（有转写好的期、没有 `cards_*.json`、没开 index_transcripts；只看文件在不在，左栏轮询也不慢）；估价 `ask.index_estimate`（按段落 token 数 × 向量模型单价，按 task_id 列表缓存）。
+- 左栏：`/sources` 的每组带 `not_indexed {episodes, passages, usd}` / `indexing`，组下面一行 + 「加进检索（约 $X）」；只有这样的博主时中间空状态同一个按钮。
+- 点了：`POST /sources/index_creator {chain_id}` 打开他的 index_transcripts（频道还在跑时 409：run_chain 会整份重写 chain.json），后台 `ensure_embeddings_async`；`/people` 的 `searchable` 让对话马上能用。
+- 报错：对话、报告、播客、幻灯片没材料时抛 `ask.NotIndexed` 点名是谁；对话按界面语言显示（`ask.notIndexed`），工作台的报错是后端英文原文。
+- 测试 `tests/test_not_indexed.py`。
+

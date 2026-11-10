@@ -118,6 +118,8 @@ async function srcLoad() {
     if (cx.id !== id) return;
     srcState.data = d;
     srcRender();
+    const empty = document.getElementById('nb-empty');                // 中间的空状态也看左栏数据（没加进检索的博主）
+    if (empty && !empty.classList.contains('hidden') && typeof nbEmptyHtml === 'function') empty.innerHTML = nbEmptyHtml();
     srcSyncCount();
     if (typeof vcLoad === 'function' && vcState.id !== id) vcLoad();        // 说话人那一行（换了项目才重新拉）
     if (typeof ntLoad === 'function') ntLoad();                              // 读书笔记那一行
@@ -128,7 +130,8 @@ async function srcLoad() {
     const running = st => !['done', 'failed', 'cancelled'].includes(st);
     const busy = d.indexing || d.docs.some(x => x.status === 'converting')
         || d.recordings.some(r => r.status !== 'done') || (d.channel && running(d.channel.stage))
-        || (d.channels || []).some(ch => running(ch.stage)) || (d.repos || []).some(r => r.status === 'reading');
+        || (d.channels || []).some(ch => running(ch.stage) || ch.indexing) || (d.channel && d.channel.indexing)
+        || (d.repos || []).some(r => r.status === 'reading');
     // 引用的博主跑完了 / 加了新博主：人名条、工作台列表、哪些格子能用都要跟着变
     const sig = (d.channels || []).map(ch => ch.chain_id + ch.stage).join();
     if (srcState.chSig !== undefined && srcState.chSig !== sig && typeof peopleLoad === 'function') peopleLoad();
@@ -163,6 +166,34 @@ function srcIcon(ext) {
     const k = ext === 'web' ? 'web' : ['ppt', 'pptx'].includes(ext) ? 'slides'
         : ['png', 'jpg', 'jpeg', 'webp', 'heic'].includes(ext) ? 'image' : ext === 'text' ? 'note' : 'doc';
     return `<span class="sr-svg" data-k="${k}">${srcSvg(k)}</span>`;
+}
+
+// ---- 只转写了、没加进检索的博主（GitHub #9）：左栏那组和中间的空状态共用 ----
+function srcNotIndexed() {
+    const d = srcState.data;
+    if (!d || srcState.id !== cx.id) return [];
+    const out = [];
+    if (d.channel && (d.channel.not_indexed || d.channel.indexing))
+        out.push({ cid: cx.id, name: d.channel.name, indexing: !!d.channel.indexing, ...(d.channel.not_indexed || {}) });
+    (d.channels || []).forEach(ch => {
+        if (ch.not_indexed || ch.indexing) out.push({ cid: ch.chain_id, name: ch.name, indexing: !!ch.indexing, ...(ch.not_indexed || {}) });
+    });
+    return out;
+}
+function srcIndexLabel(g, named) {
+    const txt = g.usd < 0.01 ? T('src.makeSearchableCheap') : T('src.makeSearchable', { usd: fmtUsd(g.usd) });
+    return named ? `${g.name}: ${txt}` : txt;
+}
+async function srcIndexCreator(btn) {
+    btn.disabled = true;
+    const r = await srcPost(`/api/chain/${cx.id}/sources/index_creator`, { method: 'POST',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chain_id: btn.dataset.cid }) });
+    if (r) {
+        showToast(T('src.indexStarted'));
+        if (typeof peopleLoad === 'function') peopleLoad();                   // 「能不能问」看人名表里的 searchable
+        if (typeof refreshChainDetail === 'function') refreshChainDetail();   // 项目自己的频道看 index_transcripts
+    }
+    srcLoad();
 }
 
 function srcHost(url) {
@@ -219,6 +250,10 @@ function srcRender() {
             <button type="button" class="sr-caret" aria-label="toggle">${open ? '▾' : '▸'}</button>
             <input type="checkbox" class="sr-check sr-check-group" ${done.length ? '' : 'disabled'} ${on ? 'checked' : ''}>
         </div>`);
+        // 只转写了、没证据卡也没加进检索：问答和工作台都用不到他（GitHub #9）。常驻一行说清楚，按钮上写估价
+        if (ch.indexing) rows.push(`<div class="sr-ni run">${T('src.indexingCreator')}</div>`);
+        else if (ch.not_indexed) rows.push(`<div class="sr-ni">${T('src.notIndexed', { n: ch.not_indexed.episodes })}${ro ? ''
+            : ` <button type="button" class="sr-ni-btn" data-cid="${escapeHtml(key === 'channel' ? cx.id : key)}" onclick="srcIndexCreator(this)">${escapeHtml(srcIndexLabel(ch.not_indexed))}</button>`}</div>`);
         if (open) {
             eps.forEach(v => rows.push(srcRow('video', v.task_id, `<span class="sr-svg" data-k="video">${srcSvg('video')}</span>`, v.title || v.task_id,
                 srcEpSub(v), { ready: v.status === 'done', child: true, subCls: srcEpCls(v), tip: v.error,
@@ -261,6 +296,7 @@ function srcRender() {
     srcApplyFolders(box, ro);
     srcWire(box);
     srcWireTools(box);
+
     if (typeof vcWireSrc === 'function') vcWireSrc(box);
     if (typeof ntWireSrc === 'function') ntWireSrc(box);
     srcRenderRail(d, ro);

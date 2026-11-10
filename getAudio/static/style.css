@@ -1983,6 +1983,14 @@ body.demo .creator-hide { display: none; }
 .sr-menu button:hover { background: var(--paper); }
 @media (hover: hover) { .sr-row .sr-menu { opacity: 0; } .sr-row:hover .sr-menu, .sr-menu[open] { opacity: 1; } }
 .sr-err { font-size: 13px; color: var(--bad); padding: 0 4px 6px 34px; overflow-wrap: anywhere; }
+/* 博主只转写了、没加进检索（GitHub #9）：组下面常驻一行 + 带估价的按钮 */
+.sr-ni { font-size: 13px; color: var(--muted); padding: 0 4px 8px 34px; line-height: 1.5; overflow-wrap: anywhere; }
+.sr-ni.run { color: var(--run); }
+.nb-empty-ic svg { width: 30px; height: 30px; color: var(--muted); }
+.sr-ni-btn { font: inherit; font-size: 13px; color: var(--coral-deep); background: none; border: 1px solid var(--coral-line);
+  border-radius: var(--r-sm); padding: 2px 8px; margin-top: 4px; cursor: pointer; white-space: nowrap; }
+.sr-ni-btn:hover { background: var(--coral-soft); }
+.sr-ni-btn:disabled { opacity: .5; cursor: default; }
 .sr-empty { text-align: center; color: var(--muted); padding: 30px 8px; display: grid; gap: 6px; font-size: 15px; }
 .sr-empty b { color: var(--ink-soft); }
 .sr-empty-ic { font-size: 26px; }

@@ -4576,6 +4576,8 @@ def _person_row(cid, st, tag='', is_self=False):
             'avatar': st.get('avatar') or '', 'url': st.get('url') or '', 'stage': st.get('stage') or '',
             'kind': st.get('kind') or 'creator', 'emoji': (_chain_prefs().get('emoji') or {}).get(cid) or '',
             'episodes': sum(1 for v in vids if v.get('task_id') and v.get('status') == 'done'),
+            # 没抽卡但原文加进了检索：对话 / 工作台照样能用他（GitHub #9）
+            'searchable': bool(st.get('index_transcripts')) and any(v.get('task_id') and v.get('status') == 'done' for v in vids),
             'has_cards': any(f.startswith('cards_') and _cards_file_has_cards(os.path.join(cdir, f)) for f in names),
             'portrait': bool(st.get('final_doc')) and st.get('final_doc') in names, 'final_doc': st.get('final_doc') or '',
             'lenses': sorted(n[3:-3] for n in names if n.startswith('镜头_') and n.endswith('.md'))}
@@ -4685,10 +4687,12 @@ def api_project_sources(chain_id):
                                    'upload_date', 'thumbnail')}
             for v in state.get('videos') or []]
     have_cards = _cards_file_index(_chain_dir(chain_id))
+    import ask
     channel = None
     if state.get('url'):
         channel = {'url': state['url'], 'name': state.get('channel_name') or state.get('author') or '', 'avatar': state.get('avatar') or '',
-                   'followers': state.get('followers') or 0, 'stage': state.get('stage')}
+                   'followers': state.get('followers') or 0, 'stage': state.get('stage'),
+                   **_index_info(_chain_dir(chain_id), state)}
     missing = [v for v in vids if v.get('task_id') and v.get('status') == 'done'
                and not (v['task_id'] in have_cards and _card_file_done(have_cards[v['task_id']]))]
     # 引用的博主：每个一组，期列在下面（勾选 = 提问范围，跟自己的期一样）
@@ -4698,6 +4702,7 @@ def api_project_sources(chain_id):
         channels.append({'chain_id': r['chain_id'], 'tag': r['tag'], 'url': st.get('url') or '',
                          'name': st.get('author') or '', 'avatar': st.get('avatar') or '',
                          'stage': st.get('stage'), 'kind': st.get('kind') or 'creator',
+                         **_index_info(_chain_dir(r['chain_id']), st),
                          'videos': [{k: v.get(k) for k in ('task_id', 'title', 'status', 'video_url', 'index',
                                                             'upload_date')}
                                     for v in st.get('videos') or [] if v.get('task_id')]})
@@ -4709,6 +4714,41 @@ def api_project_sources(chain_id):
         'has_cards': bool(have_cards), 'cards_missing': len(missing) if not state.get('url') else 0,
         'folders': _reg(chain_id).get('folders') or [],
     }, ensure_ascii=False), mimetype='application/json')
+
+
+def _index_info(cdir, state):
+    """左栏一个博主那组：只转写了、没证据卡也没加进检索 → not_indexed {episodes, passages, usd}（GitHub #9）；
+    点了「加进检索」正在后台补向量 → indexing。"""
+    import ask
+    out = {}
+    tids = ask.unindexed_episodes(cdir, state)
+    if tids:
+        out['not_indexed'] = ask.index_estimate(tids)
+    if cdir in ask._emb_jobs:
+        out['indexing'] = True
+    return out
+
+
+@app.route('/api/chain/<chain_id>/sources/index_creator', methods=['POST'])
+def api_project_index_creator(chain_id):
+    """把笔记本里一个只转写了的博主的原文加进检索：打开他的 index_transcripts，后台补向量（花钱，
+    左栏按钮上写了估价）。关键词检索马上就能用，向量补好之后按意思也找得到。body: {chain_id}"""
+    if not _project_ok(chain_id):
+        return jsonify({'error': 'Not found'}), 404
+    import ask
+    rid = str((request.get_json(silent=True) or {}).get('chain_id') or '')
+    own = rid == chain_id and _read_chain(chain_id).get('url')
+    if not own and rid not in {r['chain_id'] for r in _ref_rows(chain_id)}:
+        return jsonify({'error': 'That creator is not in this notebook'}), 404
+    with _chain_write_lock:
+        st = _read_chain(rid)
+        # 频道还在跑时 run_chain 会整份重写 chain.json，这时改的标记会被冲掉：跑完再加
+        if st.get('stage') not in (None, 'done', 'failed', 'cancelled'):
+            return jsonify({'error': 'This creator is still being processed. Try again when it finishes.'}), 409
+        st['index_transcripts'] = True
+        _save_chain(st)
+    ask.ensure_embeddings_async(_chain_dir(rid))
+    return jsonify({'ok': True})
 
 
 _FOLDER_ID = re.compile(r'[a-z0-9]{1,16}')
@@ -7130,7 +7170,8 @@ def api_chain_ask(chain_id):
                            ui_lang=body.get('ui_lang'), scope=scope, persona=body.get('persona'), model=model)
         r['cost_usd'] = (usage.cost_for(ref=ref) or {}).get('cost_usd', 0)
     except Exception as e:  # noqa: BLE001
-        return jsonify({'error': str(e)[:300]}), 502
+        return jsonify({'error': str(e)[:400],
+                        **({'not_indexed': e.people} if isinstance(e, ask.NotIndexed) else {})}), 502
     at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     if body.get('ephemeral'):                  # MCP / 脚本来问：不写进网页上的聊天记录
         r['cost_usd'] = r.get('cost_usd')
@@ -7225,7 +7266,8 @@ def api_chain_ask_stream(chain_id):
                         pass
                 raise
             except Exception as e:  # noqa: BLE001
-                yield line({'type': 'error', 'error': str(e)[:300]})
+                yield line({'type': 'error', 'error': str(e)[:400],
+                            **({'not_indexed': e.people} if isinstance(e, ask.NotIndexed) else {})})
 
     return Response(gen(), mimetype='application/x-ndjson',
                     headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})

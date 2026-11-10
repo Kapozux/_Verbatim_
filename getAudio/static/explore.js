@@ -99,7 +99,8 @@ function cxTabOk(t) {
     if (t === 'episodes') return !!(cx.chain && (cx.chain.videos || []).some(v => v.task_id));
     const pc = cxPeopleCards();                                      // 项目里引用的博主有卡也算
     if (t === 'read') return !!cx.avail.read || !!cx.avail.cards || pc || cx.people.some(p => p.portrait);   // 没画像但有卡：还能在这里生成镜头
-    if (t === 'ask') return (!!cx.avail.cards || !!cx.avail.src || pc) && CAN_ASK();
+    if (t === 'ask') return (!!cx.avail.cards || !!cx.avail.src || pc
+        || (cx.people || []).some(p => p.searchable && p.chain_id !== cx.id)) && CAN_ASK();   // 引用的博主原文加进了检索也能问
     if (t === 'compare') return cx.people.filter(p => p.has_cards).length >= 2 && CAN_ASK();
     return CX_CARD_TABS.includes(t) && (!!cx.avail.cards || pc);
 }
@@ -194,6 +195,16 @@ function cxSetPerson(pid) {
 }
 
 function nbEmptyHtml() {
+    // 有来源、只是博主只转写了没加进检索（GitHub #9）：别说「建你的第一个笔记本」，说清楚缺什么、给按钮
+    const ni = typeof srcNotIndexed === 'function' ? srcNotIndexed() : [];
+    if (ni.length) {
+        const ro = !!window.VERBATIM_DEMO;
+        return `<div class="nb-empty-in"><div class="nb-empty-ic">${typeof srcSvg === 'function' ? srcSvg('channel') : ''}</div>
+            <h3>${T('nb.notIndexedT')}</h3>
+            <p>${T('nb.notIndexedD', { names: escapeHtml(ni.map(g => g.name).join(currentLang === 'zh' ? '、' : ', ')) })}</p>
+            ${ni.map(g => g.indexing ? `<p class="cx-thinking">${T('src.indexingCreator')}</p>` : ro ? ''
+                : `<button type="button" class="btn-primary cx-send" data-cid="${escapeHtml(g.cid)}" onclick="srcIndexCreator(this)">${escapeHtml(srcIndexLabel(g, ni.length > 1))}</button>`).join('')}</div>`;
+    }
     return `<div class="nb-empty-in"><div class="nb-empty-ic">👋</div>
         <h3>${T('nb.emptyT')}</h3><p>${T('nb.emptyD')}</p>
         ${window.VERBATIM_DEMO ? '' : `<button type="button" class="btn-primary cx-send" onclick="openAddSources()">＋ ${T('as.title')}</button>`}</div>`;
@@ -1344,7 +1355,7 @@ async function askSend(question, topic) {
         });
         if (!resp.ok || !resp.body) {
             const r = await resp.json().catch(() => ({}));
-            msg = { role: 'assistant', error: r.error || T('common.couldNotLoad') };
+            msg = { role: 'assistant', error: askErrText(r) || T('common.couldNotLoad') };
         } else {
             const reader = resp.body.getReader();
             const dec = new TextDecoder();
@@ -1363,7 +1374,7 @@ async function askSend(question, topic) {
                     if (ev.type === 'stage') { pending.stage = ev.stage; repaint(); }
                     else if (ev.type === 'delta') { pending.text += ev.text; repaint(); }
                     else if (ev.type === 'done') msg = ev.message;
-                    else if (ev.type === 'error') msg = { role: 'assistant', error: ev.error };
+                    else if (ev.type === 'error') msg = { role: 'assistant', error: askErrText(ev) };
                 }
             }
             if (!msg) msg = { role: 'assistant', error: T('common.couldNotLoad') };
@@ -1388,6 +1399,13 @@ async function askSend(question, topic) {
     const last = document.querySelector('#cx-thread .cx-msg:last-child');
     if (last) last.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     if (msg.stopped && msg.content) askSwapSaved(id, msg);
+}
+
+// 笔记本里有博主只转写了、没加进检索（GitHub #9）：点名 + 告诉去左栏哪里点，跟着界面语言
+function askErrText(r) {
+    const ppl = r && r.not_indexed;
+    if (ppl && ppl.length) return T('ask.notIndexed', { names: ppl.map(p => p.name).join(currentLang === 'zh' ? '、' : ', ') });
+    return r && r.error;
 }
 
 // 停止后先摆的是浏览器手里的半截（出处还没校验，只能先去掉）；服务器校验完存进记录，
