@@ -904,7 +904,7 @@ def hybrid(corpus, terms, query_text, k, pool=None):
 
 EXPAND_PROMPT = """You help search a database of evidence cards (quotes + observations) about the creator "{author}". The cards are in {lang_hint}.
 
-Recent conversation (for resolving follow-ups like "what about later?"):
+Recent conversation (for resolving follow-ups like "what about later?"). A short follow-up that names nothing ("are you sure?", "why?", "真的吗") refers to the most recent exchange (marked [most recent]), never to an earlier one:
 {history}
 
 Background — a summary of how {author} sees things overall (use it to understand what the question refers to, and to include THEIR OWN words and slang for the concepts involved; the cards use their vocabulary, not the question's):
@@ -960,7 +960,12 @@ def _background_one(chain_dir, limit=5000):
 
 
 def _expand(question, history, corpus):
-    hist = '\n'.join(f"{m['role']}: {m['content'][:300]}" for m in history[-4:]) or '(none)'
+    recent = history[-4:]
+    last_user = max((i for i, m in enumerate(recent) if m.get('role') == 'user'), default=-1)
+    hist = '\n'.join(
+        ('[most recent] ' if i >= last_user >= 0 else '')
+        + f"{m['role']}: {m['content'][:1500] if i >= last_user else m['content'][:300]}"
+        for i, m in enumerate(recent)) or '(none)'
     zh = sum(1 for c in corpus['cards'][:200] if _CJK.search(c['quote']))
     lang_hint = 'mostly Chinese' if zh > 100 else 'mostly English'
     try:
@@ -1162,6 +1167,10 @@ def select_cards(corpus, question, history=None, pool=None, spread=None):
     for k in kws:
         terms += _terms(k)
     query_text = standalone if standalone.strip() == question.strip() else f'{question}\n{standalone}'
+    anchor = _anchor(history) if bare_followup(question) else ''
+    if anchor:                       # 「你确定吗」：按最近那条提问（贴的那张闪卡）去找，不靠改写猜
+        terms += _terms(anchor[:1500])
+        query_text = f'{query_text}\n{anchor[:1500]}'
     picked, hits, sem = hybrid(corpus, terms, query_text, SEARCH_TOP_K, pool=cards)
     cov.update(mode='search', cards_used=len(picked), keyword_hits=hits, semantic=sem,
                keywords=kws[:30], standalone=standalone)
@@ -1184,12 +1193,44 @@ def _spread(corpus, cards, k):
     return out
 
 
+# 不带内容、只能指上一轮的追问（GitHub #10）：「你确定吗」「真的吗」「why?」……
+# 聊天里先后贴过好几张闪卡时，这种追问检索全靠改写，改写常常接到更早那张上。认出来就钉在最近一轮。
+_BARE_FOLLOWUP = re.compile(
+    r'^\W*(?:are you (?:sure|certain)|(?:is|was) (?:that|this|it) (?:right|correct|true|accurate)|really|'
+    r'truly|seriously|why|how so|how come|says who|source|sources|proof|evidence|explain|elaborate|'
+    r'(?:can you )?(?:explain|elaborate)(?: (?:more|that|further))?|tell me more|go on|'
+    r'你?(?:确定|肯定)(?:吗|嘛|么)?|真的(?:吗|嘛|么|假的)?|是(?:吗|嘛)|对(?:吗|嘛|不对)|没错(?:吧|吗)?|'
+    r'为(?:什么|啥)|凭什么|怎么说|何以见得|依据呢?|出处呢?|证据呢?|详细(?:说说|讲讲|一点)|展开(?:说说|讲讲)?|再说说)'
+    r'\W*$', re.I)
+
+
+def bare_followup(question):
+    """这句是不是只能指上一轮的追问（短、没有自己的话题）。"""
+    q = (question or '').strip()
+    return len(q) <= 40 and bool(_BARE_FOLLOWUP.match(q))
+
+
+def _anchor(history):
+    """追问指的那一轮：最近一条有内容的用户提问（跳过前面那几句追问本身）。"""
+    for m in reversed(history or []):
+        if m.get('role') == 'user' and not bare_followup(m.get('content') or ''):
+            return citations.strip(m.get('content') or '')
+    return ''
+
+
 def _history_text(history):
+    """对话记录：最近一轮单独标出来（短追问指它），前面的照旧。"""
+    msgs = (history or [])[-HISTORY_TURNS * 2:]
+    if not msgs:
+        return '(none)'
+    cut = max((i for i, m in enumerate(msgs) if m.get('role') == 'user'), default=0)
     lines = []
-    for m in (history or [])[-HISTORY_TURNS * 2:]:
+    for i, m in enumerate(msgs):
+        if i == cut and i:
+            lines.append('--- most recent exchange (a short follow-up like "are you sure?" refers to this) ---')
         txt = citations.strip(m.get('content') or '')
         lines.append(f"{'User' if m.get('role') == 'user' else 'Assistant'}: {txt[:1200]}")
-    return '\n'.join(lines) or '(none)'
+    return '\n'.join(lines)
 
 
 _QUOTED = re.compile(r'“[^”]*”|「[^」]*」|"[^"]*"|『[^』]*』')
