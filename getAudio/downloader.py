@@ -467,10 +467,15 @@ def channel_followers(url):
                *_cookie_args(), *_ffmpeg_location_args(), '--playlist-end', '1', _normalize_url(url)]
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=_PROBE_TIMEOUT)
         if r.returncode == 0 and r.stdout.strip():
-            fc = json.loads(r.stdout).get('channel_follower_count') or 0
+            # 跟另外两处一样：yt-dlp 认不出输入时会吐字面量 "null"，json.loads 得到 None
+            info = json.loads(r.stdout) or {}
+            if not info:
+                print(f'[channel_followers] yt-dlp 没返回频道信息（{r.stdout.strip()[:40]}）：{url}')
+                return 0
+            fc = info.get('channel_follower_count') or 0
             return int(fc) if fc else 0
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as e:  # noqa: BLE001
+        print(f'[channel_followers] 取订阅数失败：{url}: {e}')
     return 0
 
 
