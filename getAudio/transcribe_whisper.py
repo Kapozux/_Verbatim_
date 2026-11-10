@@ -121,10 +121,25 @@ def transcribe_audio(filepath, progress_callback=None):
     """
     model, backend = _get_model()
 
+    # 进度回调里抛的错（比如转到一半拔电、等不到插电就放弃）是调用方要停，不是 mlx 坏了：
+    # 原样抛出去，别走下面「退回 CPU 重跑」的兜底。
+    cb_errors = []
+    if progress_callback:
+        user_cb = progress_callback
+
+        def progress_callback(pct):
+            try:
+                user_cb(pct)
+            except BaseException as e:
+                cb_errors.append(e)
+                raise
+
     if backend == 'mlx':
         try:
             return _transcribe_mlx(model, filepath, progress_callback)
         except Exception:  # noqa: BLE001
+            if cb_errors:
+                raise cb_errors[0]
             # GPU 路径出任何问题都别让任务失败：退回 CPU 的 faster-whisper 重跑
             _models.pop(_current_size(), None)
             os.environ['WHISPER_DISABLE_MLX'] = '1'
@@ -142,12 +157,32 @@ def _transcribe_mlx(repo, filepath, progress_callback=None):
     （实测同一段音频：默认 79s 且出现死循环，固定 0 后 12.2s 且循环消失）。
     mlx 没有 VAD，静音段靠 no_speech_threshold + 上层 sanitize 的静音掩码兜。
     """
+    import sys
     import mlx_whisper
 
     if progress_callback:
         progress_callback(5)
     # 全局串行：并发调 Metal 会崩整个进程（见 _mlx_gpu_lock 注释）
     with _mlx_gpu_lock:
+        # mlx_whisper.transcribe 一次调完、不收进度回调，但它内部按帧数走模块级的
+        # `tqdm.tqdm(...)`。只换掉它那个模块里的 `tqdm` 名字（不动全局 tqdm，别的线程不受影响），
+        # 就能拿到中间进度——调用方靠这个在长文件中途查电源等（GitHub #4）。有锁，同时只有一个在换。
+        mlx_mod = sys.modules.get('mlx_whisper.transcribe')
+        orig_tqdm = getattr(mlx_mod, 'tqdm', None)
+        if progress_callback and orig_tqdm is not None and hasattr(orig_tqdm, 'tqdm'):
+            class _ProgressTqdm(orig_tqdm.tqdm):
+                # mlx 默认 disable=True（verbose 不是 False 就关），关着的 tqdm 不累加 self.n，自己数
+                _done = 0
+
+                def update(self, n=1):
+                    r = super().update(n)
+                    self._done += n or 0
+                    if self.total:
+                        progress_callback(max(5, min(98, int(self._done / self.total * 100))))
+                    return r
+
+            mlx_mod.tqdm = type(sys)('tqdm_shim')
+            mlx_mod.tqdm.tqdm = _ProgressTqdm
         try:
             r = mlx_whisper.transcribe(
                 filepath,
@@ -161,6 +196,8 @@ def _transcribe_mlx(repo, filepath, progress_callback=None):
                 word_timestamps=False,
             )
         finally:
+            if mlx_mod is not None and orig_tqdm is not None:
+                mlx_mod.tqdm = orig_tqdm
             free_gpu()
     results = []
     for seg in (r.get('segments') or []):
