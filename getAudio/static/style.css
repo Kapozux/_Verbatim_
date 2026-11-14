@@ -259,6 +259,13 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .timestamp.clickable { cursor: pointer; transition: all .15s ease; }
 .timestamp.clickable:hover { background: var(--coral-strong); color: #fff; }
 .segment-text { flex: 1; font-size: 16px; line-height: 1.75; color: var(--ink-soft); }
+.timestamp.approx, .rd-ts.approx { opacity: .6; }
+/* 句首「说话人N」标签（splitTurns / fillTurnText）：1 珊瑚、2 蓝、3 紫、再多灰 */
+.turn-who { display: inline-block; margin-right: 8px; padding: 0 8px; border-radius: 999px; font-size: 13px; line-height: 22px;
+  vertical-align: 1px; white-space: nowrap; background: var(--code-bg); color: var(--muted); }
+.turn-who[data-n="1"] { background: var(--coral-soft); color: var(--coral-deep); }
+.turn-who[data-n="2"] { background: var(--tint-blue-bg); color: var(--tint-blue); }
+.turn-who[data-n="3"] { background: var(--tint-plum-bg); color: var(--tint-plum); }
 
 /* === History === */
 .history-card { background: var(--card); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 22px 24px; box-shadow: var(--e1); }
