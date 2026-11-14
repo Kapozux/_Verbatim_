@@ -277,6 +277,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .turn-who { display: inline-block; justify-self: start; padding: 0 8px; border-radius: 999px; font-size: 12.5px; line-height: 22px;
   white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; background: var(--code-bg); color: var(--muted); border: 0; font-family: inherit; }
 .rd-seg .turn-who { margin-right: 8px; vertical-align: 1px; }
+.rd-seg.cont .turn-who { display: none; }
 .turn-who[data-n="1"] { background: var(--coral-soft); color: var(--coral-deep); }
 .turn-who[data-n="2"] { background: var(--tint-blue-bg); color: var(--tint-blue); }
 .turn-who[data-n="3"] { background: var(--tint-plum-bg); color: var(--tint-plum); }

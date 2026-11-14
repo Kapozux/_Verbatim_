@@ -1140,7 +1140,13 @@ async function openTranscriptViewer(taskId, sec, cite) {
     body.innerHTML = `<button type="button" class="cx-link rd-open" data-go="detail/${escapeHtml(taskId)}${sec != null ? '/t/' + sec : ''}">${T('nb.openFull')}</button>`
         + rows.map(s => `<div class="rd-seg"${s.split ? ' data-split="1"' : ''} data-si="${s.orig}" data-sec="${parseTimestampToSeconds(s.timestamp || '0:00')}"><span class="rd-ts${s.approx ? ' approx' : ''}"${s.approx ? ` title="${escapeHtml(T('detail.approxTime'))}"` : ''}>${escapeHtml(s.timestamp || '')}</span>
             <span class="rd-txt"></span></div>`).join('');
-    body.querySelectorAll('.rd-txt').forEach((el, k) => fillTurnText(el, rows[k].text));
+    let prevWho = null;                                   // 同一个人接着说：不重复标名字
+    body.querySelectorAll('.rd-txt').forEach((el, k) => {
+        fillTurnText(el, rows[k].text);
+        const m = String(rows[k].text || '').match(TURN_RE), who = m ? m[1].replace(/\s+/g, '') : null;
+        if (who && who === prevWho) el.parentElement.classList.add('cont');
+        prevWho = who;
+    });
     body.querySelector('.rd-open').addEventListener('click', e => navigate(e.target.dataset.go));
     const media = mediaSourceOf({ ...d, id: d.id || taskId });
     if (media) {
