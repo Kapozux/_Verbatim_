@@ -746,6 +746,62 @@ function parseTimestampToSeconds(ts) {
     return 0;
 }
 
+function secondsToClock(sec) {
+    sec = Math.max(0, Math.floor(sec));
+    const p = n => String(n).padStart(2, '0');
+    return `${p(Math.floor(sec / 3600))}:${p(Math.floor(sec % 3600 / 60))}:${p(sec % 60)}`;
+}
+
+// OpenRouter / agy 的 Gemini 转写按约 2.5 分钟一段存，一段里是好几轮「说话人N：」换行接着写，
+// 详情页和阅读器原来整段一块显示，几个人的话压在一起（11-14 用户反馈）。显示时按说话人拆成一轮一行；
+// 拆出来的每轮没有真实时间，按这段里的字数比例估（这段起点 → 下一段起点），标 approx。
+// → [{timestamp, text, orig: 原段下标, approx, split}]，存盘的 segments 不动。
+const TURN_RE = /^\s*((?:说话人|Speaker)\s*\d+)\s*[：:]\s*/i;
+function splitTurns(segs, totalSec) {
+    const secs = segs.map(s => parseTimestampToSeconds(s.timestamp || '0:00'));
+    const gaps = [];
+    for (let i = 1; i < secs.length; i++) if (secs[i] > secs[i - 1]) gaps.push(secs[i] - secs[i - 1]);
+    gaps.sort((a, b) => a - b);
+    const typical = gaps.length ? gaps[gaps.length >> 1] : 0;
+    const out = [];
+    segs.forEach((seg, i) => {
+        const text = String(seg.text || '');
+        const turns = [];
+        for (const ln of text.split(/\n+/)) {
+            if (!ln.trim()) continue;
+            const m = ln.match(TURN_RE);
+            if (m || !turns.length) turns.push({ who: m ? m[1] : '', text: m ? ln.slice(m[0].length) : ln });
+            else turns[turns.length - 1].text += '\n' + ln;
+        }
+        if (turns.length < 2) { out.push({ ...seg, orig: i }); return; }
+        const start = secs[i];
+        let end = secs.slice(i + 1).find(x => x > start);
+        if (end == null) end = totalSec > start ? totalSec : start + (typical || text.length / 4);
+        const total = turns.reduce((a, t) => a + t.text.length, 0) || 1;
+        let acc = 0;
+        turns.forEach((t, k) => {
+            const sec = start + (end - start) * acc / total;
+            acc += t.text.length;
+            out.push({ timestamp: k ? secondsToClock(sec) : seg.timestamp, text: (t.who ? t.who + '：' : '') + t.text.trim(),
+                       orig: i, approx: k > 0, split: true });
+        });
+    });
+    return out;
+}
+
+// 句首的「说话人N：」画成彩色标签（1 珊瑚、2 蓝、3 紫、再多灰），后面是正文
+function fillTurnText(el, text) {
+    el.textContent = '';
+    const m = String(text || '').match(TURN_RE);
+    if (!m) { el.textContent = text || ''; return; }
+    const n = parseInt(m[1].replace(/\D/g, ''), 10);
+    const chip = document.createElement('span');
+    chip.className = 'turn-who';
+    chip.dataset.n = n >= 1 && n <= 3 ? n : 'x';
+    chip.textContent = m[1].replace(/\s+/g, '');
+    el.append(chip, document.createTextNode(text.slice(m[0].length)));
+}
+
 function setupTimeSync(player, container, stateObj) {
     player.addEventListener('timeupdate', () => {
         const currentTime = player.currentTime;
@@ -773,29 +829,105 @@ function setupTimeSync(player, container, stateObj) {
 const detailSyncState = { last: null };
 setupTimeSync(detailAudioPlayer, detailSegmentsContainer, detailSyncState);
 
+// 一段太长（Gemini 分段一段 2.5 分钟，一个人说下来几百字）：按句号切成 ~160 字一段，读着不像一堵墙
+function textParagraphs(text) {
+    const out = [];
+    for (const block of String(text || '').split(/\n+/)) {
+        if (block.length < 240) { if (block.trim()) out.push(block); continue; }
+        let cur = '';
+        for (const s of block.match(/[^。！？!?…]+[。！？!?…」”"）)]*\s*|[^。！？!?…]+$/g) || [block]) {
+            cur += s;
+            if (cur.length >= 160) { out.push(cur); cur = ''; }
+        }
+        if (cur.trim()) {
+            if (out.length && cur.length < 60) out[out.length - 1] += cur; else out.push(cur);
+        }
+    }
+    return out.length ? out : [''];
+}
+
+// 详情页一行 = 时间 | 说话人 | 正文（剧本式）。同一个人接着说不重复标名字（.cont）；
+// 「嗯」「OK」这种几个字的插话淡一点（.short）。
 function appendSegment(seg, container, player) {
     const div = document.createElement('div');
     div.className = 'segment';
     div.dataset.startSec = parseTimestampToSeconds(seg.timestamp);
 
     const ts = document.createElement('span');
-    ts.className = 'timestamp clickable';
-    ts.textContent = seg.timestamp;
-    ts.title = T('detail.jumpHere');
+    ts.className = 'timestamp clickable' + (seg.approx ? ' approx' : '');
+    ts.textContent = seg.timestamp.replace(/^00:(?=\d\d:\d\d$)/, '');
+    ts.title = seg.approx ? T('detail.approxTime') : T('detail.jumpHere');
     ts.addEventListener('click', () => {
         if (!player.src) return;
         player.currentTime = parseTimestampToSeconds(seg.timestamp);
         player.play();
     });
-
-    const text = document.createElement('span');
-    text.className = 'segment-text';
-    text.textContent = seg.text;
-
     div.appendChild(ts);
+
+    let body = String(seg.text || '');
+    const m = body.match(TURN_RE);
+    if (m) {
+        const who = document.createElement('span');
+        const n = parseInt(m[1].replace(/\D/g, ''), 10);
+        who.className = 'turn-who';
+        who.dataset.n = n >= 1 && n <= 3 ? n : 'x';
+        who.textContent = m[1].replace(/\s+/g, '');
+        body = body.slice(m[0].length);
+        div.dataset.who = who.textContent;
+        const prev = container.lastElementChild;
+        if (prev && prev.dataset.who === div.dataset.who) div.classList.add('cont');
+        div.appendChild(who);
+        container.classList.add('has-turns');
+        if (body.trim().length <= 4) div.classList.add('short');
+    }
+
+    const text = document.createElement('div');
+    text.className = 'segment-text';
+    for (const para of textParagraphs(body)) {
+        const p = document.createElement('p');
+        p.textContent = para;
+        text.appendChild(p);
+    }
     div.appendChild(text);
     container.appendChild(div);
     container.scrollTop = container.scrollHeight;
+}
+
+// 详情页正文上方：每个说话人占多少字，点一个只看他（别人的淡下去），再点取消
+function renderTurnLegend(container, segs) {
+    const old = container.previousElementSibling;
+    if (old && old.classList.contains('turn-legend')) old.remove();
+    container.removeAttribute('data-focus');
+    const count = {};
+    let total = 0;
+    segs.forEach(s => {
+        const m = String(s.text || '').match(TURN_RE);
+        if (!m) return;
+        const k = m[1].replace(/\s+/g, '');
+        const n = String(s.text).length - m[0].length;
+        count[k] = (count[k] || 0) + n; total += n;
+    });
+    const keys = Object.keys(count).sort((a, b) => parseInt(a.replace(/\D/g, '')) - parseInt(b.replace(/\D/g, '')));
+    if (keys.length < 2) return;
+    const bar = document.createElement('div');
+    bar.className = 'turn-legend';
+    keys.forEach(k => {
+        const n = parseInt(k.replace(/\D/g, ''), 10);
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'turn-who';
+        b.dataset.n = n >= 1 && n <= 3 ? n : 'x';
+        b.title = T('detail.focusSpeaker');
+        b.innerHTML = `${escapeHtml(k)} <span class="tl-pct">${Math.round(count[k] / total * 100)}%</span>`;
+        b.addEventListener('click', () => {
+            const on = container.dataset.focus === k;
+            if (on) container.removeAttribute('data-focus'); else container.dataset.focus = k;
+            bar.querySelectorAll('button').forEach(x => x.classList.toggle('on', !on && x === b));
+            container.querySelectorAll('.segment').forEach(r => r.classList.toggle('dim', !on && r.dataset.who !== k));
+        });
+        bar.appendChild(b);
+    });
+    container.before(bar);
 }
 
 // 证据卡跳进来：高亮原话所在的那一段、滚到视窗中间，播放器也拨到那一秒（不自动播）
@@ -1300,13 +1432,16 @@ async function openDetailView(taskId, startAt = null) {
             detailPlayerSection.classList.add('hidden');
         }
 
-        detailSegments = data.segments || [];
+        detailSegments = splitTurns(data.segments || [], data.duration_seconds);
         detailSegmentsContainer.innerHTML = '';
+        detailSegmentsContainer.classList.remove('has-turns');
         detailSyncState.last = null;
+        renderTurnLegend(detailSegmentsContainer, detailSegments);
         detailSegments.forEach(seg => {
             appendSegment(seg, detailSegmentsContainer, detailAudioPlayer);
         });
         detailSpeakers(data);
+        detailSegmentsContainer.scrollTop = 0;     // appendSegment 每加一行滚到底（实时转写用），详情页从头看
 
         if (data.summary && data.summary.overview) {
             renderSummary(detailSummarySection, detailSummaryOverview,
@@ -1337,11 +1472,21 @@ async function detailSpeakers(data) {
     if (!r || !(r.labels || []).length || detailRecord !== data) return;
     const rows = detailSegmentsContainer.querySelectorAll('.segment');
     r.labels.forEach(l => {
-        const seg = detailSegments[l.i], txt = rows[l.i] && rows[l.i].querySelector('.segment-text');
+        // l.i 是原段下标；一段拆成几轮的（splitTurns）声纹标的是整段，套不上，留着「说话人N」
+        const js = [];
+        detailSegments.forEach((s, j) => { if ((s.orig ?? j) === l.i) js.push(j); });
+        if (js.length !== 1) return;
+        const seg = detailSegments[js[0]], txt = rows[js[0]] && rows[js[0]].querySelector('.segment-text');
         if (!seg || !txt || !l.name) return;
         seg.who = l.name;
-        txt.textContent = String(seg.text || '').replace(/^\s*说话人\s*\d+\s*[：:]\s*/, '');
-        txt.insertAdjacentHTML('afterbegin', `<span class="vc-who" data-role="${escapeHtml(l.role || 'unclear')}">${escapeHtml(l.name)}</span>`);
+        const col = rows[js[0]].querySelector('.turn-who');
+        if (col) {      // 已经有说话人那一栏：换成认出来的名字
+            col.textContent = l.name;
+            col.title = l.name;
+            return;
+        }
+        const first = txt.querySelector('p') || txt;
+        first.insertAdjacentHTML('afterbegin', `<span class="vc-who" data-role="${escapeHtml(l.role || 'unclear')}">${escapeHtml(l.name)}</span>`);
     });
 }
 

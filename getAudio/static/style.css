@@ -249,16 +249,51 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .results-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
 .results-header h2 { font-family: var(--serif); font-size: 21.5px; font-weight: 600; color: var(--ink); }
 .results-actions { display: flex; gap: 8px; }
-.segments-container { max-height: 520px; overflow-y: auto; }
-.segment { display: flex; gap: 14px; align-items: flex-start; padding: 10px 0; border-bottom: 1px solid var(--line); animation: fadeIn .3s ease; }
-.segment:last-child { border-bottom: none; }
-.segment.active { background: var(--coral-soft); border-radius: var(--r-sm); padding: 10px 12px; margin-left: -12px; padding-left: 12px; box-shadow: inset 3px 0 0 var(--coral); }
-.segment.active .segment-text { color: var(--coral-deep); }
-.segment.active .timestamp { background: var(--coral-strong); color: #fff; }
-.timestamp { font-family: var(--mono); font-size: 14px; color: var(--coral); background: var(--coral-soft); padding: 3px 9px; border-radius: var(--r-xs); white-space: nowrap; flex-shrink: 0; font-variant-numeric: tabular-nums; }
-.timestamp.clickable { cursor: pointer; transition: all .15s ease; }
-.timestamp.clickable:hover { background: var(--coral-strong); color: #fff; }
-.segment-text { flex: 1; font-size: 16px; line-height: 1.75; color: var(--ink-soft); }
+.segments-container { max-height: 520px; overflow-y: auto; padding-right: 6px; }
+/* 一行 = 时间 | 说话人 | 正文（剧本式）。没有说话人的转写（Whisper、字幕）只有两栏 */
+.segment { display: grid; grid-template-columns: 68px minmax(0, 1fr); column-gap: 14px; align-items: baseline;
+  padding: 9px 10px; margin: 0 -10px; border-radius: var(--r-sm); animation: fadeIn .3s ease; }
+.has-turns .segment { grid-template-columns: 68px 64px minmax(0, 1fr); padding-top: 14px; }
+.has-turns .segment.cont { padding-top: 2px; }
+.has-turns .segment:not(:has(.turn-who)) .segment-text { grid-column: 3; }
+.segment.cont .turn-who { visibility: hidden; }
+.segment.cont .timestamp { opacity: 0; }
+.segment.cont:hover .timestamp { opacity: 1; }
+.segment.active { background: var(--coral-soft); box-shadow: inset 3px 0 0 var(--coral); }
+.segment.active .timestamp { color: var(--coral-deep); opacity: 1; font-weight: 600; }
+.segment.seg-target .timestamp { opacity: 1; }
+.timestamp { font-family: var(--mono); font-size: 12.5px; color: var(--faint); white-space: nowrap; font-variant-numeric: tabular-nums; text-align: right; }
+.timestamp.clickable { cursor: pointer; transition: color .15s ease, opacity .15s ease; }
+.timestamp.clickable:hover { color: var(--coral); }
+.timestamp.approx::before { content: '≈'; margin-right: 1px; }
+.segment-text { font-size: 16px; line-height: 1.8; color: var(--ink-soft); }
+.segment-text p { margin: 0; }
+.segment-text p + p { margin-top: .7em; }
+.segment.short .segment-text { color: var(--muted); font-size: 15px; }
+.segment.dim { opacity: .28; }
+.segment.dim:hover { opacity: .7; }
+.rd-ts.approx { opacity: .6; }
+/* 说话人标签（详情页那一栏、阅读器句首、正文上方的图例）：1 珊瑚、2 蓝、3 紫、再多灰 */
+.turn-who { display: inline-block; justify-self: start; padding: 0 8px; border-radius: 999px; font-size: 12.5px; line-height: 22px;
+  white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; background: var(--code-bg); color: var(--muted); border: 0; font-family: inherit; }
+.rd-seg .turn-who { margin-right: 8px; vertical-align: 1px; }
+.rd-seg.cont .turn-who { display: none; }
+.turn-who[data-n="1"] { background: var(--coral-soft); color: var(--coral-deep); }
+.turn-who[data-n="2"] { background: var(--tint-blue-bg); color: var(--tint-blue); }
+.turn-who[data-n="3"] { background: var(--tint-plum-bg); color: var(--tint-plum); }
+.turn-legend { display: flex; flex-wrap: wrap; gap: 8px; margin: -4px 0 12px; }
+.turn-legend .turn-who { cursor: pointer; padding: 2px 10px; font-size: 13px; transition: box-shadow .15s ease, opacity .15s ease; }
+.turn-legend .turn-who:hover { box-shadow: 0 0 0 1px currentColor; }
+.turn-legend .turn-who.on { box-shadow: 0 0 0 1.5px currentColor; }
+.turn-legend:has(.on) .turn-who:not(.on) { opacity: .5; }
+.tl-pct { opacity: .7; font-variant-numeric: tabular-nums; margin-left: 2px; }
+/* 手机：时间和说话人一行，正文整行在下面；同一个人接着说的只剩正文 */
+@media (max-width: 600px) {
+  .segment, .has-turns .segment { grid-template-columns: auto minmax(0, 1fr); column-gap: 10px; row-gap: 2px; }
+  .segment .segment-text, .has-turns .segment:not(:has(.turn-who)) .segment-text { grid-column: 1 / -1; }
+  .segment .timestamp { text-align: left; }
+  .has-turns .segment.cont .turn-who, .has-turns .segment.cont .timestamp { display: none; }
+}
 
 /* === History === */
 .history-card { background: var(--card); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 22px 24px; box-shadow: var(--e1); }
