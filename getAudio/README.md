@@ -9,8 +9,8 @@ interface is English; transcribed/analyzed content keeps its original language (
 output explicitly).
 
 > Runs entirely on your machine (Flask, `localhost:5001`). Transcription can be local (Whisper, GPU-
-> accelerated on Apple Silicon) or cloud (Gemini / Alibaba); nothing leaves your machine unless you
-> configure and use a cloud engine.
+> accelerated on Apple Silicon) or cloud (OpenRouter / Gemini / others). Once a cloud key is set, new transcriptions default to
+> a cloud engine and the audio is uploaded to it; pick Whisper to keep audio on your machine.
 
 ![Verbatim](../docs/verbatim.png)
 
