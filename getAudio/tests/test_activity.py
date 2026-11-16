@@ -134,7 +134,7 @@ frames.build = real_build
 
 refs = []
 frames._call = lambda prompt, images: refs.append(usage.current().get('ref')) or '{"keep": [0], "cards": []}'
-os.environ['VISION_BATCHES'] = '3'
+os.environ['VISION_CALLS'] = '3'
 with usage.scope(ref='visual:abc'):
     frames.triage([(f'/s{k}.jpg', [k]) for k in range(4)])
     frames.read_frames([{'i': k, 'shown': [[0, 1]], 'said': '', 'img': f'/i{k}.jpg'} for k in range(13)], 'English')

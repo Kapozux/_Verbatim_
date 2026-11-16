@@ -181,6 +181,14 @@ def grab(video, t, out, width=FULL_W):
     return os.path.isfile(out)
 
 
+GRAB_AT_ONCE = 8          # 取帧（每张一个 ffmpeg）同时几个
+
+
+def grab_many(video, jobs, width=FULL_W):
+    """[(秒, 输出路径)] → [成功?]，几张同时取（原来一张一张取，60 帧要十几秒）。"""
+    return _pmap(lambda j: grab(video, j[0], j[1], width), list(jobs), GRAB_AT_ONCE)
+
+
 def _font(size):
     from PIL import ImageFont
     for p in ('/System/Library/Fonts/Helvetica.ttc', 'C:\\Windows\\Fonts\\arial.ttf',
@@ -266,12 +274,34 @@ def _json(raw):
     return analyze._parse_json_obj(raw) or {}
 
 
-def batches_at_once():
-    """一期里几批同时读（缩略图分拣、读原图）。总量另有 claude_cli / claude_gate 的闸。"""
+# ---- 读图池：所有期的读图请求进同一个池子（11-16 用户：「不能按单个视频吧，要全部加起来的总帧几十个/百个一起读」）----
+# 同时几期（VISION_EPISODES）只管下视频、取帧；读图不按期排队，几期的批一起进这里，最多 VISION_CALLS 个同时在读。
+# 再往外还有 claude_cli 的 CLAUDE_PARALLEL 和三个应用共用的 claude_gate（都要够大才真能并发到这个数）。
+_pool = None
+_pool_lock = __import__('threading').Lock()
+
+
+def calls_at_once():
     try:
-        return max(1, int(os.environ.get('VISION_BATCHES') or 4))
+        return max(1, int(os.environ.get('VISION_CALLS') or 32))
     except ValueError:
-        return 4
+        return 32
+
+
+def _vision_pool():
+    global _pool
+    from concurrent.futures import ThreadPoolExecutor
+    with _pool_lock:
+        if _pool is None or _pool._max_workers != calls_at_once():
+            _pool = ThreadPoolExecutor(calls_at_once(), thread_name_prefix='vision')
+        return _pool
+
+
+def read_all(fn, xs):
+    """xs 里每一项交给 fn（一次模型调用），进共用的读图池；按原顺序返回。读图池里的任务别再往池子里交任务（会互等）。"""
+    pool = _vision_pool()
+    futs = [pool.submit(usage.bound(fn), x) for x in xs]
+    return [f.result() for f in futs]
 
 
 def episodes_at_once():
@@ -301,7 +331,7 @@ def triage(sheets):
             got = set(ids)
         return got & set(ids)
     keep = set()
-    for got in _pmap(one, sheets, batches_at_once()):
+    for got in read_all(one, sheets):
         keep |= got
     return keep
 
@@ -327,7 +357,7 @@ def read_frames(items, lang):
                 out[i] = c
         return out
     merged = {}
-    for got in _pmap(one, [items[s:s + READ_BATCH] for s in range(0, len(items), READ_BATCH)], batches_at_once()):
+    for got in read_all(one, [items[s:s + READ_BATCH] for s in range(0, len(items), READ_BATCH)]):
         merged.update(got)
     return merged
 
@@ -389,11 +419,9 @@ def build(results_dir, task_id, video_path=None, url=None, progress=None):
         g = sample_gray(video_path, fps)
         keys = keyframes(g, fps)
         del g
-        frames = []
-        for k, kf in enumerate(keys):
-            p = os.path.join(tmp, f'k{k:03d}.jpg')
-            if grab(video_path, kf['t'], p):
-                frames.append((k, kf['t'], p))
+        paths = [os.path.join(tmp, f'k{k:03d}.jpg') for k in range(len(keys))]
+        ok = grab_many(video_path, [(kf['t'], p) for kf, p in zip(keys, paths)])
+        frames = [(k, kf['t'], p) for k, (kf, p, good) in enumerate(zip(keys, paths, ok)) if good]
         if not frames:
             raise RuntimeError('No frames could be read from the video')
         say('triage')

@@ -93,7 +93,7 @@ img = A.app.test_client().get(f"/api/scenes/{TID0}/{d['scenes'][0]['img']}")
 bad = A.app.test_client().get(f'/api/scenes/{TID0}/scenes.json').status_code
 t.check('缩略图接口：能取、乱名字 404', img.status_code == 200 and img.mimetype == 'image/jpeg' and bad == 404)
 
-# 3 一批 8 帧：第二批带上一批最后一句；有转写也不把说的话塞进去（会带偏），语言跟转写
+# 3 一批 8 帧：几批同时读、各读各的；有转写也不把说的话塞进去（会带偏），语言跟转写
 calls.clear()
 TID1 = make_transcript(A.config.RESULTS_FOLDER, [('00:00:00', '说话人1：Red part.'), ('00:00:26', 'Blue part.')],
                        title='talk', url='https://www.youtube.com/watch?v=abcdefghijk')
@@ -102,8 +102,8 @@ scenes.MAX_GAP_S = 3.0
 d1 = scenes.build(A.config.RESULTS_FOLDER, TID1, url='https://www.youtube.com/watch?v=abcdefghijk')
 scenes.MAX_GAP_S = old_gap
 print('3 两批：', [(c['ids'], c['prev'], c['speech']) for c in calls])
-t.check('分批：第二批带上一批的最后一句', len(calls) >= 2 and not calls[0]['prev'] and calls[1]['prev']
-        and all(len(c['ids']) <= scenes.BATCH for c in calls))
+t.check('分批：几批各读各的（进共用读图池同时读，不再带上一批的最后一句）', len(calls) >= 2
+        and not any(c['prev'] for c in calls) and all(len(c['ids']) <= scenes.BATCH for c in calls))
 t.check('有转写：不带说的话、语言跟转写', not any(c['speech'] for c in calls) and calls[0]['lang'] == 'English')
 
 # 4 上传：没声音的视频收下、标成只描述画面；带声音的勾了「同时描述画面」标 want_scenes；不勾什么都不加

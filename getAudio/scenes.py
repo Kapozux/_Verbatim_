@@ -50,7 +50,7 @@ CAP_MAX = 300
 READ_W = 768              # 送去描述的图宽
 THUMB_W = 320             # 留在磁盘上的缩略图宽
 BATCH = 8                 # 一次调用描述几帧
-# 字幕模式帧多，几批同时读（frames.batches_at_once()，VISION_BATCHES）；不接上一批的话，字幕在代码里去重
+# 所有批进 frames 的共用读图池同时读（VISION_CALLS）；批之间不接话，连着的同一句字幕在代码里去重
 # 不给模型「那时说的话」：11-16 实测 Haiku 拿到话就跟着话写（幻灯片被写成「还是那个人在雪山前」），
 # 不给反而每帧都对。说的话转写里已经有了，画面轨只管看得见的。
 
@@ -189,18 +189,9 @@ def describe(items, lang, captions=False):
     普通模式一批接一批（带上一批最后一句，叫它只说变了什么）；字幕模式几批同时读。"""
     batches = [items[s:s + BATCH] for s in range(0, len(items), BATCH)]
     out = {}
-    if captions:
-        from concurrent.futures import ThreadPoolExecutor
-        with ThreadPoolExecutor(frames.batches_at_once()) as ex:
-            for got in ex.map(usage.bound(lambda b: _read_batch(b, lang, True)), batches):
-                out.update(got)
-        return out
-    prev = ''
-    for b in batches:
-        got = _read_batch(b, lang, False, prev)
+    # 11-16：所有批同时进共用读图池（frames.read_all），不再一批等一批带上一批的最后一句——几期的批一起读才快
+    for got in frames.read_all(lambda b: _read_batch(b, lang, captions), batches):
         out.update(got)
-        last = max(got, default=None)
-        prev = got[last]['text'][:200] if last is not None else prev
     return out
 
 
@@ -251,11 +242,10 @@ def build(results_dir, tid, video_path=None, url=None, progress=None, lang=None,
         picks = scene_times(g, fps, captions=captions)
         del g
         segs = frames._segments(results_dir, tid)
-        items = []
-        for k, p in enumerate(picks):
-            img = os.path.join(tmp, f'r{k:03d}.jpg')
-            if frames.grab(video_path, p['t'], img, width=READ_W):
-                items.append({'i': k, 'start': p['start'], 'end': p['end'], 't': p['t'], 'img': img})
+        imgs = [os.path.join(tmp, f'r{k:03d}.jpg') for k in range(len(picks))]
+        ok = frames.grab_many(video_path, [(p['t'], img) for p, img in zip(picks, imgs)], width=READ_W)
+        items = [{'i': k, 'start': p['start'], 'end': p['end'], 't': p['t'], 'img': img}
+                 for k, (p, img, good) in enumerate(zip(picks, imgs, ok)) if good]
         if not items:
             raise RuntimeError('No frames could be read from the video')
         say('describe')
@@ -274,11 +264,12 @@ def build(results_dir, tid, video_path=None, url=None, progress=None, lang=None,
         os.makedirs(vdir, exist_ok=True)
         for old in glob.glob(os.path.join(vdir, 's_*.jpg')):
             os.remove(old)
-        for s in scenes:
-            t = s.pop('_t')
-            name = f's_{int(round(t * 10)):06d}.jpg'
-            if frames.grab(video_path, t, os.path.join(vdir, name), width=THUMB_W):
-                s['img'] = name
+        names = [f"s_{int(round(s['_t'] * 10)):06d}.jpg" for s in scenes]
+        ok = frames.grab_many(video_path, [(s.pop('_t'), os.path.join(vdir, n)) for s, n in zip(scenes, names)],
+                              width=THUMB_W)
+        for s, n, good in zip(scenes, names, ok):
+            if good:
+                s['img'] = n
         out = {'version': VERSION, 'task_id': tid, 'made_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                'model': config.GEMINI_VISUAL_MODEL, 'duration': round(dur, 1), 'picked': len(items),
                'captions': bool(captions), 'scenes': scenes}
