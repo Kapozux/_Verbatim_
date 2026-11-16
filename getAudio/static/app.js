@@ -484,7 +484,7 @@ async function uploadOne(file, row, engine) {
     const formData = new FormData();
     formData.append('audio', file);
     formData.append('engine', engine);
-    if (wantScenes()) formData.append('scenes', '1');
+    formData.append('scenes', wantScenes() ? '1' : '0');
 
     // 精准模式下把"预计人数"一起带上（留空则不带，服务器自动判断）
     const speakerCountEl = document.getElementById('speaker-count');

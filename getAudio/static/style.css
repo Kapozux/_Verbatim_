@@ -308,8 +308,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   transition: width .15s ease; }
 .scene-thumb.big { width: min(320px, 60%); cursor: zoom-out; }
 #detail-scenes-btn.on { color: var(--tint-blue); border-color: currentColor; }
-.scenes-opt { align-items: flex-start; }
-.scenes-opt input { margin-top: 3px; }
+.cm-only.scenes-opt { align-items: flex-start; }
+.cm-only.scenes-opt input { margin-top: 3px; flex: none; }
 .scenes-opt .hint { display: block; font-size: 13px; color: var(--faint); }
 @media (max-width: 600px) {
   .scene-row, .scene-row.in-turns { grid-template-columns: auto minmax(0, 1fr); column-gap: 10px; row-gap: 4px; }

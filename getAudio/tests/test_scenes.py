@@ -121,12 +121,20 @@ def upload(path, name, **form):
 
 
 s_code, s_meta = upload(SILENT, 'screen.mp4')
-l_code, l_meta = upload(LOUD, 'talk.mp4', scenes='1')
-p_code, p_meta = upload(LOUD, 'talk.mp4')
+l_code, l_meta = upload(LOUD, 'talk.mp4')                 # 11-16 起默认就做（没传 = 要）
+p_code, p_meta = upload(LOUD, 'talk.mp4', scenes='0')
+wav = os.path.join(TMP, 'a.wav')
+subprocess.run([FF, '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=2', wav], check=True)
+a_code, a_meta = upload(wav, 'a.wav')
 print('4 上传：', (s_code, s_meta), (l_code, l_meta), (p_code, p_meta))
 t.check('没声音的视频收下、只描述画面', s_code == 200 and s_meta == {'scenes_only': True})
-t.check('勾了同时描述画面', l_code == 200 and l_meta == {'want_scenes': True})
-t.check('不勾不加标记', p_code == 200 and not p_meta)
+t.check('视频默认就描述画面', l_code == 200 and l_meta == {'want_scenes': True})
+t.check('明说不要（scenes=0）不加标记', p_code == 200 and not p_meta)
+t.check('音频文件不加标记', a_code == 200 and not a_meta)
+os.environ['SCENES_DEFAULT'] = '0'
+_, off_meta = upload(LOUD, 'talk.mp4')
+os.environ.pop('SCENES_DEFAULT')
+t.check('SCENES_DEFAULT=0 时没传就不做', not off_meta)
 r = c.post('/api/transcribe_local', json={'path': SILENT})
 t.check('本机路径：没声音的视频也收下', r.status_code == 200 and submitted and submitted[-1][1]['extra_meta'] == {'scenes_only': True})
 A.submit_transcription = real_submit

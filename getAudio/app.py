@@ -1684,6 +1684,14 @@ def _truthy(v):
     return v is True or str(v or '').strip().lower() in ('1', 'true', 'on', 'yes')
 
 
+def _want_scenes(v):
+    """这次要不要顺带描述画面。11-16 用户：「一律默认都转（有视频的）」→ 没传就是要；传了 0 / false / off 才不要。
+    SCENES_DEFAULT=0 把没传时的默认改回不要。只管转写页 / 接口（插件、MCP）；博主链不走这里，不受影响。"""
+    if v is None or str(v).strip() == '':
+        return os.environ.get('SCENES_DEFAULT', '1') != '0'
+    return _truthy(v)
+
+
 def _scene_meta(extra_meta, scenes, bad, path):
     """画面描述的两个标记并进 extra_meta（会存进 tasks.db，重启恢复时带上）：
     scenes_only = 没声音的视频，只描述画面；want_scenes = 用户勾了「同时描述画面」，转完后台做。"""
@@ -1929,7 +1937,7 @@ def upload():
     engine = request.form.get('engine') or config.default_engine()
     speaker_count = _parse_speaker_count(request.form.get('speaker_count'))
 
-    task_id, error = _enqueue_task(file, engine, speaker_count, scenes=_truthy(request.form.get('scenes')))
+    task_id, error = _enqueue_task(file, engine, speaker_count, scenes=_want_scenes(request.form.get('scenes')))
     if error:
         return jsonify({'error': error}), 400
 
@@ -1942,7 +1950,7 @@ def api_transcribe_local():
     body = request.get_json(silent=True) or {}
     task_id, error = _enqueue_local_task(
         body.get('path'), body.get('engine') or config.default_engine(),
-        _parse_speaker_count(body.get('speaker_count')), scenes=_truthy(body.get('scenes')))
+        _parse_speaker_count(body.get('speaker_count')), scenes=_want_scenes(body.get('scenes')))
     if error:
         return jsonify({'error': error}), 400
     return jsonify({'task_id': task_id})
@@ -2127,7 +2135,7 @@ def api_transcribe_urls():
     body = request.get_json(silent=True) or {}
     engine = body.get('engine') or config.default_engine()
     sub_mode = _clean_sub_mode(body.get('subs'))
-    want_scenes = _truthy(body.get('scenes'))
+    want_scenes = _want_scenes(body.get('scenes'))
     project_id = str(body.get('project_id') or '')          # 在项目里贴的：转完加进那个项目
     project_id = project_id if _chain_ok(project_id) else None
     try:
@@ -2195,7 +2203,7 @@ def upload_batch():
 
     results = []
     for file in files:
-        task_id, error = _enqueue_task(file, engine, speaker_count, scenes=_truthy(request.form.get('scenes')))
+        task_id, error = _enqueue_task(file, engine, speaker_count, scenes=_want_scenes(request.form.get('scenes')))
         results.append({
             'filename': file.filename,
             'task_id': task_id,
