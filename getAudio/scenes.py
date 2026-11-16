@@ -47,20 +47,18 @@ BAND_DIFF = 4.0
 CAP_MIN_S = 1.0
 CAP_GAP_S = 6.0
 CAP_MAX = 300
-# 11-16 用户定：所有视频都拼 3x3 读（Haiku），每格 512 宽，一次调用一张拼图。
-# 实测（144 帧，Opus 逐帧当参考）：字幕相似 0.94 vs 单图 0.95，成本约单图的 2/3。
-GRID_COLS = 3
-READ_W = 512              # 每一格的宽（拼图 1536 宽）
+# 11-16 用户定：单图读（Haiku），一次 9 张、每张 768 宽。试过 3x3 拼图（每格 512）：省约 40%，但漏字 4.7% vs 单图 1.1%
+# （标题、开头小字最常丢）；用户：「弄得少，那还不如保证点准确性」。实测见 docs/handoff/activity.md。
+READ_W = 768              # 送去读的图宽
 THUMB_W = 320             # 留在磁盘上的缩略图宽
-BATCH = GRID_COLS * GRID_COLS   # 一次调用读几帧（一张拼图）
+BATCH = 9                 # 一次调用读几帧
 # 所有批进 frames 的共用读图池同时读（VISION_CALLS）；批之间不接话，连着的同一句字幕在代码里去重
 # 不给模型「那时说的话」：11-16 实测 Haiku 拿到话就跟着话写（幻灯片被写成「还是那个人在雪山前」），
 # 不给反而每帧都对。说的话转写里已经有了，画面轨只管看得见的。
 
 PROMPT = """You are writing the visual track of a video transcript, for a reader who cannot see the video.
-The image is a grid of {n} video frames. Each tile is numbered in the red box at its top-left corner (1 to {n}),
-left to right, top to bottom, in time order. Ignore the red number boxes and the white tile borders.
-Look at each tile on its own, not at its neighbours.
+The {n} images are video frames in time order; image 1 is tile 1, image 2 is tile 2, and so on.
+Look at each image on its own, not at its neighbours.
 
 For each tile return:
 - "caption": every piece of text shown on screen in that tile — titles, headings, bullet points, slide and chart text,
@@ -154,34 +152,13 @@ def scene_times(g, fps, captions=False):
 
 # ================= 模型 =================
 
-def grid(paths, out):
-    """几帧拼成一张 GRID_COLS 列的图，每格左上角红底白字编号（1 起）。→ out"""
-    from PIL import Image, ImageDraw
-    ims = [Image.open(p).convert('RGB') for p in paths]
-    tw = READ_W
-    th = max(1, round(ims[0].height * tw / ims[0].width))
-    rows = -(-len(ims) // GRID_COLS)
-    g = Image.new('RGB', (tw * GRID_COLS, th * rows), 'white')
-    d = ImageDraw.Draw(g)
-    font = frames._font(26)
-    for j, im in enumerate(ims):
-        x, y = j % GRID_COLS * tw, j // GRID_COLS * th
-        g.paste(im.resize((tw, th)), (x, y))
-        d.rectangle([x, y, x + 40, y + 32], fill='red')
-        d.text((x + 6, y + 2), str(j + 1), fill='white', font=font)
-        d.rectangle([x, y, x + tw - 1, y + th - 1], outline='white', width=2)
-    g.save(out, quality=90)
-    return out
-
-
 def _read_batch(batch, lang):
-    """一批（最多 BATCH 帧）拼一张图读一次 → {i: {'text', 'caption'}}。读失败 → {}。"""
+    """一批（最多 BATCH 帧）一次读完（每帧一张图）→ {i: {'text', 'caption'}}。读失败 → {}。"""
     tiles = '\n'.join(f"Tile {k + 1} = frame {it['i']}, {frames._clock(it['start'])}-{frames._clock(it['end'])}."
                       for k, it in enumerate(batch))
     prompt = PROMPT.format(n=len(batch), lang=lang, tiles=tiles)
     try:
-        img = grid([it['img'] for it in batch], os.path.splitext(batch[0]['img'])[0] + '_grid.jpg')
-        d = frames._json(frames._call(prompt, [img]))
+        d = frames._json(frames._call(prompt, [it['img'] for it in batch]))
     except Exception:  # noqa: BLE001
         return {}
     out = {}
@@ -200,7 +177,7 @@ def _read_batch(batch, lang):
 
 
 def describe(items, lang):
-    """items: [{'i', 'start', 'end', 'img'}] → {i: {'text', 'caption'}}。每 BATCH 帧拼一张图；所有批进共用读图池
+    """items: [{'i', 'start', 'end', 'img'}] → {i: {'text', 'caption'}}。每 BATCH 帧一次调用；所有批进共用读图池
     （frames.read_all）同时读。一批读失败就跳过那一批（别的照常）。"""
     batches = [items[s:s + BATCH] for s in range(0, len(items), BATCH)]
     out = {}
@@ -286,7 +263,7 @@ def build(results_dir, tid, video_path=None, url=None, progress=None, lang=None,
                 s['img'] = n
         out = {'version': VERSION, 'task_id': tid, 'made_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                'model': config.GEMINI_VISUAL_MODEL, 'duration': round(dur, 1), 'picked': len(items),
-               'captions': bool(captions), 'layout': f'grid{GRID_COLS}', 'scenes': scenes}
+               'captions': bool(captions), 'layout': 'single', 'scenes': scenes}
         tmp_json = scenes_path(results_dir, tid) + '.tmp'
         with open(tmp_json, 'w', encoding='utf-8') as f:
             json.dump(out, f, ensure_ascii=False, indent=1)

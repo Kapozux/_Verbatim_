@@ -47,7 +47,7 @@ SCREEN_TEXT = [False]     # 假模型这次是否「看到」画面上的字（�
 
 
 def fake_call(prompt, images):
-    """按拼图格子回答：提示词里「Tile k = frame i」。画面上有字 → 相邻两格同一句字幕（要被并成一条）。"""
+    """按提示词里「Tile k = frame i」（第 k 张图）回答。画面上有字 → 相邻两格同一句字幕（要被并成一条）。"""
     tiles = [(int(k), int(i)) for k, i in re.findall(r'^Tile (\d+) = frame (\d+),', prompt, re.M)]
     ids = [i for _, i in tiles]
     lang = re.search(r'complete description in (.+?) of what', prompt)
@@ -89,8 +89,9 @@ n = len(calls)
 again = scenes.build(A.config.RESULTS_FOLDER, TID0)
 print('2 build：', [(s['start'], s['text'], s['img']) for s in d['scenes']], files, calls)
 t.check('build：每帧一句、丢掉不在批里的编号', [s['text'] for s in d['scenes']] == [f'Scene {i}' for i in range(4)])
-t.check('build：没声音默认写中文、4 帧拼成一张图读（每格 512 宽，3 列）', calls[0]['lang'] == 'Chinese (Simplified)'
-        and calls[0]['n_img'] == 1 and len(calls[0]['ids']) == 4 and calls[0]['grid_w'] == 3 * scenes.READ_W)
+t.check('build：没声音默认写中文、单图读（一帧一张、768 宽）', calls[0]['lang'] == 'Chinese (Simplified)'
+        and calls[0]['n_img'] == len(calls[0]['ids']) == 4 and scenes.READ_W == 768
+        and calls[0]['grid_w'] == 320)     # 合成视频只有 320 宽：不放大
 t.check('提示词：画面上的字照抄、不许改', calls[0]['verbatim'])
 t.check('build：缩略图在、视频不留', len([f for f in files if f.startswith('s_')]) == 4 and 'scenes.json' in files
         and not any(f.endswith('.mp4') for f in files))
