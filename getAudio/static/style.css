@@ -301,7 +301,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .scene-tag { justify-self: start; padding: 0 8px; border-radius: 999px; font-size: 12.5px; line-height: 22px;
   color: var(--tint-blue); background: var(--tint-blue-bg); white-space: nowrap; }
 .scene-body { display: flex; gap: 10px; align-items: flex-start; min-width: 0; }
+.scene-words { min-width: 0; }
 .scene-body p { margin: 0; font-size: 14.5px; line-height: 1.6; font-style: italic; min-width: 0; overflow-wrap: anywhere; }
+.scene-body p.scene-cap { font-style: normal; font-size: 15.5px; color: var(--ink); }
 .scene-thumb { flex: none; width: 72px; border-radius: var(--r-xs); border: 1px solid var(--line); cursor: zoom-in;
   transition: width .15s ease; }
 .scene-thumb.big { width: min(320px, 60%); cursor: zoom-out; }

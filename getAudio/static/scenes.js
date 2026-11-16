@@ -61,9 +61,20 @@
                 img.addEventListener('click', () => img.classList.toggle('big'));
                 body.appendChild(img);
             }
-            const p = document.createElement('p');
-            p.textContent = s.text;
-            body.appendChild(p);
+            const words = document.createElement('div');
+            words.className = 'scene-words';
+            if (s.caption) {            // 字幕模式：画面上的字（这类视频的「话」）放前面，正常字体
+                const cap = document.createElement('p');
+                cap.className = 'scene-cap';
+                cap.textContent = s.caption;
+                words.appendChild(cap);
+            }
+            if (s.text) {
+                const p = document.createElement('p');
+                p.textContent = s.text;
+                words.appendChild(p);
+            }
+            body.appendChild(words);
             div.append(ts, tag, body);
             const next = rows.find(r => parseFloat(r.dataset.startSec) > s.start);
             detailSegmentsContainer.insertBefore(div, next || null);

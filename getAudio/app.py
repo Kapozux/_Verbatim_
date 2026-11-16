@@ -747,16 +747,17 @@ def _save_results(task_id, original_filename, engine, audio_source_path,
 
 # ================= 画面描述（scenes.py，2026-11-16） =================
 
-def _scenes_transcribe(task_id, video_path, q):
-    """没有声音的视频：同步做画面描述，返回 (segments, full_text) 当这期的正文。"""
+def _scenes_transcribe(task_id, video_path, q, url=None):
+    """没人说话的视频（没音轨，或转出来是白卷）：同步按字幕模式做画面描述，返回 (segments, full_text) 当这期的正文。
+    video_path 是视频文件；链接来的（手上只有音轨）给 url 重新下画面。"""
     import scenes
     steps = {'download': 5, 'scan': 10, 'describe': 30}
 
     def say(step):
         q.put(json.dumps({'type': 'progress', 'percent': steps.get(step, 10),
-                          'message': 'No sound in this video: describing what is on screen…'}))
+                          'message': 'No one is speaking: reading the on-screen text and picture…'}))
     say('scan')
-    d = scenes.build(config.RESULTS_FOLDER, task_id, video_path=video_path, progress=say)
+    d = scenes.build(config.RESULTS_FOLDER, task_id, video_path=video_path, url=url, progress=say, captions=True)
     segs = scenes.as_segments(d)
     for seg in segs:
         q.put(json.dumps({'type': 'segment', **seg}))
@@ -783,13 +784,29 @@ def _keep_video_for_scenes(task_id, filepath):
         return None
 
 
-def _queue_scenes(task_id, video_path=None, url=None):
+def _queue_scenes(task_id, video_path=None, url=None, captions=False):
     """排进画面描述的后台队列；没视频也没链接就不排。做完更新资料库索引。"""
     if DEMO_MODE or not (video_path or (url or '').startswith('http')):
         return False
     import scenes
-    return scenes.queue(config.RESULTS_FOLDER, task_id, video_path=video_path, url=url,
+    return scenes.queue(config.RESULTS_FOLDER, task_id, video_path=video_path, url=url, captions=captions,
                         on_done=lambda tid, st: library.changed(tid))
+
+
+# 引擎「这段没有话」的几种说法：出口校验的白卷（sanitize.transcript_quality 的原因）、引擎直接回空文本
+_NO_SPEECH_MARKERS = ('返回空文本', '没有识别到任何语音', '非语音标注', '没有可转写的语音')
+
+
+def _no_speech(err):
+    return isinstance(err, _EmptyTranscript) or any(m in str(err) for m in _NO_SPEECH_MARKERS)
+
+
+def _video_source(filepath, extra_meta):
+    """这期能不能拿到画面：上传 / 本机的是视频文件，或者有视频链接。→ (视频路径或 None, 链接或 None)，都没有 → None。"""
+    if filepath and is_video_file(filepath) and os.path.exists(filepath):
+        return filepath, None
+    url = (extra_meta or {}).get('source_url') or ''
+    return (None, url) if url.startswith('http') else None
 
 
 # 云引擎「内容拦截」标记：确定性拒绝（版权/安全/敏感），重试同一引擎毫无意义
@@ -1166,11 +1183,15 @@ def _run_transcription(task_id, filepath, engine, original_filename, q,
                           segs, summary, model_review=model_review,
                           extra_meta=extra_meta)
             timing['save_s'] = round(time.monotonic() - t0, 1)
-            if (extra_meta or {}).get('want_scenes') and not scenes_only:
-                # 勾了「同时描述画面」：上传的视频转完就删，先给画面描述留一份（硬链接，不占空间），
-                # 链接来的按 source_url 重新下画面
+            sparse = False
+            if engine_used != 'scenes' and _video_source(filepath, extra_meta):
+                import scenes as _scn
+                sparse = _scn.speech_sparse(segs, audio_dur)
+            if engine_used != 'scenes' and ((extra_meta or {}).get('want_scenes') or sparse):
+                # 勾了「同时描述画面」，或者话太少（配乐 + 画面字幕的视频，不勾也做、按字幕模式）：
+                # 上传的视频转完就删，先给画面描述留一份（硬链接，不占空间）；链接来的按 source_url 重新下画面
                 _queue_scenes(task_id, video_path=_keep_video_for_scenes(task_id, filepath),
-                              url=(extra_meta or {}).get('source_url'))
+                              url=(extra_meta or {}).get('source_url'), captions=sparse)
             t0 = time.monotonic()
             try:
                 from enrich import enrich_task
@@ -1490,10 +1511,32 @@ def _run_transcription(task_id, filepath, engine, original_filename, q,
         if quota_out and not _quota_recent(engine):
             _quota_out[engine] = time.time()
         fell_back = False
+
+        def _no_speech_to_scenes(err):
+            """视频转出白卷 / 引擎回空文本（只有配乐、话写在画面字幕里——11-16 用户：「大部分是有声音但不是人说话的」）：
+            不再去 Whisper（还是白卷，或者对着配乐编歌词），改成读画面字幕 + 描述画面当正文。→ (成功?, 新的错误)"""
+            nonlocal model_review
+            if requeued or halted or scenes_only or DEMO_MODE or not _no_speech(err):
+                return False, err
+            src = _video_source(filepath, extra_meta)
+            if not src:
+                return False, err
+            try:
+                timing['fallback_from'] = engine
+                timing.pop('transcribe_s', None)
+                segs, text = _scenes_transcribe(task_id, src[0], q, url=src[1])
+                model_review = False
+                _finish_ok(segs, _summary(text), 'scenes')
+                return True, err
+            except Exception as e_s:  # noqa: BLE001
+                print(f'[scenes] {task_id}: {e_s}')
+                return False, RuntimeError(f'{err}；读画面也失败：{e_s}')
+
+        fell_back, e = _no_speech_to_scenes(e)
         # 官方 Gemini 不行（撞月度上限、调用失败、白卷）→ 先试 OpenRouter 上的 Gemini，再轮到 Whisper。
         # 10-28 用户：「如果 google 官方的不行就用 OR」。内容拦截不试：OR 背后是同一个 Gemini，拦截照旧。
         import transcribe_openrouter
-        if (not requeued and not halted and engine in ('gemini', 'gemini35', 'agy_flash', 'agy_argon')
+        if (not fell_back and not requeued and not halted and engine in ('gemini', 'gemini35', 'agy_flash', 'agy_argon')
                 and not content_block and transcribe_openrouter.api_key()):
             try:
                 q.put(json.dumps({
@@ -1536,6 +1579,8 @@ def _run_transcription(task_id, filepath, engine, original_filename, q,
                 timing['gemini_error'] = str(e_g)[:300]
                 print(f'[openrouter→gemini] {task_id}: {e_g}')
                 e = RuntimeError(f'openrouter 失败：{e}；Gemini API 后备也失败：{e_g}')
+        if not fell_back and engine in ('openrouter', 'gemini', 'gemini35', 'agy_flash', 'agy_argon'):
+            fell_back, e = _no_speech_to_scenes(e)      # 后备引擎也只交了白卷 / 回空
         if (not fell_back and not requeued and not halted and engine != 'whisper'
                 and (fallback_whisper or content_block or empty_out or quota_out)):
             try:
