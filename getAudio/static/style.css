@@ -315,6 +315,34 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .scene-row, .scene-row.in-turns { grid-template-columns: auto minmax(0, 1fr); column-gap: 10px; row-gap: 4px; }
   .scene-body { grid-column: 1 / -1; }
 }
+/* 两栏（scenes.js，11-16）：左边说的话、右边画面；一个画面一行，左边是这张画面停留时说的话 */
+.av-split .av-head { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); column-gap: 24px;
+  font-size: 12.5px; color: var(--faint); padding: 0 0 6px; border-bottom: 1px solid var(--line); }
+.av-split .av-row { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); column-gap: 24px;
+  padding: 8px 0; border-bottom: 1px solid var(--line); align-items: start; }
+.av-split .av-said { min-width: 0; }
+.av-split .av-said .segment { margin-left: 0; margin-right: 0; }
+.av-split .av-pic { min-width: 0; }
+.av-split .scene-row.av-card { display: block; margin: 0; padding: 4px 0; }
+.av-card .scene-body { flex-direction: column; gap: 6px; }
+.av-card .scene-thumb { width: 168px; }
+.av-card .scene-thumb.big { width: 100%; }
+.av-card .timestamp { display: block; text-align: left; width: auto; font-size: 12.5px; color: var(--faint); margin-bottom: 2px; }
+.av-nospeech > .segment, .av-nospeech .av-said { display: none; }
+.av-nospeech .av-head, .av-nospeech .av-row { grid-template-columns: minmax(0, 1fr); }
+.av-nospeech .av-head span:first-child { display: none; }
+.av-nospeech .av-card .scene-body { flex-direction: row; gap: 14px; }
+.av-nospeech .av-card .scene-thumb { width: 220px; }
+.av-nospeech .av-card .scene-thumb.big { width: min(560px, 100%); }
+@media (max-width: 600px) {
+  .av-split .av-head { display: none; }
+  .av-split .av-row { grid-template-columns: minmax(0, 1fr); row-gap: 6px; }
+  .av-split .av-said:empty { display: none; }
+  .av-split .av-pic { border-left: 3px solid var(--tint-blue-bg); padding-left: 10px; }
+  .av-card .scene-thumb { width: 140px; }
+  .av-nospeech .av-card .scene-body { flex-direction: column; }
+  .av-nospeech .av-card .scene-thumb { width: 100%; max-width: 360px; }
+}
 
 /* === History === */
 .history-card { background: var(--card); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 22px 24px; box-shadow: var(--e1); }
