@@ -206,4 +206,9 @@
         if (!data || !data.id) return;
         load(data.id, data.engine === 'scenes');      // 没人说话的期：正文就是画面描述 → 只显示画面一栏（带缩略图）
     };
+    // 直接打开 / 刷新 #/detail/… 时，app.js 拿到这一期比本文件加载得早，那次 detailScenes 还不存在、被跳过了 → 补一次
+    if (typeof detailRecord !== 'undefined' && detailRecord && detailRecord.id
+        && typeof detailView !== 'undefined' && detailView && !detailView.classList.contains('hidden')) {
+        window.detailScenes(detailRecord);
+    }
 })();
