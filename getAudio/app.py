@@ -488,8 +488,17 @@ def preflight_media(path):
         return ("This file can't be read as audio or video. It may be damaged, or not really a "
                 + (f'.{ext} ' if ext else '') + 'file.')
     if 'audio' not in (pr.stdout or ''):
-        return 'This file has no audio track (no sound), so there is nothing to transcribe. Screen recordings often look like this.'
+        return NO_AUDIO
     return None
+
+
+# 没有音轨的视频（录屏、默片）：不再拒收，改成只做画面描述（scenes.py，2026-11-16）
+NO_AUDIO = 'This file has no audio track (no sound), so there is nothing to transcribe. Screen recordings often look like this.'
+
+
+def _silent_video(bad, path):
+    """预检说没有声音、但它是视频 → 这一期只描述画面，画面描述当正文。"""
+    return bad == NO_AUDIO and is_video_file(path)
 
 
 def extract_audio_from_video(video_path, output_path, compressed=False):
@@ -680,7 +689,7 @@ def _save_results(task_id, original_filename, engine, audio_source_path,
     os.makedirs(task_dir, exist_ok=True)
 
     ext = os.path.splitext(audio_source_path)[1].lower()
-    keep_audio = _keep_audio()
+    keep_audio = _keep_audio() and not (extra_meta or {}).get('scenes_only')    # 没声音的视频不存一份当音频
     if keep_audio:
         audio_dest = os.path.join(task_dir, f"audio{ext}")
         shutil.copy2(audio_source_path, audio_dest)
@@ -734,6 +743,53 @@ def _save_results(task_id, original_filename, engine, audio_source_path,
     library.changed(task_id)
     if not DEMO_MODE and (extra_meta or {}).get('source_url'):
         wordtime.queue(task_id, extra_meta['source_url'])   # YouTube 的期后台补逐词时间轴（出处准到那一秒，ADR 0012）
+
+
+# ================= 画面描述（scenes.py，2026-11-16） =================
+
+def _scenes_transcribe(task_id, video_path, q):
+    """没有声音的视频：同步做画面描述，返回 (segments, full_text) 当这期的正文。"""
+    import scenes
+    steps = {'download': 5, 'scan': 10, 'describe': 30}
+
+    def say(step):
+        q.put(json.dumps({'type': 'progress', 'percent': steps.get(step, 10),
+                          'message': 'No sound in this video: describing what is on screen…'}))
+    say('scan')
+    d = scenes.build(config.RESULTS_FOLDER, task_id, video_path=video_path, progress=say)
+    segs = scenes.as_segments(d)
+    for seg in segs:
+        q.put(json.dumps({'type': 'segment', **seg}))
+    return segs, '\n'.join(f"[{s['timestamp']}] {s['text']}" for s in segs)
+
+
+def _keep_video_for_scenes(task_id, filepath):
+    """上传 / 本机路径的视频转完就删：给画面描述留一份。本机路径是软链 → 再软链到原件；上传的 → 硬链接，
+    不行再复制。不是视频 / 留不下来 → None（有 source_url 的会重新下）。"""
+    if not filepath or not is_video_file(filepath) or not os.path.exists(filepath):
+        return None
+    dst = os.path.join(config.UPLOAD_FOLDER, f'{task_id}_scenes{os.path.splitext(filepath)[1].lower()}')
+    try:
+        if os.path.islink(filepath):
+            os.symlink(os.path.realpath(filepath), dst)
+        else:
+            try:
+                os.link(filepath, dst)
+            except OSError:
+                shutil.copy2(filepath, dst)
+        return dst
+    except OSError as e:
+        print(f'[scenes] {task_id[:8]}: could not keep the video: {e}')
+        return None
+
+
+def _queue_scenes(task_id, video_path=None, url=None):
+    """排进画面描述的后台队列；没视频也没链接就不排。做完更新资料库索引。"""
+    if DEMO_MODE or not (video_path or (url or '').startswith('http')):
+        return False
+    import scenes
+    return scenes.queue(config.RESULTS_FOLDER, task_id, video_path=video_path, url=url,
+                        on_done=lambda tid, st: library.changed(tid))
 
 
 # 云引擎「内容拦截」标记：确定性拒绝（版权/安全/敏感），重试同一引擎毫无意义
@@ -1032,6 +1088,7 @@ def _run_transcription(task_id, filepath, engine, original_filename, q,
         tasks.pop(task_id, None)
         return
 
+    scenes_only = bool((extra_meta or {}).get('scenes_only'))
     try:
         taskdb.set_status(task_id, 'running')
         q.put(json.dumps({
@@ -1039,7 +1096,7 @@ def _run_transcription(task_id, filepath, engine, original_filename, q,
             'percent': 1,
             'message': 'Starting transcription...',
         }))
-        if is_video_file(filepath):
+        if is_video_file(filepath) and not scenes_only:
             q.put(json.dumps({
                 'type': 'progress',
                 'percent': 2,
@@ -1109,6 +1166,11 @@ def _run_transcription(task_id, filepath, engine, original_filename, q,
                           segs, summary, model_review=model_review,
                           extra_meta=extra_meta)
             timing['save_s'] = round(time.monotonic() - t0, 1)
+            if (extra_meta or {}).get('want_scenes') and not scenes_only:
+                # 勾了「同时描述画面」：上传的视频转完就删，先给画面描述留一份（硬链接，不占空间），
+                # 链接来的按 source_url 重新下画面
+                _queue_scenes(task_id, video_path=_keep_video_for_scenes(task_id, filepath),
+                              url=(extra_meta or {}).get('source_url'))
             t0 = time.monotonic()
             try:
                 from enrich import enrich_task
@@ -1186,7 +1248,14 @@ def _run_transcription(task_id, filepath, engine, original_filename, q,
             mins = int((time.time() - _quota_out[engine]) // 60)
             raise RuntimeError(f'{engine} 额度已用完（spending cap，{mins} 分钟前撞到），这期不再先碰官方')
 
-        if engine == 'whisper':
+        if scenes_only:
+            # 没有声音的视频：画面描述就是正文（scenes.py）。不做体检（会把画面句子当垃圾删）
+            segments, full_text = _scenes_transcribe(task_id, filepath, q)
+            model_review = False
+            engine = 'scenes'
+            summary_data = _summary(full_text)
+
+        elif engine == 'whisper':
             segments, full_text = _whisper_transcribe()
             _verify(segments)
             summary_data = _summary(full_text)
@@ -1542,7 +1611,7 @@ def _static_version():
     文件一变这串数字就变，浏览器才会当成新资源重新拉取。
     """
     try:
-        paths = [os.path.join(app.static_folder, name) for name in ('app.js', 'style.css', 'i18n.js', 'explore.js', 'tools.js', 'projects.js', 'study.js', 'voices.js', 'visual.js', 'podcast.js', 'repos.js', 'slides.js', 'notes.js', 'comments.js')]
+        paths = [os.path.join(app.static_folder, name) for name in ('app.js', 'style.css', 'i18n.js', 'explore.js', 'tools.js', 'projects.js', 'study.js', 'voices.js', 'visual.js', 'podcast.js', 'repos.js', 'slides.js', 'notes.js', 'comments.js', 'scenes.js')]
         return str(int(max(os.path.getmtime(p) for p in paths if os.path.isfile(p))))
     except (ValueError, OSError):
         return '0'
@@ -1566,7 +1635,21 @@ def _parse_speaker_count(raw):
         return None
 
 
-def _enqueue_task(file, engine, speaker_count=None, extra_meta=None):
+def _truthy(v):
+    return v is True or str(v or '').strip().lower() in ('1', 'true', 'on', 'yes')
+
+
+def _scene_meta(extra_meta, scenes, bad, path):
+    """画面描述的两个标记并进 extra_meta（会存进 tasks.db，重启恢复时带上）：
+    scenes_only = 没声音的视频，只描述画面；want_scenes = 用户勾了「同时描述画面」，转完后台做。"""
+    if _silent_video(bad, path):
+        return {**(extra_meta or {}), 'scenes_only': True}
+    if scenes and is_video_file(path):
+        return {**(extra_meta or {}), 'want_scenes': True}
+    return extra_meta
+
+
+def _enqueue_task(file, engine, speaker_count=None, extra_meta=None, scenes=False):
     """校验并保存单个文件，建队列并提交到线程池。
 
     返回 (task_id, None) 成功，或 (None, error_message) 失败。
@@ -1584,6 +1667,9 @@ def _enqueue_task(file, engine, speaker_count=None, extra_meta=None):
     filepath = os.path.join(config.UPLOAD_FOLDER, filename)
     file.save(filepath)
     bad = preflight_media(filepath)
+    extra_meta = _scene_meta(extra_meta, scenes, bad, filepath)
+    if _silent_video(bad, filepath):
+        bad = None
     if bad:
         try:
             os.remove(filepath)
@@ -1637,7 +1723,7 @@ def _resolve_local_path(raw):
     return cands[0] if cands else raw
 
 
-def _enqueue_local_task(path, engine, speaker_count=None):
+def _enqueue_local_task(path, engine, speaker_count=None, scenes=False):
     """用本机已有文件建任务：软链进 uploads/（零拷贝、零上传），把软链喂给流水线。
 
     关键安全点：流水线结束会 os.remove(输入) —— 删的是软链，**绝不动你的原文件**
@@ -1664,6 +1750,9 @@ def _enqueue_local_task(path, engine, speaker_count=None):
     except OSError as e:
         return None, f'Cannot read the file: {e}'
     bad = preflight_media(path)
+    extra_meta = _scene_meta(None, scenes, bad, path)
+    if _silent_video(bad, path):
+        bad = None
     if bad:
         return None, bad
 
@@ -1681,7 +1770,7 @@ def _enqueue_local_task(path, engine, speaker_count=None):
     tasks[task_id] = q
     submit_transcription(
         engine, run_transcription, task_id, link, engine, display, q,
-        speaker_count, False, engine != 'whisper',
+        speaker_count, False, engine != 'whisper', extra_meta=extra_meta,
     )
     return task_id, None
 
@@ -1795,7 +1884,7 @@ def upload():
     engine = request.form.get('engine') or config.default_engine()
     speaker_count = _parse_speaker_count(request.form.get('speaker_count'))
 
-    task_id, error = _enqueue_task(file, engine, speaker_count)
+    task_id, error = _enqueue_task(file, engine, speaker_count, scenes=_truthy(request.form.get('scenes')))
     if error:
         return jsonify({'error': error}), 400
 
@@ -1808,7 +1897,7 @@ def api_transcribe_local():
     body = request.get_json(silent=True) or {}
     task_id, error = _enqueue_local_task(
         body.get('path'), body.get('engine') or config.default_engine(),
-        _parse_speaker_count(body.get('speaker_count')))
+        _parse_speaker_count(body.get('speaker_count')), scenes=_truthy(body.get('scenes')))
     if error:
         return jsonify({'error': error}), 400
     return jsonify({'task_id': task_id})
@@ -1826,7 +1915,7 @@ def _clean_sub_mode(raw):
 
 
 def _download_then_transcribe(task_id, url, engine, q, section=None, offset_sec=0,
-                              sub_mode='auto', project_id=None, stage='all', timing=None):
+                              sub_mode='auto', project_id=None, stage='all', timing=None, scenes=False):
     """单个视频链接：先下音频，再走正常转写任务（进 Library，和上传的稿一样）。
 
     stage：'probe' = 只在快速通道里查字幕，命中就落盘，没有就交给引擎池跑 'download'；
@@ -1879,6 +1968,8 @@ def _download_then_transcribe(task_id, url, engine, q, section=None, offset_sec=
                                       'subtitle_lang': sub_lang}))
                     if project_id:                 # 在项目里贴的链接：字幕直接落盘这条路也要进项目
                         _project_on_transcribed(project_id, task_id)
+                    if scenes:                     # 勾了「同时描述画面」：字幕这条路也排上
+                        _queue_scenes(task_id, url=url)
                     return
                 except Exception as e:  # noqa: BLE001  存字幕失败也别让任务死：转写兜底
                     q.put(json.dumps({'type': 'progress', 'percent': 1,
@@ -1889,7 +1980,7 @@ def _download_then_transcribe(task_id, url, engine, q, section=None, offset_sec=
             q.put(json.dumps({'type': 'queued', 'message': 'No usable subtitles — queued for transcription'}))
             submit_transcription(engine, _download_then_transcribe, task_id, url, engine, q,
                                  section, offset_sec, sub_mode, project_id,
-                                 stage='download', timing=timing)
+                                 stage='download', timing=timing, scenes=scenes)
             handed_off = True
             return
 
@@ -1920,7 +2011,8 @@ def _download_then_transcribe(task_id, url, engine, q, section=None, offset_sec=
                                       'video_id': item.get('video_id') or _video_id_from_url(url),
                                       'creator': item.get('uploader'),
                                       'upload_date': item.get('upload_date') or '',   # 建合集、预测核对按它定年份
-                                      **({'project_id': project_id} if project_id else {})},
+                                      **({'project_id': project_id} if project_id else {}),
+                                      **({'want_scenes': True} if scenes and not section else {})},
                           timing=timing)
     except Exception as e:  # noqa: BLE001
         taskdb.set_status(task_id, 'failed', error=str(e)[:300])
@@ -1990,6 +2082,7 @@ def api_transcribe_urls():
     body = request.get_json(silent=True) or {}
     engine = body.get('engine') or config.default_engine()
     sub_mode = _clean_sub_mode(body.get('subs'))
+    want_scenes = _truthy(body.get('scenes'))
     project_id = str(body.get('project_id') or '')          # 在项目里贴的：转完加进那个项目
     project_id = project_id if _chain_ok(project_id) else None
     try:
@@ -2031,10 +2124,12 @@ def api_transcribe_urls():
         if not section and sub_mode != 'off':
             # 先进快速通道查字幕：有字幕的几秒就完，不用排在引擎池（尤其本地 Whisper）后面
             _subtitle_probe_executor.submit(_download_then_transcribe, task_id, url, engine, q,
-                                            section, offset_sec, sub_mode, project_id, stage='probe')
+                                            section, offset_sec, sub_mode, project_id, stage='probe',
+                                            scenes=want_scenes)
         else:
             submit_transcription(engine, _download_then_transcribe, task_id, url, engine, q,
-                                 section, offset_sec, sub_mode, project_id, stage='download')
+                                 section, offset_sec, sub_mode, project_id, stage='download',
+                                 scenes=want_scenes)
         out.append({'url': url, 'title': title, 'task_id': task_id})
     return jsonify({'tasks': out, 'errors': errors})
 
@@ -2055,7 +2150,7 @@ def upload_batch():
 
     results = []
     for file in files:
-        task_id, error = _enqueue_task(file, engine, speaker_count)
+        task_id, error = _enqueue_task(file, engine, speaker_count, scenes=_truthy(request.form.get('scenes')))
         results.append({
             'filename': file.filename,
             'task_id': task_id,
@@ -6038,6 +6133,63 @@ def api_visual_image(task_id, name):
     if not re.fullmatch(r'[0-9a-f-]{8,64}', task_id or ''):
         return jsonify({'error': 'Not found'}), 404
     p = frames.image_path(config.RESULTS_FOLDER, task_id, name)
+    if not p:
+        return jsonify({'error': 'Not found'}), 404
+    return send_file(p, mimetype='image/jpeg', max_age=86400)
+
+
+def _scene_id_ok(task_id):
+    return bool(re.fullmatch(r'[0-9a-f-]{8,64}', task_id or ''))     # 跟 /api/visual 同一个规矩
+
+
+def _read_meta(task_id):
+    try:
+        with open(os.path.join(config.RESULTS_FOLDER, task_id, 'meta.json'), encoding='utf-8') as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+@app.route('/api/scenes/<task_id>')
+def api_scenes(task_id):
+    """一期的画面描述：{status, scenes?, can_make}。status：done / queued / running / failed / ''（没做过）。
+    can_make：有视频链接、还没做 → 详情页给「描述画面」按钮（上传的视频转完就删了，补不了）。"""
+    import scenes
+    if not _scene_id_ok(task_id):
+        return jsonify({'error': 'Not found'}), 404
+    meta = _read_meta(task_id) or {}
+    d = scenes.load(config.RESULTS_FOLDER, task_id)
+    st = scenes.status(config.RESULTS_FOLDER, task_id)
+    url = meta.get('source_url') or ''
+    out = {'status': st.get('status') or '', 'error': st.get('error') or '',
+           'can_make': not d and url.startswith('http') and meta.get('engine') != 'scenes' and not DEMO_MODE,
+           'est_frames': scenes.estimate_frames(meta.get('duration_seconds') or 0)}
+    if d:
+        out.update(scenes=d['scenes'], model=d.get('model'), made_at=d.get('made_at'))
+    return jsonify(out)
+
+
+@app.route('/api/scenes/<task_id>', methods=['POST'])
+def api_scenes_make(task_id):
+    """补做画面描述（链接来的期：重新下画面）。"""
+    if not _scene_id_ok(task_id):
+        return jsonify({'error': 'Not found'}), 404
+    if DEMO_MODE:
+        return jsonify({'error': 'Read-only demo'}), 403
+    url = (_read_meta(task_id) or {}).get('source_url') or ''
+    if not url.startswith('http'):
+        return jsonify({'error': 'This recording has no video link; the uploaded file is no longer kept'}), 400
+    _queue_scenes(task_id, url=url)
+    import scenes
+    return jsonify(scenes.status(config.RESULTS_FOLDER, task_id))
+
+
+@app.route('/api/scenes/<task_id>/<name>')
+def api_scene_image(task_id, name):
+    import scenes
+    if not _scene_id_ok(task_id):
+        return jsonify({'error': 'Not found'}), 404
+    p = scenes.thumb_path(config.RESULTS_FOLDER, task_id, name)
     if not p:
         return jsonify({'error': 'Not found'}), 404
     return send_file(p, mimetype='image/jpeg', max_age=86400)

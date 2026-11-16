@@ -169,6 +169,12 @@ _Avoid_：复习区
 **引擎**：
 把音频转成文字的方式：gemini35、gemini、qwen（dashscope）、whisper、precise。代码里：engine、`transcribe_*.py`。
 
+**画面描述**（画面轨）：
+视频里画面变化的每一段，AI 写一两句「画面里在发生什么」（人、动作、场景、屏幕上的字），按时间插在转写正文之间显示。
+跟**画面证据卡**不同：证据卡只留有字的帧、抄字当证据，在工作台里；画面描述每段都写，属于这一期的转写。
+没有声音的视频，画面描述就是这一期的正文（引擎记 `scenes`）。代码里：`scenes.py`、`results/<task_id>/visual/scenes.json`、`/api/scenes/<id>`。
+_Avoid_：字幕、画面卡（那是证据卡）
+
 **任务**：
 一次转写（或下载后转写）的排队和执行。代码里：task、`taskdb`、`tasks[id]`。
 

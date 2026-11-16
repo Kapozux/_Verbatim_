@@ -294,6 +294,25 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .segment .timestamp { text-align: left; }
   .has-turns .segment.cont .turn-who, .has-turns .segment.cont .timestamp { display: none; }
 }
+/* 画面轨（scenes.js）：插在转写正文之间的灰色「画面」行；有说话人三栏时「画面」标签占说话人那一栏 */
+.scene-row { display: grid; grid-template-columns: 68px auto minmax(0, 1fr); column-gap: 14px; align-items: start;
+  padding: 7px 10px; margin: 0 -10px; color: var(--muted); }
+.scene-row.in-turns { grid-template-columns: 68px 64px minmax(0, 1fr); }
+.scene-tag { justify-self: start; padding: 0 8px; border-radius: 999px; font-size: 12.5px; line-height: 22px;
+  color: var(--tint-blue); background: var(--tint-blue-bg); white-space: nowrap; }
+.scene-body { display: flex; gap: 10px; align-items: flex-start; min-width: 0; }
+.scene-body p { margin: 0; font-size: 14.5px; line-height: 1.6; font-style: italic; min-width: 0; overflow-wrap: anywhere; }
+.scene-thumb { flex: none; width: 72px; border-radius: var(--r-xs); border: 1px solid var(--line); cursor: zoom-in;
+  transition: width .15s ease; }
+.scene-thumb.big { width: min(320px, 60%); cursor: zoom-out; }
+#detail-scenes-btn.on { color: var(--tint-blue); border-color: currentColor; }
+.scenes-opt { align-items: flex-start; }
+.scenes-opt input { margin-top: 3px; }
+.scenes-opt .hint { display: block; font-size: 13px; color: var(--faint); }
+@media (max-width: 600px) {
+  .scene-row, .scene-row.in-turns { grid-template-columns: auto minmax(0, 1fr); column-gap: 10px; row-gap: 4px; }
+  .scene-body { grid-column: 1 / -1; }
+}
 
 /* === History === */
 .history-card { background: var(--card); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 22px 24px; box-shadow: var(--e1); }
@@ -3111,7 +3130,8 @@ pre.cc-quote.repo-quote { font-family: var(--mono); font-size: 13px; line-height
 /* 勾了「只要评论区」：转写才用的设置先藏起来 */
 #upload-form.cm-only-on .form-group:has(input[name="engine"]),
 #upload-form.cm-only-on .collection-cap,
-#upload-form.cm-only-on #speaker-count-group { display: none; }
+#upload-form.cm-only-on #speaker-count-group,
+#upload-form.cm-only-on #scenes-wrap { display: none; }
 .cm-dg .cx-digest, .cm-dg .md-body { border: none; background: none; padding: 0; margin: 0; box-shadow: none; }
 .cm-list-box { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
 .cm-list-box summary { cursor: pointer; font-size: 14px; font-weight: 500; color: var(--ink-soft); }

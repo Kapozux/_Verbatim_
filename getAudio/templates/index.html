@@ -197,6 +197,10 @@
                                class="number-input">
                     </div>
 
+                    <!-- 画面描述（scenes.js / scenes.py）：视频转完再把画面变化的帧交给 AI 描述；没声音的视频不用勾，自动只描述画面 -->
+                    <label id="scenes-wrap" class="cm-only scenes-opt"><input type="checkbox" id="scenes-opt">
+                        <span><span data-i18n="scenes.opt">Also describe the picture (videos)</span>
+                        <small class="hint" data-i18n="scenes.optHint">Silent videos are always described</small></span></label>
                     <!-- 有 B 站链接时才出现（comments.js）：勾了不转写，只下载这些视频的评论区 -->
                     <label id="cm-only-wrap" class="cm-only hidden"><input type="checkbox" id="cm-only">
                         <span data-i18n="cm.only">Comments only (don't transcribe)</span></label>
@@ -1258,6 +1262,7 @@
     <script src="/static/repos.js?v={{ static_version }}"></script>
     <script src="/static/notes.js?v={{ static_version }}"></script>
     <script src="/static/comments.js?v={{ static_version }}"></script>
+    <script src="/static/scenes.js?v={{ static_version }}"></script>
     <script src="/static/find.js?v={{ static_version }}"></script>
 </body>
 </html>
