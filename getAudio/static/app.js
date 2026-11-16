@@ -389,6 +389,12 @@ async function runUploadPool(jobs, engine, concurrency) {
     await Promise.all(workers);
 }
 
+// 「同时描述画面」勾选（scenes.py）：服务器只对视频生效，音频忽略
+function wantScenes() {
+    const el = document.getElementById('scenes-opt');
+    return !!(el && el.checked);
+}
+
 // —— 链接批：一次 POST，服务器按行返回 tasks（与 rows 顺序一一对应，上限 20）——
 async function submitLinks(links, rows, engine) {
     if (!links.length) return;
@@ -399,6 +405,7 @@ async function submitLinks(links, rows, engine) {
                 urls: links.join('\n'), engine,
                 max_videos: parseInt((document.getElementById('url-max-videos') || {}).value, 10) || 20,
                 subs: (document.getElementById('url-subs') || {}).value || 'auto',
+                scenes: wantScenes(),
             }),
         });
         const data = await resp.json().catch(() => ({}));
@@ -447,7 +454,7 @@ async function submitPaths(paths, rows, engine) {
     for (let i = 0; i < paths.length; i++) {
         const row = rows[i];
         setRowStatus(row, T('rowStatus.readingLocal'), 'running');
-        const body = { path: paths[i], engine };
+        const body = { path: paths[i], engine, scenes: wantScenes() };
         const speakerEl = document.getElementById('speaker-count');
         if (engine === 'precise' && speakerEl && speakerEl.value.trim()) {
             body.speaker_count = speakerEl.value.trim();
@@ -477,6 +484,7 @@ async function uploadOne(file, row, engine) {
     const formData = new FormData();
     formData.append('audio', file);
     formData.append('engine', engine);
+    formData.append('scenes', wantScenes() ? '1' : '0');
 
     // 精准模式下把"预计人数"一起带上（留空则不带，服务器自动判断）
     const speakerCountEl = document.getElementById('speaker-count');
@@ -1441,6 +1449,7 @@ async function openDetailView(taskId, startAt = null) {
             appendSegment(seg, detailSegmentsContainer, detailAudioPlayer);
         });
         detailSpeakers(data);
+        if (typeof detailScenes === 'function') detailScenes(data);     // 画面轨（scenes.js）：插在正文之间
         detailSegmentsContainer.scrollTop = 0;     // appendSegment 每加一行滚到底（实时转写用），详情页从头看
 
         if (data.summary && data.summary.overview) {
