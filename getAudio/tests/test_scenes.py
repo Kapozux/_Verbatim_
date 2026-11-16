@@ -331,4 +331,63 @@ A.submit_transcription, A._subtitle_probe_executor.submit = real_submit, real_pr
 print('12 大批量：', few, many[:3], forced[:3])
 t.check('链接：3 条读画面、12 条默认不读、12 条明确要就读', few == [True] * 3 and many == [False] * 12 and forced == [True] * 12)
 
+# 13 转写引擎在纯配乐上编话（11-16 真事：讲 Google 的配乐 + 字幕视频，前 5 分钟空白，最后 2 分 40 秒编出 44 句情话，
+#    本机 Whisper 听同一段判「没人说话」）→ 画面上的字多、话只集中在一小段、跟画面字对不上 → 正文换成画面上的字
+import summarize as _summ  # noqa: E402
+import enrich as _enr  # noqa: E402
+_summ.summarize_transcript = lambda text: {'overview': 'OV:' + text[:20], 'sections': []}
+_enr.enrich_task = lambda task_dir: True
+RD = A.config.RESULTS_FOLDER
+SLIDES = ['AlphaFold 能算出蛋白质折成什么形状', '两亿多个结构全世界免费用', '谷歌大脑和 DeepMind 合并', 'Gemini 已有十亿用户',
+          '打开摄像头它陪你一起看', '一个人也能拍一部短片', '数据中心遍布四十三个区域', '量子计算五分钟算完']
+
+
+def scenes_doc(tid, dur):
+    step = dur / len(SLIDES)
+    d = {'version': scenes.VERSION, 'task_id': tid, 'duration': dur, 'captions': True, 'picked': len(SLIDES),
+         'scenes': [{'start': round(k * step, 1), 'end': round((k + 1) * step, 1), 'img': '', 'text': '一张幻灯片',
+                     'caption': f'{c} 标题{k} 要点一 要点二 要点三 {c} {c}'}
+                    for k, c in enumerate(SLIDES)]}
+    os.makedirs(os.path.join(RD, tid, 'visual'), exist_ok=True)
+    json.dump(d, open(scenes.scenes_path(RD, tid), 'w'), ensure_ascii=False)
+    return d
+
+
+love = [(f'00:0{5 + k // 20}:{(15 + k * 3) % 60:02d}', l) for k, l in enumerate(
+    ['我真的真的好想你', '也真的好想去看看你', '可我也知道', '我再也没有身份去找你', '以前打扰了以后不会了', '我想你却不能去找你'] * 3)]
+T13 = make_transcript(RD, love, title='为什么只有Google是最伟大的科技公司', engine='openrouter')
+m13 = json.load(open(os.path.join(RD, T13, 'meta.json'))); m13['duration_seconds'] = 476
+json.dump(m13, open(os.path.join(RD, T13, 'meta.json'), 'w'))
+d13 = scenes_doc(T13, 476)
+why = scenes.speech_doubtful(json.load(open(os.path.join(RD, T13, 'transcript.json'))), 476, d13)
+done13 = scenes.use_captions_as_body(RD, T13)
+tr13 = json.load(open(os.path.join(RD, T13, 'transcript.json')))
+mm13 = json.load(open(os.path.join(RD, T13, 'meta.json')))
+kept = json.load(open(os.path.join(RD, T13, 'transcript.speech.json')))
+sm13 = json.load(open(os.path.join(RD, T13, 'summary.json')))
+print('13 编的话：', why, done13, [s['text'][:16] for s in tr13[:2]], mm13.get('engine'), mm13.get('speech_engine'), sm13)
+t.check('编的话：判成可疑（画面字多、话只在一小段、跟画面字对不上）', bool(why))
+t.check('编的话：正文换成画面上的字、引擎记 scenes、原来的话另存不删', done13 and tr13[0]['text'].startswith(SLIDES[0])
+        and mm13['engine'] == 'scenes' and mm13['speech_engine'] == 'openrouter' and mm13.get('speech_dropped')
+        and len(kept) == len(love) and mm13['segment_count'] == len(tr13))
+t.check('编的话：摘要按新正文重写', sm13['overview'].startswith('OV:[00:00] AlphaFold'))
+t.check('编的话：再跑一次不重复换', scenes.use_captions_as_body(RD, T13) is False)
+
+# 话跟画面字幕对得上（真在说话、字幕是说的话）→ 不动
+T14 = make_transcript(RD, [(f'00:0{5 + k // 2}:{k % 2 * 30:02d}', c) for k, c in enumerate(SLIDES)], engine='openrouter')
+d14 = scenes_doc(T14, 476)
+t.check('话跟画面字对得上：不动', scenes.speech_doubtful(json.load(open(os.path.join(RD, T14, 'transcript.json'))), 476, d14) is None
+        and scenes.use_captions_as_body(RD, T14) is False)
+# 从头讲到尾、内容跟幻灯片不一样（讲课）→ 不动
+lecture = [(f'00:{k // 2:02d}:{k % 2 * 30:02d}', f'今天我们讲第{k}个问题，大家注意这个推导过程') for k in range(16)]
+T15 = make_transcript(RD, lecture, engine='openrouter')
+d15 = scenes_doc(T15, 476)
+t.check('从头讲到尾（讲课配幻灯片）：不动', scenes.speech_doubtful(json.load(open(os.path.join(RD, T15, 'transcript.json'))), 476, d15) is None)
+# 画面上没多少字 → 不动（没东西可换）
+T16 = make_transcript(RD, love, engine='openrouter')
+d16 = scenes_doc(T16, 476)
+for sc in d16['scenes']:
+    sc.pop('caption')
+t.check('画面上没字：不动', scenes.speech_doubtful(love and json.load(open(os.path.join(RD, T16, 'transcript.json'))), 476, d16) is None)
+
 t.finish()

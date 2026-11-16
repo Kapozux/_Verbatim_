@@ -301,6 +301,102 @@ def speech_sparse(segments, duration_s):
 SPARSE_CPM = 40           # 正常说话每分钟中文两三百字、英文一百多词；配乐视频常常只有「[音乐]」或一两句
 
 
+# ---- 转写引擎在纯配乐上编话（11-16 真事）----
+# 一条讲 Google 的配乐 + 画面字幕视频：OpenRouter 上的 Gemini 前 5 分钟什么都没转，最后 2 分 40 秒编了 44 句情话；
+# 本机 Whisper 听同一段判「没人说话」，画面字幕讲的是 AlphaFold / Gemini / TPU。话不少，speech_sparse 没拦住，
+# 正文就成了编出来的东西。画面描述做完后再对一次：三条都中才换正文。
+DOUBT_CAP_CPM = 40        # 画面上的字够多：每分钟至少这么多字
+DOUBT_CAP_COVER = 0.5     # 带字的帧铺满至少这么多时长
+DOUBT_SPAN = 0.5          # 话只覆盖不到这么多时长……
+DOUBT_LEAD = 0.4          # ……或者开头空了这么多
+DOUBT_OVERLAP = 0.15      # 话里的两字词出现在画面字里的比例低于这个 = 对不上
+
+
+def _bigrams(text):
+    t = _norm(text)
+    return {t[k:k + 2] for k in range(len(t) - 1)}
+
+
+def speech_doubtful(segments, duration_s, d):
+    """转出来的话像不像引擎编的（不是真说的）。→ 原因（一句话）或 None。
+    要同时：画面上的字多；话只集中在一小段（或开头大段空白）；话跟画面上的字基本对不上。"""
+    import timecode
+    scs = [x for x in (d or {}).get('scenes') or [] if (x.get('caption') or '').strip()]
+    if not duration_s or duration_s < 30 or not scs or not segments:
+        return None
+    cap_text = ' '.join(x['caption'] for x in scs)
+    cap_cpm = len(_norm(cap_text)) / (duration_s / 60)
+    cap_cover = sum(max(0, x['end'] - x['start']) for x in scs) / duration_s
+    if cap_cpm < DOUBT_CAP_CPM or cap_cover < DOUBT_CAP_COVER:
+        return None
+    times = [timecode.parse(str(x.get('timestamp') or ''), bare_seconds=True) for x in segments]
+    times = [t for t in times if t is not None]
+    if not times:
+        return None
+    first, last = min(times), max(times)
+    span, lead = (last - first) / duration_s, first / duration_s
+    if span >= DOUBT_SPAN and lead <= DOUBT_LEAD:
+        return None
+    said = _bigrams(' '.join(str(x.get('text') or '') for x in segments))
+    if not said:
+        return None
+    overlap = len(said & _bigrams(cap_text)) / len(said)
+    if overlap >= DOUBT_OVERLAP:
+        return None
+    return (f'speech covers {span:.0%} of the video (starts at {lead:.0%}), on-screen text {cap_cpm:.0f} chars/min, '
+            f'only {overlap:.0%} of the speech matches it')
+
+
+def use_captions_as_body(results_dir, tid):
+    """画面描述做完后：转出来的话可疑（speech_doubtful）→ 正文换成画面上的字（跟没人说话的视频一样），
+    原来的转写另存 transcript.speech.json（不删），meta 记 speech_engine / speech_dropped，摘要和标题按新正文重写。
+    → 换了 True，没换 False。"""
+    tdir = os.path.join(results_dir, tid)
+    try:
+        with open(os.path.join(tdir, 'meta.json'), encoding='utf-8') as f:
+            meta = json.load(f)
+        with open(os.path.join(tdir, 'transcript.json'), encoding='utf-8') as f:
+            segs = json.load(f)
+    except (OSError, ValueError):
+        return False
+    d = load(results_dir, tid)
+    if meta.get('engine') == 'scenes' or not d:
+        return False
+    why = speech_doubtful(segs, meta.get('duration_seconds') or d.get('duration'), d)
+    if not why:
+        return False
+    body = as_segments(d)
+    if not body:
+        return False
+
+    def write(name, obj):
+        tmp = os.path.join(tdir, name + '.tmp')
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(obj, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, os.path.join(tdir, name))
+    write('transcript.speech.json', segs)
+    write('transcript.json', body)
+    meta.update(speech_engine=meta.get('engine'), engine='scenes', speech_dropped=why,
+                segment_count=len(body), char_count=sum(len(x['text']) for x in body))
+    write('meta.json', meta)
+    print(f'[scenes] {tid[:8]}: speech looks made up ({why}); on-screen text is the transcript now')
+    full = '\n'.join(f"[{x['timestamp']}] {x['text']}" for x in body)
+    try:
+        from summarize import summarize_transcript
+        with usage.scope(ref=tid):
+            write('summary.json', summarize_transcript(full))
+        meta['has_summary'] = True
+        write('meta.json', meta)
+    except Exception as e:  # noqa: BLE001
+        print(f'[scenes] {tid[:8]}: summary failed: {e}')
+    try:
+        from enrich import enrich_task
+        enrich_task(tdir)
+    except Exception as e:  # noqa: BLE001
+        print(f'[scenes] {tid[:8]}: title failed: {e}')
+    return True
+
+
 def estimate_frames(duration_s):
     return int(min(MAX_SCENES, max(3, duration_s / 8)))
 

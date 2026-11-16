@@ -790,7 +790,18 @@ def _queue_scenes(task_id, video_path=None, url=None, captions=False):
         return False
     import scenes
     return scenes.queue(config.RESULTS_FOLDER, task_id, video_path=video_path, url=url, captions=captions,
-                        on_done=lambda tid, st: library.changed(tid))
+                        on_done=_scenes_done)
+
+
+def _scenes_done(tid, st):
+    """画面描述做完：转出来的话像引擎编的（画面字多、话只在一小段、对不上）→ 正文换成画面上的字（scenes.use_captions_as_body）。"""
+    import scenes
+    if (st or {}).get('status') == 'done':
+        try:
+            scenes.use_captions_as_body(config.RESULTS_FOLDER, tid)
+        except Exception as e:  # noqa: BLE001
+            print(f'[scenes] {tid[:8]}: check failed: {e}')
+    library.changed(tid)
 
 
 # 引擎「这段没有话」的几种说法：出口校验的白卷（sanitize.transcript_quality 的原因）、引擎直接回空文本
