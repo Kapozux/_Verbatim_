@@ -43,16 +43,23 @@ subprocess.run([FF, '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=bl
 calls = []
 
 
+SCREEN_TEXT = [False]     # 假模型这次是否「看到」画面上的字（字幕视频）
+
+
 def fake_call(prompt, images):
-    ids = [int(x) for x in re.findall(r'^Frame (\d+) ', prompt, re.M)]
-    cap = 'words are written on screen' in prompt
-    lang = re.search(r'Write in ([^.]+)\.', prompt) or re.search(r'sentence in (.+?) on what', prompt)
-    calls.append({'ids': ids, 'n_img': len(images), 'lang': lang.group(1), 'cap': cap,
-                  'speech': 'Red part' in prompt or 'Speech' in prompt, 'prev': 'just before this batch' in prompt})
-    if cap:     # 字幕模式：相邻两帧同一句字幕（要被并成一条）
-        return json.dumps({'scenes': [{'i': i, 'caption': f'字幕 {i // 2}', 'text': f'Pic {i}'} for i in ids]})
-    out = [{'i': i, 'text': f'Scene {i}'} for i in ids]
-    out.append({'i': 999, 'text': 'made up'})          # 不在这批里的编号要丢掉
+    """按拼图格子回答：提示词里「Tile k = frame i」。画面上有字 → 相邻两格同一句字幕（要被并成一条）。"""
+    tiles = [(int(k), int(i)) for k, i in re.findall(r'^Tile (\d+) = frame (\d+),', prompt, re.M)]
+    ids = [i for _, i in tiles]
+    lang = re.search(r'complete description in (.+?) of what', prompt)
+    from PIL import Image
+    calls.append({'ids': ids, 'n_img': len(images), 'lang': lang.group(1), 'cap': SCREEN_TEXT[0],
+                  'grid_w': Image.open(images[0]).width if images else 0,
+                  'speech': 'Red part' in prompt or 'Speech' in prompt, 'prev': 'just before this batch' in prompt,
+                  'verbatim': 'Do not correct, translate, reword' in prompt})
+    if SCREEN_TEXT[0]:
+        return json.dumps({'scenes': [{'n': k, 'caption': f'字幕 {i // 2}', 'text': f'Pic {i}'} for k, i in tiles]})
+    out = [{'n': k, 'caption': '', 'text': f'Scene {i}'} for k, i in tiles]
+    out.append({'n': 99, 'text': 'made up'})          # 不在这张拼图里的格子要丢掉
     return json.dumps({'scenes': out})
 
 
@@ -82,7 +89,9 @@ n = len(calls)
 again = scenes.build(A.config.RESULTS_FOLDER, TID0)
 print('2 build：', [(s['start'], s['text'], s['img']) for s in d['scenes']], files, calls)
 t.check('build：每帧一句、丢掉不在批里的编号', [s['text'] for s in d['scenes']] == [f'Scene {i}' for i in range(4)])
-t.check('build：没声音默认写中文、一批 4 张图', calls[0]['lang'] == 'Chinese (Simplified)' and calls[0]['n_img'] == 4)
+t.check('build：没声音默认写中文、4 帧拼成一张图读（每格 512 宽，3 列）', calls[0]['lang'] == 'Chinese (Simplified)'
+        and calls[0]['n_img'] == 1 and len(calls[0]['ids']) == 4 and calls[0]['grid_w'] == 3 * scenes.READ_W)
+t.check('提示词：画面上的字照抄、不许改', calls[0]['verbatim'])
 t.check('build：缩略图在、视频不留', len([f for f in files if f.startswith('s_')]) == 4 and 'scenes.json' in files
         and not any(f.endswith('.mp4') for f in files))
 t.check('build：做过直接用', again == d and len(calls) == n)
@@ -147,6 +156,7 @@ src = os.path.join(A.config.UPLOAD_FOLDER, f'{TID2}.mp4')
 with open(SILENT, 'rb') as fi, open(src, 'wb') as fo:
     fo.write(fi.read())
 taskdb.create(TID2, 'screen.mp4', 'gemini35', None, src)
+SCREEN_TEXT[0] = True          # 画面上有字：字幕 + 画面
 q = _q.Queue()
 A.tasks[TID2] = q
 A.run_transcription(TID2, src, 'gemini35', 'screen.mp4', q, None, False, True,
@@ -164,6 +174,7 @@ t.check('没声音：同一句字幕连着的并成一条', len(caps) == len(set
 t.check('没声音：不存一份当音频、源文件删了', not meta.get('audio_ext') and not os.path.exists(src)
         and not [f for f in os.listdir(os.path.join(A.config.RESULTS_FOLDER, TID2)) if f.startswith('audio')])
 t.check('没声音：scenes.json 也在', scenes.load(A.config.RESULTS_FOLDER, TID2) is not None)
+SCREEN_TEXT[0] = False
 
 # 6 勾了的视频：留一份（硬链接）→ 后台做 → 做完删掉留的那份
 TID3 = make_transcript(A.config.RESULTS_FOLDER, [('00:00:00', 'Hello.')], title='upload')
@@ -259,6 +270,7 @@ def run(tid, fake_segments):
 
 
 calls.clear()
+SCREEN_TEXT[0] = True
 TID5 = '22222222-2222-3333-4444-555555555555'
 m5, tr5 = run(TID5, [])
 print('10 白卷：', taskdb.get(TID5)['status'], m5['engine'], [s['text'] for s in tr5], other, (taskdb.get(TID5) or {}).get('error'))

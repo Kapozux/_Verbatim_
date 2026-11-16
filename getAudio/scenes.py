@@ -47,40 +47,35 @@ BAND_DIFF = 4.0
 CAP_MIN_S = 1.0
 CAP_GAP_S = 6.0
 CAP_MAX = 300
-READ_W = 768              # 送去描述的图宽
+# 11-16 用户定：所有视频都拼 3x3 读（Haiku），每格 512 宽，一次调用一张拼图。
+# 实测（144 帧，Opus 逐帧当参考）：字幕相似 0.94 vs 单图 0.95，成本约单图的 2/3。
+GRID_COLS = 3
+READ_W = 512              # 每一格的宽（拼图 1536 宽）
 THUMB_W = 320             # 留在磁盘上的缩略图宽
-BATCH = 8                 # 一次调用描述几帧
+BATCH = GRID_COLS * GRID_COLS   # 一次调用读几帧（一张拼图）
 # 所有批进 frames 的共用读图池同时读（VISION_CALLS）；批之间不接话，连着的同一句字幕在代码里去重
 # 不给模型「那时说的话」：11-16 实测 Haiku 拿到话就跟着话写（幻灯片被写成「还是那个人在雪山前」），
 # 不给反而每帧都对。说的话转写里已经有了，画面轨只管看得见的。
 
 PROMPT = """You are writing the visual track of a video transcript, for a reader who cannot see the video.
-The frames below are in time order (image 1 is the first frame listed, and so on); each comes with the time span it represents.
-Describe each image on its own: look at that image, not at the neighbours.
+The image is a grid of {n} video frames. Each tile is numbered in the red box at its top-left corner (1 to {n}),
+left to right, top to bottom, in time order. Ignore the red number boxes and the white tile borders.
+Look at each tile on its own, not at its neighbours.
 
-For each frame write one or two plain sentences on what is visible: who or what is on screen, what they are doing,
-the setting, and any readable on-screen text (copy short text exactly, keep its original language).
-If a frame continues the previous one, only say what changed (e.g. "She picks up the cup."), do not repeat the setting.
-Do not guess names, intentions or sounds that are not visible. Write in {lang}.
-{prev}
-Reply with JSON only: {{"scenes": [{{"i": number, "text": "..."}}]}}
+For each tile return:
+- "caption": every piece of text shown on screen in that tile — titles, headings, bullet points, slide and chart text,
+  subtitles, captions, text overlays — in reading order (top to bottom, left to right), copied exactly as it appears,
+  character for character, in its original language, pieces joined with a space. Do not correct, translate, reword,
+  shorten or complete it, even if it looks wrong. Leave out only watermarks, channel names/logos and platform UI.
+  "" if the tile shows no such text.
+- "text": a complete description in {lang} of what the picture shows: who or what is on screen, what they are doing,
+  the setting, the objects, the layout, and what any chart or diagram shows. Refer to the on-screen text by role
+  ("the title", "two bullet points") instead of copying it again. Do not mention what you left out.
+Do not guess names, intentions or sounds that are not visible.
 
-{frames}"""
+Reply with JSON only: {{"scenes": [{{"n": tile number, "caption": "...", "text": "..."}}]}}
 
-CAPTION_PROMPT = """These frames come from a video whose words are written on screen (subtitles, captions, title text)
-instead of being spoken; the sound is only music or noise. The frames are in time order (image 1 is the first frame listed).
-Look at each image on its own.
-
-For each frame return:
-- "caption": every sentence of text shown on screen, copied exactly and in full, in its original language
-  (subtitles, captions, titles, text overlays; several lines joined with a space). Skip watermarks, channel logos and UI chrome.
-  "" if the frame has no such text.
-- "text": one short sentence in {lang} on what the picture shows (people, action, setting). Do not repeat the caption here.
-Do not guess anything that is not visible.
-
-Reply with JSON only: {{"scenes": [{{"i": number, "caption": "...", "text": "..."}}]}}
-
-{frames}"""
+{tiles}"""
 
 
 def scenes_path(results_dir, tid):
@@ -159,38 +154,57 @@ def scene_times(g, fps, captions=False):
 
 # ================= 模型 =================
 
-def _read_batch(batch, lang, captions, prev=''):
-    lines = [f"Frame {it['i']} (image {k + 1}), {frames._clock(it['start'])}-{frames._clock(it['end'])}."
-             for k, it in enumerate(batch)]
-    if captions:
-        prompt = CAPTION_PROMPT.format(lang=lang, frames='\n'.join(lines))
-    else:
-        prompt = PROMPT.format(lang=lang, frames='\n'.join(lines),
-                               prev=f'\nThe frame just before this batch was described as: "{prev}"\n' if prev else '')
-    try:
-        d = frames._json(frames._call(prompt, [it['img'] for it in batch]))
-    except Exception:  # noqa: BLE001
-        return {}
-    ids, out = {it['i'] for it in batch}, {}
-    for c in d.get('scenes') or []:
-        try:
-            i = int(c.get('i'))
-        except (TypeError, ValueError):
-            continue
-        text = str(c.get('text') or '').strip()[:400]
-        cap = re.sub(r'\s+', ' ', str(c.get('caption') or '')).strip()[:600] if captions else ''
-        if i in ids and (text or cap):
-            out[i] = {'text': text, 'caption': cap}
+def grid(paths, out):
+    """几帧拼成一张 GRID_COLS 列的图，每格左上角红底白字编号（1 起）。→ out"""
+    from PIL import Image, ImageDraw
+    ims = [Image.open(p).convert('RGB') for p in paths]
+    tw = READ_W
+    th = max(1, round(ims[0].height * tw / ims[0].width))
+    rows = -(-len(ims) // GRID_COLS)
+    g = Image.new('RGB', (tw * GRID_COLS, th * rows), 'white')
+    d = ImageDraw.Draw(g)
+    font = frames._font(26)
+    for j, im in enumerate(ims):
+        x, y = j % GRID_COLS * tw, j // GRID_COLS * th
+        g.paste(im.resize((tw, th)), (x, y))
+        d.rectangle([x, y, x + 40, y + 32], fill='red')
+        d.text((x + 6, y + 2), str(j + 1), fill='white', font=font)
+        d.rectangle([x, y, x + tw - 1, y + th - 1], outline='white', width=2)
+    g.save(out, quality=90)
     return out
 
 
-def describe(items, lang, captions=False):
-    """items: [{'i', 'start', 'end', 'img'}] → {i: {'text', 'caption'}}。一批读失败就跳过那一批（别的照常）。
-    普通模式一批接一批（带上一批最后一句，叫它只说变了什么）；字幕模式几批同时读。"""
+def _read_batch(batch, lang):
+    """一批（最多 BATCH 帧）拼一张图读一次 → {i: {'text', 'caption'}}。读失败 → {}。"""
+    tiles = '\n'.join(f"Tile {k + 1} = frame {it['i']}, {frames._clock(it['start'])}-{frames._clock(it['end'])}."
+                      for k, it in enumerate(batch))
+    prompt = PROMPT.format(n=len(batch), lang=lang, tiles=tiles)
+    try:
+        img = grid([it['img'] for it in batch], os.path.splitext(batch[0]['img'])[0] + '_grid.jpg')
+        d = frames._json(frames._call(prompt, [img]))
+    except Exception:  # noqa: BLE001
+        return {}
+    out = {}
+    for c in d.get('scenes') or []:
+        try:
+            k = int(c.get('n'))
+        except (TypeError, ValueError):
+            continue
+        if not 1 <= k <= len(batch):
+            continue
+        text = str(c.get('text') or '').strip()[:1000]
+        cap = re.sub(r'\s+', ' ', str(c.get('caption') or '')).strip()[:600]
+        if text or cap:
+            out[batch[k - 1]['i']] = {'text': text, 'caption': cap}
+    return out
+
+
+def describe(items, lang):
+    """items: [{'i', 'start', 'end', 'img'}] → {i: {'text', 'caption'}}。每 BATCH 帧拼一张图；所有批进共用读图池
+    （frames.read_all）同时读。一批读失败就跳过那一批（别的照常）。"""
     batches = [items[s:s + BATCH] for s in range(0, len(items), BATCH)]
     out = {}
-    # 11-16：所有批同时进共用读图池（frames.read_all），不再一批等一批带上一批的最后一句——几期的批一起读才快
-    for got in frames.read_all(lambda b: _read_batch(b, lang, captions), batches):
+    for got in frames.read_all(lambda b: _read_batch(b, lang), batches):
         out.update(got)
     return out
 
@@ -249,7 +263,7 @@ def build(results_dir, tid, video_path=None, url=None, progress=None, lang=None,
         if not items:
             raise RuntimeError('No frames could be read from the video')
         say('describe')
-        read = describe(items, lang or _lang(segs), captions=captions)
+        read = describe(items, lang or _lang(segs))
         scenes = []
         for it in items:
             r = read.get(it['i'])
@@ -272,7 +286,7 @@ def build(results_dir, tid, video_path=None, url=None, progress=None, lang=None,
                 s['img'] = n
         out = {'version': VERSION, 'task_id': tid, 'made_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                'model': config.GEMINI_VISUAL_MODEL, 'duration': round(dur, 1), 'picked': len(items),
-               'captions': bool(captions), 'scenes': scenes}
+               'captions': bool(captions), 'layout': f'grid{GRID_COLS}', 'scenes': scenes}
         tmp_json = scenes_path(results_dir, tid) + '.tmp'
         with open(tmp_json, 'w', encoding='utf-8') as f:
             json.dump(out, f, ensure_ascii=False, indent=1)
