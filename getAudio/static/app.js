@@ -227,6 +227,7 @@ function updateSubmitBtn() {
         return;
     }
     const n = intakeValidCount();
+    scenesAuto(n);
     submitBtn.textContent = n > 0
         ? (n === 1 ? T('transcribe.submitCountOne') : T('transcribe.submitCount', { n }))
         : T('transcribe.submit');
@@ -390,9 +391,32 @@ async function runUploadPool(jobs, engine, concurrency) {
 }
 
 // 「同时描述画面」勾选（scenes.py）：服务器只对视频生效，音频忽略
+// 11-16 用户：「大批量也不是会看图，默认去掉读图」→ 一次超过 SCENES_BULK 条自动不勾（跟服务器 SCENES_BULK 默认一样）；
+// 手动勾过 / 取消过就听人的，提交完恢复自动。
+const SCENES_BULK = 10;
+let scenesTouched = false;
+const scenesBox = document.getElementById('scenes-opt');
+if (scenesBox) scenesBox.addEventListener('change', () => { scenesTouched = true; });
+
 function wantScenes() {
-    const el = document.getElementById('scenes-opt');
-    return !!(el && el.checked);
+    return !!(scenesBox && scenesBox.checked);
+}
+
+// 链接：没动过勾选、又勾着 → 不传，让服务器按合集展开后的条数定（一个合集链接可能是 20 条）
+function scenesParam() {
+    if (!scenesTouched && wantScenes()) return undefined;
+    return wantScenes();
+}
+
+function scenesAuto(n) {
+    if (!scenesBox) return;
+    const bulk = n > SCENES_BULK;
+    if (!scenesTouched) scenesBox.checked = !bulk;
+    const hint = document.querySelector('#scenes-wrap .hint');
+    if (hint) {
+        hint.dataset.i18n = bulk && !scenesBox.checked ? 'scenes.optHintBulk' : 'scenes.optHint';
+        hint.textContent = T(hint.dataset.i18n);
+    }
 }
 
 // —— 链接批：一次 POST，服务器按行返回 tasks（与 rows 顺序一一对应，上限 20）——
@@ -405,7 +429,7 @@ async function submitLinks(links, rows, engine) {
                 urls: links.join('\n'), engine,
                 max_videos: parseInt((document.getElementById('url-max-videos') || {}).value, 10) || 20,
                 subs: (document.getElementById('url-subs') || {}).value || 'auto',
-                scenes: wantScenes(),
+                scenes: scenesParam(),
             }),
         });
         const data = await resp.json().catch(() => ({}));
@@ -522,6 +546,7 @@ async function uploadOne(file, row, engine) {
 
 function resetSubmitBtn() {
     intakeSubmitting = false;
+    scenesTouched = false;   // 下一批重新按条数自动定「描述画面」
     updateSubmitBtn();   // 恢复 "Transcribe N items"（批次跑完后输入区通常已空 → 禁用）
     if (typeof activityPoll === 'function') activityPoll();     // 顶栏 ⟳N 马上跟上（activity.js）
 }

@@ -310,4 +310,24 @@ t.check('话少：正文照存、自动加画面轨（字幕模式）', m6['engi
         and d6.get('captions') is True and d6.get('scenes'))
 t.check('话少：留的视频做完删掉', not [n for n in os.listdir(A.config.UPLOAD_FOLDER) if n.startswith(TID6)])
 
+# 12 大批量默认不读画面（11-16 用户：「大批量也不是会看图，默认去掉读图」）：没明确传 scenes、一次超过 SCENES_BULK 条 → 不读
+t.check('一次几条：没传时 ≤10 条读、>10 条不读；明确要 / 不要照办',
+        A._want_scenes(None, 10) and not A._want_scenes(None, 11) and A._want_scenes('1', 50) and not A._want_scenes('0', 1)
+        and A._want_scenes(None))
+seen = []
+real_submit, real_probe = A.submit_transcription, A._subtitle_probe_executor.submit
+A.submit_transcription = lambda *a, **k: seen.append(k.get('scenes'))
+A._subtitle_probe_executor.submit = lambda *a, **k: seen.append(k.get('scenes'))
+cl = A.app.test_client()
+links = lambda n: '\n'.join(f'https://www.youtube.com/watch?v=abcdefghij{k % 10}' for k in range(n))
+cl.post('/api/transcribe_urls', json={'urls': links(3)})
+few = list(seen); seen.clear()
+cl.post('/api/transcribe_urls', json={'urls': links(12)})
+many = list(seen); seen.clear()
+cl.post('/api/transcribe_urls', json={'urls': links(12), 'scenes': True})
+forced = list(seen); seen.clear()
+A.submit_transcription, A._subtitle_probe_executor.submit = real_submit, real_probe
+print('12 大批量：', few, many[:3], forced[:3])
+t.check('链接：3 条读画面、12 条默认不读、12 条明确要就读', few == [True] * 3 and many == [False] * 12 and forced == [True] * 12)
+
 t.finish()

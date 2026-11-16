@@ -1684,11 +1684,21 @@ def _truthy(v):
     return v is True or str(v or '').strip().lower() in ('1', 'true', 'on', 'yes')
 
 
-def _want_scenes(v):
+def scenes_bulk():
+    """一次超过几条算「大批量」：没明确要就不读画面（SCENES_BULK，默认 10）。"""
+    try:
+        return max(1, int(os.environ.get('SCENES_BULK') or 10))
+    except ValueError:
+        return 10
+
+
+def _want_scenes(v, n=1):
     """这次要不要顺带描述画面。11-16 用户：「一律默认都转（有视频的）」→ 没传就是要；传了 0 / false / off 才不要。
-    SCENES_DEFAULT=0 把没传时的默认改回不要。只管转写页 / 接口（插件、MCP）；博主链不走这里，不受影响。"""
+    同一天又说「大批量也不是会看图，默认去掉」→ 没传、且这次一共 n 条超过 scenes_bulk() → 不要（明确传了要照样做）。
+    SCENES_DEFAULT=0 把没传时的默认改回不要。只管转写页 / 接口（插件、MCP）；博主链不走这里，不受影响。
+    没声音 / 没人说话的视频不看这个：画面上的字就是正文，照做。"""
     if v is None or str(v).strip() == '':
-        return os.environ.get('SCENES_DEFAULT', '1') != '0'
+        return os.environ.get('SCENES_DEFAULT', '1') != '0' and n <= scenes_bulk()
     return _truthy(v)
 
 
@@ -2135,7 +2145,6 @@ def api_transcribe_urls():
     body = request.get_json(silent=True) or {}
     engine = body.get('engine') or config.default_engine()
     sub_mode = _clean_sub_mode(body.get('subs'))
-    want_scenes = _want_scenes(body.get('scenes'))
     project_id = str(body.get('project_id') or '')          # 在项目里贴的：转完加进那个项目
     project_id = project_id if _chain_ok(project_id) else None
     try:
@@ -2168,6 +2177,7 @@ def api_transcribe_urls():
     if not targets:
         return jsonify({'error': '; '.join(errors) or 'Nothing to transcribe'}), 400
 
+    want_scenes = _want_scenes(body.get('scenes'), len(targets))     # 合集展开后的条数：大批量默认不读画面
     out = []
     for url, title, section, offset_sec in targets:
         task_id = str(uuid.uuid4())
@@ -2202,8 +2212,9 @@ def upload_batch():
         return jsonify({'error': '请至少选择一个文件'}), 400
 
     results = []
+    want = _want_scenes(request.form.get('scenes'), len(files))      # 大批量默认不读画面
     for file in files:
-        task_id, error = _enqueue_task(file, engine, speaker_count, scenes=_want_scenes(request.form.get('scenes')))
+        task_id, error = _enqueue_task(file, engine, speaker_count, scenes=want)
         results.append({
             'filename': file.filename,
             'task_id': task_id,
