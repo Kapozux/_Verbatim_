@@ -26,7 +26,7 @@ import re
 import shutil
 import tempfile
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import numpy as np
 
@@ -50,7 +50,7 @@ CAP_MAX = 300
 READ_W = 768              # 送去描述的图宽
 THUMB_W = 320             # 留在磁盘上的缩略图宽
 BATCH = 8                 # 一次调用描述几帧
-CAP_WORKERS = 4           # 字幕模式帧多，几批同时读（不接上一批的话，字幕在代码里去重）
+# 字幕模式帧多，几批同时读（frames.batches_at_once()，VISION_BATCHES）；不接上一批的话，字幕在代码里去重
 # 不给模型「那时说的话」：11-16 实测 Haiku 拿到话就跟着话写（幻灯片被写成「还是那个人在雪山前」），
 # 不给反而每帧都对。说的话转写里已经有了，画面轨只管看得见的。
 
@@ -191,8 +191,8 @@ def describe(items, lang, captions=False):
     out = {}
     if captions:
         from concurrent.futures import ThreadPoolExecutor
-        with ThreadPoolExecutor(CAP_WORKERS) as ex:
-            for got in ex.map(lambda b: _read_batch(b, lang, True), batches):
+        with ThreadPoolExecutor(frames.batches_at_once()) as ex:
+            for got in ex.map(usage.bound(lambda b: _read_batch(b, lang, True)), batches):
                 out.update(got)
         return out
     prev = ''
@@ -324,11 +324,22 @@ def estimate_frames(duration_s):
 
 
 # ================= 后台队列（有声音的视频：转写完再做） =================
+# 同时做几期：VISION_EPISODES（画面证据卡 frames.run_batch 用同一个数）。每期都要重下一遍视频（B 站风控），
+# 模型调用另有两道闸：claude_cli 的 CLAUDE_PARALLEL、三个应用共用的 claude_gate。
 
+def episodes_at_once():
+    return frames.episodes_at_once()
+
+
+RECENT_S = 20 * 60        # 「进行中」列表里做完的留多久
 _q = _queue.Queue()
-_state = {}               # tid -> {'status': queued/running/done/failed, 'error'?}
+_state = {}               # tid -> {'status': queued/running/done/failed, 'error'?, 'started', 'updated'}
 _lock = threading.Lock()
-_worker = None
+_workers = []
+
+
+def _now():
+    return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
 
 def status(results_dir, tid):
@@ -338,20 +349,29 @@ def status(results_dir, tid):
         return dict(_state.get(tid) or {})
 
 
+def recent():
+    """「进行中」列表：在排队 / 在做的，和最近 RECENT_S 秒里做完 / 失败的。→ [(tid, state)]"""
+    cutoff = (datetime.now() - timedelta(seconds=RECENT_S)).strftime('%Y-%m-%d %H:%M:%S')
+    with _lock:
+        return [(t, dict(st)) for t, st in _state.items()
+                if st.get('status') in ('queued', 'running') or (st.get('updated') or '') >= cutoff]
+
+
 def queue(results_dir, tid, video_path=None, url=None, on_done=None, captions=False):
     """排进后台队列；video_path 是专门留给这一步的视频（做完删掉）。已经做过 / 已在排队 → 不重复排。"""
-    global _worker
     if load(results_dir, tid):
         _cleanup(video_path)
         return False
     with _lock:
         if (_state.get(tid) or {}).get('status') in ('queued', 'running'):
             return False
-        _state[tid] = {'status': 'queued'}
+        _state[tid] = {'status': 'queued', 'started': _now(), 'updated': _now()}
         _q.put((results_dir, tid, video_path, url, on_done, captions))
-        if _worker is None or not _worker.is_alive():
-            _worker = threading.Thread(target=_run, name='scenes', daemon=True)
-            _worker.start()
+        _workers[:] = [w for w in _workers if w.is_alive()]
+        while len(_workers) < episodes_at_once():
+            w = threading.Thread(target=_run, name=f'scenes-{len(_workers)}', daemon=True)
+            w.start()
+            _workers.append(w)
     return True
 
 
@@ -370,7 +390,7 @@ def _run():
         except _queue.Empty:
             return
         with _lock:
-            _state[tid] = {'status': 'running'}
+            _state[tid] = {**_state.get(tid, {}), 'status': 'running', 'updated': _now()}
         try:
             with usage.scope(ref=tid):
                 build(results_dir, tid, video_path=video_path, url=url, captions=captions)
@@ -381,7 +401,7 @@ def _run():
         finally:
             _cleanup(video_path)
         with _lock:
-            _state[tid] = st
+            _state[tid] = {**_state.get(tid, {}), **st, 'updated': _now()}
         if on_done:
             try:
                 on_done(tid, st)

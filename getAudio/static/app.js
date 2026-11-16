@@ -523,6 +523,7 @@ async function uploadOne(file, row, engine) {
 function resetSubmitBtn() {
     intakeSubmitting = false;
     updateSubmitBtn();   // 恢复 "Transcribe N items"（批次跑完后输入区通常已空 → 禁用）
+    if (typeof activityPoll === 'function') activityPoll();     // 顶栏 ⟳N 马上跟上（activity.js）
 }
 
 // ========== Batch rows ==========
@@ -592,6 +593,7 @@ function setRowProgress(row, percent) {
 }
 
 function connectBatchSSE(taskId, row) {
+    row.dataset.taskId = taskId;            // 「进行中」（activity.js）按它认出这一行，不再重复补
     const actions = row.querySelector('.batch-item-actions');
     const source = new EventSource(`/stream/${taskId}`);
     startRowClock(row);
@@ -611,7 +613,8 @@ function connectBatchSSE(taskId, row) {
                 break;
 
             case 'progress':
-                setRowStatus(row, T('rowStatus.transcribing', { percent: msg.percent }), 'running');
+                setRowStatus(row, msg.phase === 'scenes' ? T('activity.readingPicture')       // 没人说话，改读画面
+                    : T('rowStatus.transcribing', { percent: msg.percent }), 'running');
                 setRowProgress(row, msg.percent);
                 break;
 
@@ -2991,7 +2994,7 @@ pollXhsAnalyze();
 // ========== 全局任务指示器（顶栏 ⟳N + popover）==========
 // 极简聚合，不新建任何轮询：三处现有刷新（setRowStatus / loadChains / pollXhs*）
 // 每次拿到新数据后调 updateGlobalIndicator(source, tasks) 更新这里并重绘。
-const activeTasks = { transcribe: [], chains: [], 'xhs-scrape': [], 'xhs-analyze': [] };
+const activeTasks = { transcribe: [], 'transcribe-bg': [], scenes: [], studio: [], chains: [], 'xhs-scrape': [], 'xhs-analyze': [] };
 const gtBtn = document.getElementById('global-tasks');
 const gtCount = document.getElementById('global-tasks-count');
 const gtPop = document.getElementById('global-tasks-pop');
@@ -3031,7 +3034,7 @@ function renderGtPop() {
             row.appendChild(prog);
             row.addEventListener('click', () => {
                 gtPop.classList.add('hidden');
-                navigate('tab/' + t.tab);
+                navigate(t.href || 'tab/' + t.tab);
                 if (t.chainId) flashCreatorCard(t.chainId);
             });
             gtPop.appendChild(row);

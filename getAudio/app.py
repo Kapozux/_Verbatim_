@@ -754,7 +754,7 @@ def _scenes_transcribe(task_id, video_path, q, url=None):
     steps = {'download': 5, 'scan': 10, 'describe': 30}
 
     def say(step):
-        q.put(json.dumps({'type': 'progress', 'percent': steps.get(step, 10),
+        q.put(json.dumps({'type': 'progress', 'percent': steps.get(step, 10), 'phase': 'scenes',
                           'message': 'No one is speaking: reading the on-screen text and picture…'}))
     say('scan')
     d = scenes.build(config.RESULTS_FOLDER, task_id, video_path=video_path, url=url, progress=say, captions=True)
@@ -1656,7 +1656,7 @@ def _static_version():
     文件一变这串数字就变，浏览器才会当成新资源重新拉取。
     """
     try:
-        paths = [os.path.join(app.static_folder, name) for name in ('app.js', 'style.css', 'i18n.js', 'explore.js', 'tools.js', 'projects.js', 'study.js', 'voices.js', 'visual.js', 'podcast.js', 'repos.js', 'slides.js', 'notes.js', 'comments.js', 'scenes.js')]
+        paths = [os.path.join(app.static_folder, name) for name in ('app.js', 'style.css', 'i18n.js', 'explore.js', 'tools.js', 'projects.js', 'study.js', 'voices.js', 'visual.js', 'podcast.js', 'repos.js', 'slides.js', 'notes.js', 'comments.js', 'scenes.js', 'activity.js')]
         return str(int(max(os.path.getmtime(p) for p in paths if os.path.isfile(p))))
     except (ValueError, OSError):
         return '0'
@@ -1733,7 +1733,7 @@ def _enqueue_task(file, engine, speaker_count=None, extra_meta=None, scenes=Fals
     # 先落库再入队：服务中途重启也能从 DB 找回这个任务
     taskdb.create(task_id, file.filename, engine, speaker_count, filepath)
 
-    q = queue.Queue()
+    q = _TaskQueue(task_id)
     tasks[task_id] = q
 
     # 模型体检：只对【云引擎】转的稿开（内容本就上了云，体检不增加隐私暴露）；
@@ -1819,7 +1819,7 @@ def _enqueue_local_task(path, engine, speaker_count=None, scenes=False):
 
     display = os.path.basename(path)
     taskdb.create(task_id, display, engine, speaker_count, link)
-    q = queue.Queue()
+    q = _TaskQueue(task_id)
     tasks[task_id] = q
     submit_transcription(
         engine, run_transcription, task_id, link, engine, display, q,
@@ -1912,7 +1912,7 @@ def recover_unfinished_tasks():
         upload_path = row.get('upload_path') or ''
         if upload_path and os.path.isfile(upload_path):
             taskdb.set_status(task_id, 'pending')
-            q = queue.Queue()
+            q = _TaskQueue(task_id)
             tasks[task_id] = q
             engine = row.get('engine')
             kwargs = (taskdb.kwargs_of(row) or chain_ctx.get(task_id)
@@ -2172,7 +2172,7 @@ def api_transcribe_urls():
     for url, title, section, offset_sec in targets:
         task_id = str(uuid.uuid4())
         taskdb.create(task_id, title or url, engine, None, '')
-        q = queue.Queue()
+        q = _TaskQueue(task_id)
         tasks[task_id] = q
         if not section and sub_mode != 'off':
             # 先进快速通道查字幕：有字幕的几秒就完，不用排在引擎池（尤其本地 Whisper）后面
@@ -2214,6 +2214,75 @@ def upload_batch():
         return jsonify({'error': '没有可处理的文件', 'tasks': results}), 400
 
     return jsonify({'tasks': results})
+
+
+# ========== 进行中（关了页面再打开也看得到）==========
+# 2026-11-16 用户：「能不能例如我某个地方开启转写，我即使页面关了也能显示」。任务本来就在后台跑，
+# 只是页面上的队列是浏览器内存里的。这里记下每个任务最后一条进度（_TaskQueue），/api/activity 一次给全。
+
+_task_last = {}          # task_id -> {'type', 'message', 'percent', 'at'}
+
+
+class _TaskQueue(queue.Queue):
+    """转写任务的消息队列：照旧给 /stream 读，另外记下最后一条状态（SSE 的消息读一次就没了，页面关了没人读）。"""
+
+    def __init__(self, task_id):
+        super().__init__()
+        self.task_id = task_id
+
+    def put(self, item, block=True, timeout=None):
+        try:
+            d = json.loads(item)
+            if d.get('type') in ('queued', 'progress', 'done', 'error'):
+                last = _task_last.setdefault(self.task_id, {})
+                last.update(type=d['type'], message=str(d.get('message') or '')[:200], at=time.time(),
+                            phase=d.get('phase') or '')
+                if 'percent' in d:
+                    last['percent'] = d['percent']
+        except (TypeError, ValueError):
+            pass
+        super().put(item, block, timeout)
+
+
+def _activity():
+    """→ {'items': [...]}：转写（不含博主链）、画面描述、工作台产出。没跑完的在前，后面跟最近 20 分钟结束的。"""
+    import scenes
+    import study
+    items = []
+    for r in taskdb.activity():
+        last = _task_last.get(r['id']) or {}
+        st = r['status']
+        items.append({'kind': 'transcribe', 'id': r['id'], 'title': r.get('filename') or '',
+                      'engine': r.get('engine'), 'status': 'queued' if st == 'pending' else st,
+                      'message': last.get('message') or '', 'percent': last.get('percent'),
+                      'phase': last.get('phase') or '',
+                      'error': (r.get('error') or '')[:200], 'started': r.get('created_at'),
+                      'updated': r.get('updated_at')})
+    for tid, st in scenes.recent():
+        meta = _read_meta(tid) or {}
+        items.append({'kind': 'scenes', 'id': tid, 'title': meta.get('ai_title') or meta.get('filename') or tid[:8],
+                      'status': st['status'], 'error': st.get('error') or '', 'started': st.get('started'),
+                      'updated': st.get('updated')})
+    for oid, (chain, o) in study.live().items():
+        prog = o.get('progress') or {}
+        items.append({'kind': 'studio', 'id': oid, 'chain': chain, 'studio_kind': o.get('kind'),
+                      'title': _chain_title(chain), 'status': 'running', 'current': prog.get('current') or '',
+                      'done': prog.get('done'), 'total': prog.get('total'), 'started': o.get('created_at')})
+    return {'items': items}
+
+
+def _chain_title(chain_id):
+    try:
+        with open(os.path.join(CHAINS_DIR, chain_id, 'chain.json'), encoding='utf-8') as f:
+            c = json.load(f)
+        return c.get('name') or c.get('author') or chain_id[:8]
+    except (OSError, ValueError, TypeError):
+        return (chain_id or '')[:8]
+
+
+@app.route('/api/activity')
+def api_activity():
+    return jsonify(_activity())
 
 
 @app.route('/stream/<task_id>')
@@ -3543,8 +3612,8 @@ def _run_chain(state):
             upload_path = os.path.join(config.UPLOAD_FOLDER, f"{task_id}.{ext}")
             shutil.move(item['path'], upload_path)
             display_name = f"{item['title']} [{item['video_id']}].{ext}"
-            taskdb.create(task_id, display_name, state['engine'], None, upload_path)
-            q = queue.Queue()
+            taskdb.create(task_id, display_name, state['engine'], None, upload_path, origin='chain')
+            q = _TaskQueue(task_id)
             tasks[task_id] = q
             submit_transcription(
                 state['engine'], run_transcription, task_id, upload_path, state['engine'],
@@ -7616,8 +7685,8 @@ def _retranscribe_video(chain_id, index, target, engine):
         upload_path = os.path.join(config.UPLOAD_FOLDER, f"{task_id}.{ext}")
         shutil.move(item['path'], upload_path)
         display_name = f"{item['title']} [{item['video_id']}].{ext}"
-        taskdb.create(task_id, display_name, engine, None, upload_path)
-        q = queue.Queue()
+        taskdb.create(task_id, display_name, engine, None, upload_path, origin='chain')
+        q = _TaskQueue(task_id)
         tasks[task_id] = q
         _manual_tasks.add(task_id)      # 链可能已停止（cancelled）：用户手点的这一期照样转
         fallback = False

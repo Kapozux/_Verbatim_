@@ -12,7 +12,7 @@ import json
 import os
 import sqlite3
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import config
 
@@ -53,19 +53,22 @@ def init():
         cols = {r[1] for r in c.execute('PRAGMA table_info(tasks)')}
         if 'kwargs' not in cols:
             c.execute('ALTER TABLE tasks ADD COLUMN kwargs TEXT')
+        # 任务是从哪来的：'chain' = 博主链批量转的（顶栏按博主显示，不进「进行中」列表）；NULL = 转写页 / 接口
+        if 'origin' not in cols:
+            c.execute('ALTER TABLE tasks ADD COLUMN origin TEXT')
 
 
 def _now():
     return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
 
-def create(task_id, filename, engine, speaker_count, upload_path):
+def create(task_id, filename, engine, speaker_count, upload_path, origin=None):
     with _write_lock, _conn() as c:
         c.execute(
             'INSERT OR REPLACE INTO tasks (id, filename, engine, speaker_count, upload_path,'
-            ' status, error, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)',
+            ' status, error, created_at, updated_at, origin) VALUES (?,?,?,?,?,?,?,?,?,?)',
             (task_id, filename, engine, speaker_count, upload_path,
-             'pending', None, _now(), _now()),
+             'pending', None, _now(), _now(), origin),
         )
 
 
@@ -129,6 +132,18 @@ def unfinished():
         rows = c.execute(
             "SELECT * FROM tasks WHERE status IN ('pending', 'running')"
         ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def activity(minutes=20, limit=50):
+    """「进行中」列表（2026-11-16，用户：「我即使页面关了也能显示」）：没跑完的 + 最近 minutes 分钟里结束的，
+    不含博主链的（origin='chain'）。新的在前。"""
+    since = (datetime.now() - timedelta(minutes=minutes)).strftime('%Y-%m-%d %H:%M:%S')
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT id, filename, engine, status, error, created_at, updated_at FROM tasks "
+            "WHERE COALESCE(origin, '') != 'chain' AND (status IN ('pending', 'running') OR updated_at >= ?) "
+            "ORDER BY created_at DESC LIMIT ?", (since, limit)).fetchall()
     return [dict(r) for r in rows]
 
 
