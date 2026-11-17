@@ -40,6 +40,14 @@ def collections():
     return out
 
 
+def wait_all_built():
+    """等所有合集的后台线程跑完。线程手里有一份 state，每推进一步就整份写回 chain.json，
+    没跑完就改文件，改动会被它盖掉（CI 上第 4 步因此偶尔挂，见 #14）。"""
+    end = time.time() + 20
+    while time.time() < end and any(st.get('stage') not in ('done', 'failed') for st in collections()):
+        time.sleep(0.1)
+
+
 def post(body):
     r = A.app.test_client().post('/api/collections', json=body)
     return r.status_code, r.get_json() or {}
@@ -86,6 +94,7 @@ t.check('成员或名字不同：照常新建', r3.get('id') not in (r1.get('id'
         and len(collections()) == 4, f'n={len(collections())}')
 
 # 4 隔了很久（超过十分钟）再建同名同成员的：当成用户真的想再建一个
+wait_all_built()
 p = os.path.join(A._chain_dir(r1['id']), 'chain.json')
 st = json.load(open(p, encoding='utf-8'))
 st['created_at'] = '2026-01-01 00:00:00'
@@ -93,7 +102,5 @@ json.dump(st, open(p, 'w', encoding='utf-8'), ensure_ascii=False)
 s5, r5 = post({'name': 'All-In 2025', 'task_ids': [a, b]})
 t.check('隔了十分钟以上再建：新建一个', s5 == 200 and r5.get('id') != r1.get('id'), f'{r5}')
 
-end = time.time() + 20
-while time.time() < end and any(st.get('stage') not in ('done', 'failed') for st in collections()):
-    time.sleep(0.1)
+wait_all_built()
 t.finish()

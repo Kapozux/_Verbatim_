@@ -1,0 +1,45 @@
+name: Tests
+
+# 每个 PR 和推到 main 时跑一遍 getAudio 的后端测试（./run_tests.sh 那一套）。
+# 测试只用临时目录和假 key、禁外网，不花钱；只装轻量依赖，不装 torch / whisper / mlx。
+on:
+  pull_request:
+    paths:
+      - 'getAudio/**'
+      - '.github/workflows/tests.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'getAudio/**'
+      - '.github/workflows/tests.yml'
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Backend Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install ffmpeg
+        run: sudo apt-get update -q && sudo apt-get install -y -q ffmpeg
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install flask python-dotenv requests numpy google-genai dashscope python-pptx pillow bilibili-api-python yt-dlp
+
+      - name: Run tests
+        working-directory: getAudio
+        run: python tests/run.py
