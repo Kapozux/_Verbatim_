@@ -1,5 +1,5 @@
 """上传前预检（借 Open Notebook 的 _assert_file_supported）：后缀对、内容不是音视频的文件
-（坏文件、改了后缀的文档、空文件、没有音轨的音频）当场拒收；没声音的视频改成描述画面，不进引擎池占线程、不建任务。
+（坏文件、改了后缀的文档、空文件、没有音轨的音频）当场拒收；没声音的视频改成描述画面：任务照建、照常提交，只是不做音频转写。
 
 跑生产代码：/upload、/api/transcribe_local 路由 → _enqueue_task / _enqueue_local_task / preflight_media（真 ffprobe）。
 桩：app.submit_transcription（记下提交，不起转写线程）。

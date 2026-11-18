@@ -6,7 +6,7 @@
 |---|---|
 | 现状 | 11-16 合进 main、5001 已重启；`.env` 已改 `VISION_CALLS=64`、`CLAUDE_PARALLEL=64`、`CLAUDE_GATE_CAP=72`（用户同意） |
 | 怎么跑 | 开个转写 → 关掉页面 → 再打开：队列卡片和顶栏 ⟳N 都有。测试 `./run_tests.sh activity` |
-| 已知问题 | 服务重启后画面描述的排队（内存里）丢了，列表里也就没了；工作台产出只在生成中时出现，做完不留 |
+| 已知问题 | 服务重启后画面描述的排队（内存里）丢了，列表里也就没了；工作台产出只在生成中时出现，做完就从「进行中」列表里消失（产出本身照常存着，在工作台的产出列表里） |
 | 下一步 | 下载视频是最慢的一环（每条 12–232 秒），`VISION_EPISODES` 还是 2，要更快可以试 4 |
 
 ## 一句话
@@ -31,7 +31,7 @@
 - **共用读图池** `frames.read_all`：所有期的读图请求（证据卡的分拣、读原图；画面描述普通 + 字幕模式）进同一个池子，最多 `VISION_CALLS`（默认 32）个同时读。画面描述的批之间不再接上一批的最后一句（才能一起读）。
 - `VISION_EPISODES`（默认 2）：同时几期在**下视频、取帧**（B 站风控，别开太大）。
 - 取帧并行（`frames.grab_many`，8 个 ffmpeg）。
-- 真正的上限还有两道闸：`CLAUDE_PARALLEL`（`.env` 20）和三个应用共用的 `claude_gate`（`CLAUDE_GATE_CAP` 默认 24、留 4 给交互）——**不调大这两个，VISION_CALLS 开多少都只有 ~20**。`visual` 是 batch 优先级，给提问让路。
+- 真正的上限还有两道闸：`CLAUDE_PARALLEL`（`claude_cli.py` 默认 6）和三个应用共用的 `claude_gate`（`CLAUDE_GATE_CAP` 默认 24、留 4 给交互）——**不调大这两个，VISION_CALLS 开多少都只有 `CLAUDE_PARALLEL` 那么多**（默认 6）。本机 `.env` 11-16 已调成 64 / 72（见上面「现状」），所以这里实际上限是 `VISION_CALLS=64`。`visual` 是 batch 优先级，给提问让路。
 - 线程池里的调用用 `usage.bound` 带上记账归属。
 
 ### 实测（11-16，scratch `.claude/scratch-data/vision-conc/`）

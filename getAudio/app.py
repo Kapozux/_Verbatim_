@@ -1548,7 +1548,8 @@ def _run_transcription(task_id, filepath, engine, original_filename, q,
             """视频转出白卷 / 引擎回空文本（只有配乐、话写在画面字幕里——11-16 用户：「大部分是有声音但不是人说话的」）：
             不再去 Whisper（还是白卷，或者对着配乐编歌词），改成读画面字幕 + 描述画面当正文。→ (成功?, 新的错误)"""
             nonlocal model_review
-            if requeued or halted or scenes_only or DEMO_MODE or not _no_speech(err):
+            # 只转一段（@开始-结束）的不走这条：读画面读的是整个视频，时间还会再被加一次片段偏移
+            if requeued or halted or scenes_only or DEMO_MODE or (extra_meta or {}).get('clip') or not _no_speech(err):
                 return False, err
             src = _video_source(filepath, extra_meta)
             if not src:
@@ -1614,7 +1615,9 @@ def _run_transcription(task_id, filepath, engine, original_filename, q,
         if not fell_back and engine in ('openrouter', 'gemini', 'gemini35', 'agy_flash', 'agy_argon'):
             fell_back, e = _no_speech_to_scenes(e)      # 后备引擎也只交了白卷 / 回空
         if (not fell_back and not requeued and not halted and engine != 'whisper'
-                and (fallback_whisper or content_block or empty_out or quota_out)):
+                and (fallback_whisper or content_block or empty_out or quota_out
+                     # 只转一段的不走读画面那条，引擎回空文本（报的是普通错误）时跟白卷一样落 Whisper
+                     or ((extra_meta or {}).get('clip') and _no_speech(e)))):
             try:
                 why = ('Content-blocked by Gemini (deterministic)' if content_block
                        else f'{engine} 额度用完' if quota_out
@@ -2107,7 +2110,8 @@ def _download_then_transcribe(task_id, url, engine, q, section=None, offset_sec=
                                       'creator': item.get('uploader'),
                                       'upload_date': item.get('upload_date') or '',   # 建合集、预测核对按它定年份
                                       **({'project_id': project_id} if project_id else {}),
-                                      **({'want_scenes': True} if scenes and not section else {})},
+                                      **({'want_scenes': True} if scenes and not section else {}),
+                                      **({'clip': section} if section else {})},
                           timing=timing)
     except Exception as e:  # noqa: BLE001
         taskdb.set_status(task_id, 'failed', error=str(e)[:300])
