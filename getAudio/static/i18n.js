@@ -130,14 +130,14 @@ const STRINGS = {
 
         "src.st.converting": "Converting",
         "src.allFailed": "All {n} failed",
-        "src.notIndexed": "{n} transcripts, not searchable yet: chat and Studio can't use them.",
+        "src.notIndexed": "Transcripts not searchable yet ({n}): chat and Studio can't use them.",
         "src.makeSearchable": "Make searchable (about {usd})",
         "src.makeSearchableCheap": "Make searchable (under $0.01)",
         "nb.notIndexedT": "Nothing to ask about yet",
-        "nb.notIndexedD": "{names} has transcripts, but no evidence cards, and the transcripts aren't searchable yet. Make them searchable and you can ask about them here.",
+        "nb.notIndexedD": "Transcripts from {names} aren't searchable yet, and there are no evidence cards. Make them searchable and you can ask about them here.",
         "src.indexingCreator": "Making transcripts searchable…",
         "src.indexStarted": "Making transcripts searchable. You can ask about them now; meaning-based search catches up in a few minutes.",
-        "ask.notIndexed": "Nothing to search yet. {names} has transcripts but no evidence cards, and the transcripts aren't searchable. In Sources on the left, click \"Make searchable\" under {names}.",
+        "ask.notIndexed": "Nothing to search yet. Transcripts from {names} aren't searchable, and there are no evidence cards. In Sources on the left, click \"Make searchable\" under {names}.",
 
         "src.st.ready": "Ready",
 

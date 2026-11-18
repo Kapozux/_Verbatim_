@@ -72,7 +72,7 @@
 以前（马督工那种 `analyze: False`、没开 `index_transcripts` 的博主）放进笔记本，对话 / 工作台只报「Nothing to work from」，中间还显示「建你的第一个笔记本」。
 - 判断：`ask.unindexed_episodes`（有转写好的期、没有 `cards_*.json`、没开 index_transcripts；只看文件在不在，左栏轮询也不慢）；估价 `ask.index_estimate`（按段落 token 数 × 向量模型单价，按 task_id 列表缓存）。
 - 左栏：`/sources` 的每组带 `not_indexed {episodes, passages, usd}` / `indexing`，组下面一行 + 「加进检索（约 $X）」；只有这样的博主时中间空状态同一个按钮。
-- 点了：`POST /sources/index_creator {chain_id}` 打开他的 index_transcripts（频道还在跑时 409：run_chain 会整份重写 chain.json），后台 `ensure_embeddings_async`；`/people` 的 `searchable` 让对话马上能用。
+- 点了：`POST /api/chain/<笔记本 id>/sources/index_creator`，body `{chain_id: 博主的链条 id}`，打开他的 index_transcripts（频道还在跑时 409：run_chain 会整份重写 chain.json），后台 `ensure_embeddings_async`；`/people` 的 `searchable` 让对话马上能用。
 - 报错：对话、报告、播客、幻灯片没材料时抛 `ask.NotIndexed` 点名是谁；对话按界面语言显示（`ask.notIndexed`），工作台的报错是后端英文原文。
 - 测试 `tests/test_not_indexed.py`。
 

@@ -169,15 +169,20 @@ function srcIcon(ext) {
 }
 
 // ---- 只转写了、没加进检索的博主（GitHub #9）：左栏那组和中间的空状态共用 ----
+// 博主还在转写 / 分析：这时服务器不让加进检索（409），按钮先不给，跑完再出来
+function srcChBusy(ch) {
+    return !!ch.stage && !['done', 'failed', 'cancelled'].includes(ch.stage);
+}
 function srcNotIndexed() {
     const d = srcState.data;
     if (!d || srcState.id !== cx.id) return [];
     const out = [];
-    if (d.channel && (d.channel.not_indexed || d.channel.indexing))
-        out.push({ cid: cx.id, name: d.channel.name, indexing: !!d.channel.indexing, ...(d.channel.not_indexed || {}) });
-    (d.channels || []).forEach(ch => {
-        if (ch.not_indexed || ch.indexing) out.push({ cid: ch.chain_id, name: ch.name, indexing: !!ch.indexing, ...(ch.not_indexed || {}) });
-    });
+    const add = (ch, cid) => {
+        if (ch.not_indexed || ch.indexing)
+            out.push({ cid, name: ch.name, indexing: !!ch.indexing, busy: srcChBusy(ch), ...(ch.not_indexed || {}) });
+    };
+    if (d.channel) add(d.channel, cx.id);
+    (d.channels || []).forEach(ch => add(ch, ch.chain_id));
     return out;
 }
 function srcIndexLabel(g, named) {
@@ -192,7 +197,7 @@ async function srcIndexCreator(btn) {
         showToast(T('src.indexStarted'));
         if (typeof peopleLoad === 'function') peopleLoad();                   // 「能不能问」看人名表里的 searchable
         if (typeof refreshChainDetail === 'function') refreshChainDetail();   // 项目自己的频道看 index_transcripts
-    }
+    } else btn.disabled = false;                                              // 没成：留着按钮好再点
     srcLoad();
 }
 
@@ -252,7 +257,7 @@ function srcRender() {
         </div>`);
         // 只转写了、没证据卡也没加进检索：问答和工作台都用不到他（GitHub #9）。常驻一行说清楚，按钮上写估价
         if (ch.indexing) rows.push(`<div class="sr-ni run">${T('src.indexingCreator')}</div>`);
-        else if (ch.not_indexed) rows.push(`<div class="sr-ni">${T('src.notIndexed', { n: ch.not_indexed.episodes })}${ro ? ''
+        else if (ch.not_indexed) rows.push(`<div class="sr-ni">${T('src.notIndexed', { n: ch.not_indexed.episodes })}${(ro || srcChBusy(ch)) ? ''
             : ` <button type="button" class="sr-ni-btn" data-cid="${escapeHtml(key === 'channel' ? cx.id : key)}" onclick="srcIndexCreator(this)">${escapeHtml(srcIndexLabel(ch.not_indexed))}</button>`}</div>`);
         if (open) {
             eps.forEach(v => rows.push(srcRow('video', v.task_id, `<span class="sr-svg" data-k="video">${srcSvg('video')}</span>`, v.title || v.task_id,

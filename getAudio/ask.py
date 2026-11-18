@@ -305,63 +305,93 @@ class NotIndexed(RuntimeError):
     def __init__(self, people):
         self.people = people
         names = ', '.join(p['name'] for p in people)
-        super().__init__(f"Nothing to search yet: {names} has transcripts but no evidence cards, and the "
-                         f"transcripts aren't searchable. In Sources on the left, click \"Make searchable\" "
-                         f"under {names}.")
+        super().__init__(f"Nothing to search yet: transcripts from {names} aren't searchable, and there are "
+                         f"no evidence cards. In Sources on the left, click \"Make searchable\" under {names}.")
+
+
+_cards_seen = {}         # cards_*.json 路径 -> (修改时间, 里面真有卡吗)
+
+
+def _any_cards(chain_dir):
+    """这个博主有没有真的证据卡。抽卡失败的期会留一个没卡的空壳文件，load() 不认它，这里也不认。
+    按修改时间缓存，左栏轮询时不重读。"""
+    for f in glob.glob(os.path.join(chain_dir, 'cards_*.json')):
+        try:
+            mt = os.path.getmtime(f)
+        except OSError:
+            continue
+        hit = _cards_seen.get(f)
+        if not hit or hit[0] != mt:
+            data = _read_json(f)
+            hit = _cards_seen[f] = (mt, isinstance(data, dict) and bool(data.get('cards')))
+        if hit[1]:
+            return True
+    return False
 
 
 def unindexed_episodes(chain_dir, state=None):
     """这个博主在笔记本里是不是「没材料」：有转写好的期，但没抽过证据卡、也没开 index_transcripts。
-    是 → 转写好的 task_id 列表；不是 → []。只看文件在不在，左栏每几秒轮询一次也不慢。"""
+    是 → 转写好的 task_id 列表；不是 → []。卡片文件按修改时间缓存，左栏每几秒轮询一次也不慢。"""
     if state is None:
         state = _read_json(os.path.join(chain_dir, 'chain.json'), {}) or {}
-    if state.get('index_transcripts') or glob.glob(os.path.join(chain_dir, 'cards_*.json')):
+    if state.get('index_transcripts') or _any_cards(chain_dir):
         return []
     return [v['task_id'] for v in state.get('videos') or [] if v.get('task_id') and v.get('status') == 'done']
 
 
-def unindexed_people(chain_dir):
-    """笔记本里「没材料」的博主：项目自己的频道（有 url 的）+ 引用的博主。→ [{chain_id, name}]"""
+def _unindexed(chain_dir):
+    """笔记本里「没材料」的博主：项目自己的频道（有 url 的）+ 引用的博主。
+    → [({chain_id, name}, [他转写好的 task_id])]"""
     state = _read_json(os.path.join(chain_dir, 'chain.json'), {}) or {}
     out = []
-    if state.get('url') and unindexed_episodes(chain_dir, state):
-        out.append({'chain_id': os.path.basename(chain_dir),
-                    'name': state.get('channel_name') or state.get('author') or 'this creator'})
+    tids = unindexed_episodes(chain_dir, state) if state.get('url') else []
+    if tids:
+        out.append(({'chain_id': os.path.basename(chain_dir),
+                     'name': state.get('channel_name') or state.get('author') or 'this creator'}, tids))
     reg = _read_json(os.path.join(chain_dir, 'sources.json'), {}) or {}
     root = os.path.dirname(chain_dir)
     for r in reg.get('channels') or []:
         d = os.path.join(root, r.get('chain_id') or '')
         st = _read_json(os.path.join(d, 'chain.json'), {}) or {}
-        if st and unindexed_episodes(d, st):
-            out.append({'chain_id': r['chain_id'], 'name': st.get('author') or r.get('tag') or 'a creator'})
+        tids = unindexed_episodes(d, st) if st else []
+        if tids:
+            out.append(({'chain_id': r['chain_id'], 'name': st.get('author') or r.get('tag') or 'a creator'}, tids))
     return out
 
 
-def empty_error(chain_dir, default):
-    """没材料时抛哪个错：有没加进检索的博主就点名（NotIndexed），否则照旧。"""
-    people = unindexed_people(chain_dir)
+def unindexed_people(chain_dir):
+    """→ [{chain_id, name}]"""
+    return [p for p, _ in _unindexed(chain_dir)]
+
+
+def empty_error(chain_dir, default, scope=None):
+    """没材料时抛哪个错：有没加进检索的博主就点名（NotIndexed），否则照旧。
+    给了提问范围就只点范围里的人：只勾了文档、或勾的期都不是他的，不点他。"""
+    scope = scope or {}
+    pick = {s for s in (scope.get('sources') or []) if isinstance(s, str)}
+    people = [] if scope.get('type') == 'docs' else [
+        p for p, tids in _unindexed(chain_dir) if not pick or pick & set(tids)]
     return NotIndexed(people) if people else RuntimeError(default)
 
 
-_index_est = {}          # (task_id 们的指纹) -> {episodes, passages, usd}
+_index_est = {}          # (task_id 们的指纹) -> (段落数, 估的 token 数)
 
 
 def index_estimate(task_ids):
     """把这些转写的原文段落加进检索（算向量）要多少：→ {episodes, passages, usd}。
-    按 task_id 列表缓存（左栏轮询时不重读几百份转写）；段落切分本身也有 passages.json 缓存。"""
+    段落数按 task_id 列表缓存（左栏轮询时不重读几百份转写）；价钱每次按当前价格表算。"""
     import sources
     key = hashlib.sha1('|'.join(task_ids).encode()).hexdigest()
-    if key in _index_est:
-        return _index_est[key]
-    n = tok = 0
-    for tid in task_ids:
-        for p in sources.transcript_passages(tid):
-            n += 1
-            tok += est_tokens(p['text'][:700])           # 跟 _card_embed_text 一样截到 700 字
+    if key not in _index_est:
+        n = tok = 0
+        for tid in task_ids:
+            for p in sources.transcript_passages(tid):
+                n += 1
+                tok += est_tokens(p['text'][:700])           # 跟 _card_embed_text 一样截到 700 字
+        _index_est[key] = (n, tok)
+    n, tok = _index_est[key]
     usd = usage.estimate_cost(EMBED_MODEL, input_tokens=tok) or 0
-    out = {'episodes': len(task_ids), 'passages': n, 'usd': round(usd, 6)}
-    _index_est[key] = out
-    return out
+    return {'episodes': len(task_ids), 'passages': n, 'usd': round(usd, 6)}
 
 
 def _stable_no(hex_id):
@@ -1333,10 +1363,10 @@ def _prepare(chain_dir, question, mode='about', history=None, topic=None, ui_lan
     """挑卡 + 拼提示词（检索可能要调一次模型改写问题、算一次向量）。返回给 _finish 用的上下文。"""
     corpus = load(chain_dir, passages=True)
     if not corpus['cards']:
-        raise empty_error(chain_dir, 'No evidence cards yet — run the analysis first')
+        raise empty_error(chain_dir, 'No evidence cards yet — run the analysis first', scope)
     pool = scope_pool(corpus, scope)
     if pool is not None and not pool:
-        raise empty_error(chain_dir, 'Nothing to search in the selected sources yet')
+        raise empty_error(chain_dir, 'Nothing to search in the selected sources yet', scope)
     if topic:
         pool = [c for c in (pool if pool is not None else corpus['cards']) if c.get('topic') == topic]
         if not pool:

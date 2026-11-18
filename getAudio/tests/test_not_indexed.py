@@ -45,11 +45,18 @@ for f in glob.glob(os.path.join(A._chain_dir(U), 'cards_*.json')):
 st = A._read_chain(U)
 st['analyze'] = False
 A._save_chain(st)
+# 抽卡失败留下的空壳文件不算有卡：照样标出来
+with open(os.path.join(A._chain_dir(U), 'cards_001.json'), 'w', encoding='utf-8') as f:
+    json.dump({'task_id': st['videos'][0]['task_id'], 'cards': []}, f)
+# 另一个也没加进检索的博主：按范围报错时不该被捎上
+W = make_creator(A, 'Gamma', 'gamma', [['remote work']], transcripts=True, portrait=False)
+for f in glob.glob(os.path.join(A._chain_dir(W), 'cards_*.json')):
+    os.remove(f)
 # 分析过的博主做对照
 V = make_creator(A, 'Beta', 'beta', [['big teams win']])
 
 P = c.post('/api/projects', json={'name': 'Teams'}).get_json()['id']
-c.post(f'/api/chain/{P}/sources/transcripts', json={'chain_ids': [U, V]})
+c.post(f'/api/chain/{P}/sources/transcripts', json={'chain_ids': [U, V, W]})
 
 src = c.get(f'/api/chain/{P}/sources').get_json()
 by = {ch['chain_id']: ch for ch in src['channels']}
@@ -58,8 +65,6 @@ t.check('没加进检索的博主：左栏那组标出来', ni.get('episodes') =
 t.check('带估价（美元数字）', isinstance(ni.get('usd'), (int, float)), ni)
 t.check('分析过的博主不标', not by[V].get('not_indexed'), by[V].get('not_indexed'))
 
-# 只看他一个人：对话范围勾他的期 → 报错点名、说去哪加
-scope = {'tasks': [v['task_id'] for v in A._read_chain(U)['videos']]}
 
 
 def ask_err(scope=None):
@@ -68,8 +73,17 @@ def ask_err(scope=None):
     return next((e for e in evs if e.get('type') == 'error'), {}), evs
 
 
-# 项目里只有他（拿掉 Beta）→ 整个笔记本没材料
+# 只看他一个人（Beta 有卡、Gamma 也没加进检索，都还在笔记本里）：范围勾他的期 → 只点他的名
+err, evs = ask_err({'type': 'all', 'sources': [v['task_id'] for v in A._read_chain(U)['videos']]})
+names = [p['chain_id'] for p in err.get('not_indexed') or []]
+t.check('按范围问：点名范围里的人', names == [U], err or evs[-1:])
+t.check('按范围问：不捎上范围外的人', 'Gamma' not in err.get('error', ''), err)
+err, evs = ask_err({'type': 'docs'})
+t.check('只勾文档：不点博主的名', not err.get('not_indexed'), err or evs[-1:])
+
+# 项目里只有他（拿掉 Beta 和 Gamma）→ 整个笔记本没材料
 c.delete(f'/api/chain/{P}/sources/{V}')
+c.delete(f'/api/chain/{P}/sources/{W}')
 err, evs = ask_err()
 t.check('对话报错点名是谁', 'Alpha' in err.get('error', ''), err or evs[-1:])
 t.check('对话报错说是没加进检索', 'searchable' in err.get('error', '').lower(), err)

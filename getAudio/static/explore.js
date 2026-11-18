@@ -164,7 +164,7 @@ async function peopleLoad() {
     let r;
     try { r = await (await fetch(`/api/chain/${id}/people`)).json(); } catch { return; }
     if (cx.id !== id || !r || !r.people) return;
-    const sig = ps => JSON.stringify(ps.map(p => [p.chain_id, p.has_cards, p.portrait, p.lenses, p.final_doc]));
+    const sig = ps => JSON.stringify(ps.map(p => [p.chain_id, p.has_cards, p.searchable, p.portrait, p.lenses, p.final_doc]));
     const changed = sig(r.people) !== sig(cx.people || []);
     cx.people = r.people;
     if (!cx.person || !cxPerson(cx.person)) {
@@ -202,7 +202,7 @@ function nbEmptyHtml() {
         return `<div class="nb-empty-in"><div class="nb-empty-ic">${typeof srcSvg === 'function' ? srcSvg('channel') : ''}</div>
             <h3>${T('nb.notIndexedT')}</h3>
             <p>${T('nb.notIndexedD', { names: escapeHtml(ni.map(g => g.name).join(currentLang === 'zh' ? '、' : ', ')) })}</p>
-            ${ni.map(g => g.indexing ? `<p class="cx-thinking">${T('src.indexingCreator')}</p>` : ro ? ''
+            ${ni.map(g => g.indexing ? `<p class="cx-thinking">${T('src.indexingCreator')}</p>` : (ro || g.busy) ? ''
                 : `<button type="button" class="btn-primary cx-send" data-cid="${escapeHtml(g.cid)}" onclick="srcIndexCreator(this)">${escapeHtml(srcIndexLabel(g, ni.length > 1))}</button>`).join('')}</div>`;
     }
     return `<div class="nb-empty-in"><div class="nb-empty-ic">👋</div>
