@@ -906,6 +906,8 @@ const STRINGS = {
         'gtSource.xhs-analyze': 'Xiaohongshu',
 
         'rowStatus.queued': 'Queued',
+        'rowStatus.waitingPower': 'On battery — waiting for power',
+        'rowStatus.pausedOnBattery': 'Unplugged — paused until power is back',
         'rowStatus.uploading': 'Uploading…',
         'rowStatus.downloading': 'Downloading…',
         'rowStatus.readingLocal': 'Reading local file…',
@@ -2592,6 +2594,8 @@ const STRINGS = {
         'gtSource.xhs-analyze': '小红书',
 
         'rowStatus.queued': '排队中',
+        'rowStatus.waitingPower': '在用电池，等插上电源',
+        'rowStatus.pausedOnBattery': '电源拔了，已暂停，插回后继续',
         'rowStatus.uploading': '上传中…',
         'rowStatus.downloading': '下载中…',
         'rowStatus.readingLocal': '读取本地文件中…',

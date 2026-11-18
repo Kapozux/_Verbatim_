@@ -170,12 +170,18 @@ def _transcribe_mlx(repo, filepath, progress_callback=None):
         mlx_mod = sys.modules.get('mlx_whisper.transcribe')
         orig_tqdm = getattr(mlx_mod, 'tqdm', None)
         if progress_callback and orig_tqdm is not None and hasattr(orig_tqdm, 'tqdm'):
+            owner = threading.get_ident()
+
             class _ProgressTqdm(orig_tqdm.tqdm):
                 # mlx 默认 disable=True（verbose 不是 False 就关），关着的 tqdm 不累加 self.n，自己数
                 _done = 0
 
                 def update(self, n=1):
                     r = super().update(n)
+                    # 只认本次调用所在的线程：podcast._words 用的是另一把锁，可能同时在跑
+                    # mlx_whisper.transcribe，它的进度不能算到这个任务头上，也不能被这边的等电卡住。
+                    if threading.get_ident() != owner:
+                        return r
                     self._done += n or 0
                     if self.total:
                         progress_callback(max(5, min(98, int(self._done / self.total * 100))))

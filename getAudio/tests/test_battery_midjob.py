@@ -75,6 +75,13 @@ t.check('中途拔电又插回：任务照样完成', r.get('status') == 'done',
 t.check('转写过程中查过电源（不只开头一次）', power['checks'] >= 3, power['checks'])
 t.check('拔电时给前端发了「暂停等插电」', any(m.get('type') == 'queued' and 'battery' in m.get('message', '').lower()
                                          for m in msgs), [m.get('message') for m in msgs][:8])
+t.check('暂停事件带原因码，页面靠它显示在等电源', any(m.get('reason') == 'battery_paused' for m in msgs),
+        [m.get('reason') for m in msgs if m.get('type') == 'queued'])
+_js = open(os.path.join(os.path.dirname(__file__), '..', 'static', 'app.js'), encoding='utf-8').read()
+_i18n = open(os.path.join(os.path.dirname(__file__), '..', 'static', 'i18n.js'), encoding='utf-8').read()
+t.check('页面按原因码换文案，两种语言都有', all(
+    f"'{r}'" in _js and f"T('rowStatus.{k}')" in _js and _i18n.count(f"'rowStatus.{k}'") == 2
+    for r, k in (('battery', 'waitingPower'), ('battery_paused', 'pausedOnBattery'))))
 
 # 2) 中途拔电、一直没插回 → 等满时限放弃，任务失败、说清原因
 A._POWER_WAIT_S = 0
@@ -114,6 +121,24 @@ segs = W.transcribe_audio('x.wav', progress_callback=pcts.append)
 t.check('mlx 也报中间进度', any(5 < p < 99 for p in pcts), pcts)
 t.check('mlx 跑完把 tqdm 还原', sys.modules['mlx_whisper.transcribe'].tqdm is _tqdm)
 t.check('mlx 正常出字', segs and segs[0]['text'] == 'hi', segs)
+
+# 别的线程同时在跑 mlx_whisper.transcribe（podcast._words 用的是另一把锁）：它的进度不算到这个任务头上
+import threading  # noqa: E402
+other = []
+
+
+def mlx_with_bystander(path, **kw):
+    th = threading.Thread(target=lambda: other.append(mlx_transcribe('other.wav')))
+    th.start()
+    th.join(10)
+    return mlx_transcribe(path)
+
+
+fake_mlx.transcribe = mlx_with_bystander
+pcts2 = []
+W.transcribe_audio('x.wav', progress_callback=pcts2.append)
+fake_mlx.transcribe = mlx_transcribe
+t.check('别的线程的 mlx 进度不进这个任务的回调', other and pcts2 == pcts, f'{pcts2} vs {pcts}')
 
 
 class Stop(Exception):
