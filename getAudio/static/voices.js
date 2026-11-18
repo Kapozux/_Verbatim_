@@ -310,7 +310,7 @@ async function vcDecorateTranscript(body, taskId, segs) {
     const secs = segs.map(s => parseTimestampToSeconds(s.timestamp || '0:00'));
     r.labels.forEach(l => {
         const row = body.querySelector(`.rd-seg[data-si="${l.i}"]`);
-        if (!row) return;
+        if (!row || row.dataset.split) return;      // 这段拆成了几轮（splitTurns）：整段一个声纹名会标错
         const txt = row.children[1];
         if (txt && l.name) {
             txt.textContent = txt.textContent.replace(/^\s*说话人\s*\d+\s*[：:]\s*/, '');

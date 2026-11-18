@@ -1130,6 +1130,7 @@ async function openTranscriptViewer(taskId, sec, cite) {
     if (!d || d.error) { showToast((d && d.error) || T('common.couldNotLoad')); return; }
     stopReaderMedia();
     const segs = d.segments || [];
+    const rows = splitTurns(segs, d.duration_seconds);     // 一段里几个说话人：拆成一轮一行（app.js）
     const segSecs = segs.map(s => parseTimestampToSeconds(s.timestamp || '0:00'));
     const body = readerOpen(d.ai_title || d.filename || '', d.duration_seconds ? formatDuration(d.duration_seconds) : '', '', taskId);
     let hit = null;
@@ -1137,8 +1138,15 @@ async function openTranscriptViewer(taskId, sec, cite) {
         segSecs.forEach((x, i) => { if (x <= sec + 0.5) hit = i; });
     }
     body.innerHTML = `<button type="button" class="cx-link rd-open" data-go="detail/${escapeHtml(taskId)}${sec != null ? '/t/' + sec : ''}">${T('nb.openFull')}</button>`
-        + segs.map((s, i) => `<div class="rd-seg" data-si="${i}" data-sec="${segSecs[i]}"><span class="rd-ts">${escapeHtml(s.timestamp || '')}</span>
-            <span>${escapeHtml(s.text || '')}</span></div>`).join('');
+        + rows.map(s => `<div class="rd-seg"${s.split ? ' data-split="1"' : ''} data-si="${s.orig}" data-sec="${parseTimestampToSeconds(s.timestamp || '0:00')}"><span class="rd-ts${s.approx ? ' approx' : ''}"${s.approx ? ` title="${escapeHtml(T('detail.approxTime'))}"` : ''}>${escapeHtml(s.timestamp || '')}</span>
+            <span class="rd-txt"></span></div>`).join('');
+    let prevWho = null;                                   // 同一个人接着说：不重复标名字
+    body.querySelectorAll('.rd-txt').forEach((el, k) => {
+        fillTurnText(el, rows[k].text);
+        const m = String(rows[k].text || '').match(TURN_RE), who = m ? m[1].replace(/\s+/g, '') : null;
+        if (who && who === prevWho) el.parentElement.classList.add('cont');
+        prevWho = who;
+    });
     body.querySelector('.rd-open').addEventListener('click', e => navigate(e.target.dataset.go));
     const media = mediaSourceOf({ ...d, id: d.id || taskId });
     if (media) {

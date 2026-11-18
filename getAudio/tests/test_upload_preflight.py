@@ -1,5 +1,5 @@
 """上传前预检（借 Open Notebook 的 _assert_file_supported）：后缀对、内容不是音视频的文件
-（坏文件、改了后缀的文档、空文件、没有音轨的录屏）当场拒收，不进引擎池占线程、不建任务。
+（坏文件、改了后缀的文档、空文件、没有音轨的音频）当场拒收；没声音的视频改成描述画面，不进引擎池占线程、不建任务。
 
 跑生产代码：/upload、/api/transcribe_local 路由 → _enqueue_task / _enqueue_local_task / preflight_media（真 ffprobe）。
 桩：app.submit_transcription（记下提交，不起转写线程）。
@@ -66,12 +66,14 @@ if os.path.exists(ffmpeg):
     silent = os.path.join(TMP, 'screen.mp4')
     subprocess.run([ffmpeg, '-v', 'error', '-f', 'lavfi', '-i', 'testsrc=size=64x64:rate=5', '-t', '1',
                     '-pix_fmt', 'yuv420p', silent], check=True)
+    # 2026-11-16 起没声音的视频不再拒收：改成只描述画面（scenes.py，细节见 test_scenes）
     code, body = upload('screen.mp4', open(silent, 'rb').read())
-    t.check('没有音轨的视频被拒', code == 400 and not submitted and 'no audio' in (body.get('error') or ''),
+    t.check('没有音轨的视频收下、改成描述画面', code == 200 and len(submitted) == 1, str(body))
+    silent_mp3 = os.path.join(TMP, 'silent.mp3')
+    shutil.copy(silent, silent_mp3)
+    code, body = upload('screen.mp3', open(silent_mp3, 'rb').read())
+    t.check('音频后缀但没有音轨：照旧拒收', code == 400 and not submitted and 'no audio' in (body.get('error') or ''),
             str(body))
-    submitted.clear()
-    r = client.post('/api/transcribe_local', json={'path': silent})
-    t.check('本机路径也预检', r.status_code == 400 and not submitted, str(r.get_json()))
 else:
     t.skip('没有音轨的视频', '没装 ffmpeg')
 

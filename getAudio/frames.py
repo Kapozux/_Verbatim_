@@ -181,6 +181,14 @@ def grab(video, t, out, width=FULL_W):
     return os.path.isfile(out)
 
 
+GRAB_AT_ONCE = 8          # 取帧（每张一个 ffmpeg）同时几个
+
+
+def grab_many(video, jobs, width=FULL_W):
+    """[(秒, 输出路径)] → [成功?]，几张同时取（原来一张一张取，60 帧要十几秒）。"""
+    return _pmap(lambda j: grab(video, j[0], j[1], width), list(jobs), GRAB_AT_ONCE)
+
+
 def _font(size):
     from PIL import ImageFont
     for p in ('/System/Library/Fonts/Helvetica.ttc', 'C:\\Windows\\Fonts\\arial.ttf',
@@ -266,31 +274,79 @@ def _json(raw):
     return analyze._parse_json_obj(raw) or {}
 
 
+# ---- 读图池：所有期的读图请求进同一个池子（11-16 用户：「不能按单个视频吧，要全部加起来的总帧几十个/百个一起读」）----
+# 同时几期（VISION_EPISODES）只管下视频、取帧；读图不按期排队，几期的批一起进这里，最多 VISION_CALLS 个同时在读。
+# 再往外还有 claude_cli 的 CLAUDE_PARALLEL 和三个应用共用的 claude_gate（都要够大才真能并发到这个数）。
+_pool = None
+_pool_lock = __import__('threading').Lock()
+
+
+def calls_at_once():
+    try:
+        return max(1, int(os.environ.get('VISION_CALLS') or 32))
+    except ValueError:
+        return 32
+
+
+def _vision_pool():
+    global _pool
+    from concurrent.futures import ThreadPoolExecutor
+    with _pool_lock:
+        if _pool is None or _pool._max_workers != calls_at_once():
+            _pool = ThreadPoolExecutor(calls_at_once(), thread_name_prefix='vision')
+        return _pool
+
+
+def read_all(fn, xs):
+    """xs 里每一项交给 fn（一次模型调用），进共用的读图池；按原顺序返回。读图池里的任务别再往池子里交任务（会互等）。"""
+    pool = _vision_pool()
+    futs = [pool.submit(usage.bound(fn), x) for x in xs]
+    return [f.result() for f in futs]
+
+
+def episodes_at_once():
+    """同时做几期（每期要重下视频）。画面描述 scenes.py 用同一个设置。"""
+    try:
+        return max(1, int(os.environ.get('VISION_EPISODES') or 2))
+    except ValueError:
+        return 2
+
+
+def _pmap(fn, xs, n):
+    from concurrent.futures import ThreadPoolExecutor
+    if n <= 1 or len(xs) <= 1:
+        return [fn(x) for x in xs]
+    with ThreadPoolExecutor(min(n, len(xs))) as ex:
+        return list(ex.map(usage.bound(fn), xs))       # 记账归属（usage.scope 是线程局部的）带进线程池
+
+
 def triage(sheets):
-    """sheets: [(图, [编号])] → 留下的编号集合。某张缩略图读失败就全留（宁可多花一点，不漏）。"""
-    keep = set()
-    for path, ids in sheets:
+    """sheets: [(图, [编号])] → 留下的编号集合。某张缩略图读失败就全留（宁可多花一点，不漏）。几张同时读。"""
+    def one(sheet):
+        path, ids = sheet
         try:
             d = _json(_call(TRIAGE_PROMPT.format(ids=', '.join(f'#{i}' for i in ids)), [path]))
             got = {int(x) for x in d.get('keep') or [] if str(x).lstrip('#').isdigit() or isinstance(x, int)}
         except Exception:  # noqa: BLE001
             got = set(ids)
-        keep |= got & set(ids)
+        return got & set(ids)
+    keep = set()
+    for got in read_all(one, sheets):
+        keep |= got
     return keep
 
 
 def read_frames(items, lang):
     """items: [{'i', 'shown', 'said', 'img'}] → {i: card dict}。"""
-    out = {}
-    for s in range(0, len(items), READ_BATCH):
-        batch = items[s:s + READ_BATCH]
+    def one(batch):
+        out = {}
         block = '\n\n'.join(
             f"Frame {it['i']} (image {k + 1}), on screen {', '.join(_clock(a) + '-' + _clock(b) for a, b in it['shown'])}.\n"
             f"Speaker at that time: {it['said'] or '(nothing)'}" for k, it in enumerate(batch))
         try:
             d = _json(_call(READ_PROMPT.format(lang=lang, frames=block), [it['img'] for it in batch]))
         except Exception:  # noqa: BLE001
-            continue
+            return out
         ids = {it['i'] for it in batch}
         for c in d.get('cards') or []:
             try:
@@ -299,7 +355,11 @@ def read_frames(items, lang):
                 continue
             if i in ids and not c.get('skip'):
                 out[i] = c
-    return out
+        return out
+    merged = {}
+    for got in read_all(one, [items[s:s + READ_BATCH] for s in range(0, len(items), READ_BATCH)]):
+        merged.update(got)
+    return merged
 
 
 # ================= 跟转写对上 =================
@@ -359,11 +419,9 @@ def build(results_dir, task_id, video_path=None, url=None, progress=None):
         g = sample_gray(video_path, fps)
         keys = keyframes(g, fps)
         del g
-        frames = []
-        for k, kf in enumerate(keys):
-            p = os.path.join(tmp, f'k{k:03d}.jpg')
-            if grab(video_path, kf['t'], p):
-                frames.append((k, kf['t'], p))
+        paths = [os.path.join(tmp, f'k{k:03d}.jpg') for k in range(len(keys))]
+        ok = grab_many(video_path, [(kf['t'], p) for kf, p in zip(keys, paths)])
+        frames = [(k, kf['t'], p) for k, (kf, p, good) in enumerate(zip(keys, paths, ok)) if good]
         if not frames:
             raise RuntimeError('No frames could be read from the video')
         say('triage')
@@ -407,12 +465,17 @@ def estimate_usd(duration_s):
 
 
 def run_batch(results_dir, rows, on_episode=None):
-    """rows: [{'task_id', 'title', 'url'}]，一期一期做（对 B 站温和一点）。
-    on_episode(i, row, status) 每期开始 / 结束时回调。→ 每期一条 {'task_id','title','n','error'?}。"""
-    out = []
-    for i, row in enumerate(rows):
+    """rows: [{'task_id', 'title', 'url'}]，同时做 episodes_at_once() 期（默认 2，对 B 站温和一点）。
+    on_episode(i, row, status) 每期开始 / 结束时回调：开始时 i = 已做完几期，结束时 i + 1 = 已做完几期。
+    → 每期一条 {'task_id','title','n','error'?}，顺序跟 rows 一样。"""
+    import threading
+    lock = threading.Lock()
+    finished = [0]
+
+    def one(row):
         if on_episode:
-            on_episode(i, row, 'start')
+            with lock:
+                on_episode(finished[0], row, 'start')
         rec = {'task_id': row['task_id'], 'title': row.get('title') or ''}
         if load(results_dir, row['task_id']):
             rec['cached'] = True                 # 别的项目里做过：不花钱
@@ -422,7 +485,9 @@ def run_batch(results_dir, rows, on_episode=None):
             rec['n'] = len(d.get('cards') or [])
         except Exception as e:  # noqa: BLE001
             rec.update(n=0, error=str(e)[:200])
-        out.append(rec)
         if on_episode:
-            on_episode(i, rec, 'done')
-    return out
+            with lock:
+                finished[0] += 1
+                on_episode(finished[0] - 1, rec, 'done')
+        return rec
+    return _pmap(one, list(rows), episodes_at_once())

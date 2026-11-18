@@ -45,9 +45,22 @@ def _path(cdir, oid):
     return os.path.join(studio_dir(cdir), oid + '.json')
 
 
+_live = {}                 # oid -> (笔记本 id, out)：正在生成的产出，给「进行中」列表（/api/activity）
+
+
 def _save(cdir, out):
     os.makedirs(studio_dir(cdir), exist_ok=True)
     ask._write_json(_path(cdir, out['id']), out)
+    with _lock:
+        if out.get('status') == 'running':
+            _live[out['id']] = (out.get('chain') or os.path.basename(os.path.normpath(cdir)), out)
+        else:
+            _live.pop(out['id'], None)
+
+
+def live():
+    with _lock:
+        return dict(_live)
 
 
 def _summary(o):
