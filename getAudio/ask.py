@@ -1201,7 +1201,7 @@ _BARE_FOLLOWUP = re.compile(
     r'(?:can you )?(?:explain|elaborate)(?: (?:more|that|further))?|tell me more|go on|'
     r'你?(?:确定|肯定)(?:吗|嘛|么)?|真的(?:吗|嘛|么|假的)?|是(?:吗|嘛)|对(?:吗|嘛|不对)|没错(?:吧|吗)?|'
     r'为(?:什么|啥)|凭什么|怎么说|何以见得|依据呢?|出处呢?|证据呢?|详细(?:说说|讲讲|一点)|展开(?:说说|讲讲)?|再说说)'
-    r'\W*$', re.I)
+    r'[呢啊呀吧]?\W*$', re.I)
 
 
 def bare_followup(question):

@@ -76,7 +76,31 @@ t.check('最近一轮是线粒体那张，不是光合作用那张',
         p.index('photosynthesis produce') < p.lower().index('most recent exchange'))
 
 # 有内容的新问题不受影响：不把上一张闪卡硬塞进检索
+queries = []
+real_hybrid = ask.hybrid
+
+
+def spy_hybrid(corpus, terms, query_text, *a, **k):
+    queries.append(query_text)
+    return real_hybrid(corpus, terms, query_text, *a, **k)
+
+
+ask.hybrid = spy_hybrid
 got, ctx = picked_for('What does he say about chlorophyll and light?', history)
-t.check('新问题照常检索（叶绿素那张）', any(c['ep'] == 0 for c in ctx['picked']), sorted(got))
+t.check('新问题照常检索（叶绿素那张）', any('chlorophyll' in c['quote'] for c in ctx['picked']), sorted(got))
+t.check('新问题的检索里没接上最近那张闪卡', queries and 'electron transport chain' not in queries[-1], queries[-1:])
+picked_for('are you sure?', history)
+t.check('追问的检索里接上了最近那张闪卡', 'electron transport chain' in queries[-1], queries[-1:])
+ask.hybrid = real_hybrid
+
+# 认不认得出：带语气词的也算，有自己话题的不算
+for q in ('为什么呢？', '为啥呢', '真的吗？', '你确定吗', 'Are you sure?', 'why?'):
+    t.check(f'「{q}」算不带内容的追问', ask.bare_followup(q))
+for q in ('为什么线粒体有自己的 DNA 呢？', 'Why does he say that about ATP?', '呢'):
+    t.check(f'「{q}」不算', not ask.bare_followup(q))
+# 「为什么呢」之后再追问，还是钉在闪卡上，不钉在「为什么呢」上
+hist3 = history + [{'role': 'user', 'content': '为什么呢？'}, {'role': 'assistant', 'content': 'Because [#1-1].'}]
+got, _ = picked_for('are you sure?', hist3)
+t.check('「为什么呢」之后再追问：还是最近那张闪卡', len(got & mito_ids) >= 2, sorted(got))
 
 t.finish()
