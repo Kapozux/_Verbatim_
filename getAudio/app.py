@@ -2442,6 +2442,13 @@ def _chain_author_for(task_id, filename, cm=None):
     return None
 
 
+def _origin(meta):
+    """资料库的两大类：'web' 贴链接下的 / 博主频道里的（有原链接或视频 id）；'local' 自己录的、从电脑传上来的文件。"""
+    if meta.get('source_url') or meta.get('video_id') or _VID_IN_NAME.search(meta.get('filename') or ''):
+        return 'web'
+    return 'local'
+
+
 @app.route('/api/task/<task_id>')
 def api_task_status(task_id):
     """单个转写任务的状态快照（普通 JSON，不是 SSE）。
@@ -2478,6 +2485,7 @@ def api_history():
     for name, e in library.entries(limit if limit and limit > 0 else None):   # SQLite 索引，见 library.py
         author = _chain_author_for(e.get('id') or name, e.get('filename'), cm)
         e['source'] = 'pipeline' if author else 'mine'
+        e['origin'] = _origin(e)
         if author:
             e['creator'] = author
         entries.append(e)
@@ -2753,7 +2761,7 @@ def api_search():
     for name, meta, snippet in found:
         author = _chain_author_for(meta.get('id') or name, meta.get('filename'), cm)
         hits.append({**meta, 'snippet': snippet,
-                     'source': 'pipeline' if author else 'mine',
+                     'source': 'pipeline' if author else 'mine', 'origin': _origin(meta),
                      **({'creator': author} if author else {})})
     hits.sort(key=lambda e: e.get('date', ''), reverse=True)
     return jsonify(hits)

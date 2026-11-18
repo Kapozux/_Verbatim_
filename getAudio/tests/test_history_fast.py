@@ -96,4 +96,13 @@ r = c.get('/api/history?limit=12').get_json()
 t.check('limit=12 只给最新的 12 条，顺序跟完整列表一样', [e['id'] for e in r] == [e['id'] for e in full2[:12]],
         f'拿到 {len(r)} 条')
 t.check('完整列表按时间从新到旧', [e['date'] for e in full2] == sorted((e['date'] for e in full2), reverse=True))
+
+# 资料库把「本地文件」（自己录的、从电脑传的）跟「网上的」（贴链接下的、博主频道里的）分开：每条带 origin
+linked = make_transcript(R, [('00:00:01', '贴链接下的。')], title='单条链接', url='https://www.bilibili.com/video/BV1xx411c7mD')
+by_id = {e['id']: e for e in c.get('/api/history').get_json()}
+t.check('没有链接的是本地文件', all(by_id[tid].get('origin') == 'local' for tid in own))
+t.check('贴链接下的是网上的', by_id[linked].get('origin') == 'web')
+t.check('文件名里带视频 id 的旧结果也算网上的', by_id[orphan].get('origin') == 'web')
+found = {e['id']: e for e in c.get('/api/search?q=' + '单条链接').get_json()}
+t.check('搜索结果也带 origin', found.get(linked, {}).get('origin') == 'web', str(found)[:200])
 t.finish()
