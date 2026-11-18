@@ -296,7 +296,6 @@ function srcRender() {
     srcApplyFolders(box, ro);
     srcWire(box);
     srcWireTools(box);
-
     if (typeof vcWireSrc === 'function') vcWireSrc(box);
     if (typeof ntWireSrc === 'function') ntWireSrc(box);
     srcRenderRail(d, ro);

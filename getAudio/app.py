@@ -4687,7 +4687,6 @@ def api_project_sources(chain_id):
                                    'upload_date', 'thumbnail')}
             for v in state.get('videos') or []]
     have_cards = _cards_file_index(_chain_dir(chain_id))
-    import ask
     channel = None
     if state.get('url'):
         channel = {'url': state['url'], 'name': state.get('channel_name') or state.get('author') or '', 'avatar': state.get('avatar') or '',
