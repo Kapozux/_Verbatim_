@@ -25,7 +25,7 @@
 
 1. 拿视频：上传 / 本机路径的视频在转写收尾 `_finish_ok` 里留一份（`uploads/<tid>_scenes.<ext>`：上传的硬链接、本机路径软链到原件），做完删；链接来的按 `source_url` 用 `frames.download_video` 重下 ≤720p 画面。
 2. 挑帧（`scene_times`，不花钱）：160×90 灰度、每秒 2 帧（超 1 小时 1 帧）；跟这一段第一帧比**整幅画面**（不像证据卡那样剔掉在动的人），平均差 > 9 开新的一段；< 1.5 秒的段并进前一段；> 20 秒的段每 20 秒补一帧；最多 150 帧（多了均匀抽）。每段取中间那帧。
-3. 描述（`describe`）：一次 8 张图（768 宽）→ 每张一两句；第二批起带上一批最后一句，叫它「只说变了什么」。走 `frames._call` → `analyze._call_gemini_mm`：`TEXT_ENGINE=claude` 时先给本机 Claude Haiku（订阅，记 $0），失败落 Gemini flash-lite。
+3. 描述（`describe`）：一次 9 张图（`BATCH=9`，每张 768 宽，各是一张独立的图）→ 每张抄画面上的字 + 一两句画面；批之间不接话，所有批进共用读图池同时读。走 `frames._call` → `analyze._call_gemini_mm`：`TEXT_ENGINE=claude` 时先给本机 Claude Haiku（订阅，记 $0），失败落 Gemini flash-lite。
 4. 存 `results/<tid>/visual/scenes.json`（`{version, model, duration, picked, scenes: [{start, end, text, img}]}`）+ `s_<十分之一秒>.jpg` 320 宽缩略图。视频不留。
 5. 语言：有转写跟转写（`frames._lang`）；没声音默认中文，`SCENES_LANG=English` 可改。
 
@@ -35,7 +35,7 @@
 
 - 判断「没人说话」三处：没音轨（预检）；引擎交白卷（`_EmptyTranscript`）或回空文本（`_NO_SPEECH_MARKERS`：「返回空文本」等，11-16 实测 Gemini 对着纯配乐回的是这个、不是白卷）——在 `_run_transcription` 的 except 里 `_no_speech_to_scenes`，先于 OR / Gemini 后备试一次、后备也回空再试一次，都先于 Whisper；转成了但 `scenes.speech_sparse`（每分钟 < 40 字，`[音乐]` 这类不算）→ 正文照存，`_finish_ok` 自动排画面轨（`captions=True`）。
 - 挑帧（`scene_times(..., captions=True)`）：画面横切 6 条，任何一条跟这段第一帧比平均差 > 4 就切；最短 1 秒、最长 6 秒补一帧、取段里 70% 处那帧（字幕常淡入）；上限 300 帧。背景不动的一句一帧；背景在动的约每秒一帧。
-- 读：`CAPTION_PROMPT`，每帧回 `caption`（画面上的字原样抄全）+ `text`（一句画面）；4 批同时读；`merge_captions` 把连着的同一句（去掉标点空格比）并成一条。
+- 读：跟普通模式同一个 `PROMPT`（`describe()`），每帧回 `caption`（画面上的字原样抄全）+ `text`（一句画面）；所有批进共用读图池同时读；`merge_captions` 把连着的同一句（去掉标点空格比）并成一条。
 - 正文一行：`字幕　［画面］描述`（`scene_line`）；详情页画面轨里字幕正常字体在上、描述灰斜体在下。
 
 ## 没声音的视频

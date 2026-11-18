@@ -139,12 +139,13 @@ def activity(minutes=20, limit=50):
     """「进行中」列表（2026-11-16，用户：「我即使页面关了也能显示」）：没跑完的 + 最近 minutes 分钟里结束的，
     不含博主链的（origin='chain'）。新的在前。"""
     since = (datetime.now() - timedelta(minutes=minutes)).strftime('%Y-%m-%d %H:%M:%S')
+    cols = "SELECT id, filename, engine, status, error, created_at, updated_at FROM tasks WHERE COALESCE(origin, '') != 'chain' "
     with _conn() as c:
-        rows = c.execute(
-            "SELECT id, filename, engine, status, error, created_at, updated_at FROM tasks "
-            "WHERE COALESCE(origin, '') != 'chain' AND (status IN ('pending', 'running') OR updated_at >= ?) "
-            "ORDER BY created_at DESC LIMIT ?", (since, limit)).fetchall()
-    return [dict(r) for r in rows]
+        # 没跑完的全给（一次排了上百条时，早排的不能被 limit 挤掉）；limit 只管最近结束的那些
+        live = c.execute(cols + "AND status IN ('pending', 'running')").fetchall()
+        ended = c.execute(cols + "AND status NOT IN ('pending', 'running') AND updated_at >= ? "
+                          "ORDER BY created_at DESC LIMIT ?", (since, limit)).fetchall()
+    return sorted((dict(r) for r in [*live, *ended]), key=lambda r: r['created_at'] or '', reverse=True)
 
 
 def get(task_id):

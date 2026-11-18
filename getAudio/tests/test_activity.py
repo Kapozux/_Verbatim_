@@ -53,6 +53,14 @@ ph = {i['id']: i for i in c.get('/api/activity').get_json()['items']}[T1]
 t.check('改读画面的阶段带标记', ph['phase'] == 'scenes' and ph['percent'] == 10)
 t.check('博主链的不进列表、太早结束的不进', T2 not in by and T4 not in by)
 t.check('刚做完的还在列表里', by.get(T3, {}).get('status') == 'done')
+# 一次排了很多：没跑完的一条都不能被条数上限挤掉（上限只管最近结束的）
+many = [f'bulk-{k:03d}' for k in range(60)]
+for m_id in many:
+    taskdb.create(m_id, f'{m_id}.mp3', 'gemini35', None, '')
+got_ids = {r['id'] for r in taskdb.activity(limit=5)}
+t.check('排了 60 条：没跑完的全在', set(many) <= got_ids and T1 in got_ids, len(got_ids & set(many)))
+for m_id in many:
+    taskdb.delete(m_id)
 
 # 2 画面描述：排队 / 在做 / 做完都看得到，带标题；VISION_EPISODES 期同时做
 os.environ['VISION_EPISODES'] = '2'
@@ -75,7 +83,11 @@ scenes.build = slow_build
 tids = [make_transcript(A.config.RESULTS_FOLDER, [('00:00', 'x')], title=f'Ep {k}') for k in range(4)]
 for tid in tids:
     scenes.queue(A.config.RESULTS_FOLDER, tid, url='https://example.com/v')
-time.sleep(0.3)
+for _ in range(100):                    # 等两个 worker 都进了 build（定死 sleep 在慢机器上不保证）
+    with lk:
+        if live[0] == 2:
+            break
+    time.sleep(0.05)
 mid = [i for i in c.get('/api/activity').get_json()['items'] if i['kind'] == 'scenes']
 gate.set()
 for _ in range(100):

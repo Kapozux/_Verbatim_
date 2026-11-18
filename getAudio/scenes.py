@@ -162,7 +162,10 @@ def _read_batch(batch, lang):
     except Exception:  # noqa: BLE001
         return {}
     out = {}
-    for c in d.get('scenes') or []:
+    rows = d.get('scenes') if isinstance(d, dict) else None
+    for c in rows if isinstance(rows, list) else []:
+        if not isinstance(c, dict):
+            continue
         try:
             k = int(c.get('n'))
         except (TypeError, ValueError):
@@ -388,7 +391,14 @@ def use_captions_as_body(results_dir, tid):
         meta['has_summary'] = True
         write('meta.json', meta)
     except Exception as e:  # noqa: BLE001
+        # 旧摘要写的是那段编出来的话：重写不成就删掉，别让历史页和起标题接着用它
         print(f'[scenes] {tid[:8]}: summary failed: {e}')
+        try:
+            os.remove(os.path.join(tdir, 'summary.json'))
+        except OSError:
+            pass
+        meta['has_summary'] = False
+        write('meta.json', meta)
     try:
         from enrich import enrich_task
         enrich_task(tdir)
