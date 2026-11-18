@@ -1615,7 +1615,9 @@ def _run_transcription(task_id, filepath, engine, original_filename, q,
         if not fell_back and engine in ('openrouter', 'gemini', 'gemini35', 'agy_flash', 'agy_argon'):
             fell_back, e = _no_speech_to_scenes(e)      # 后备引擎也只交了白卷 / 回空
         if (not fell_back and not requeued and not halted and engine != 'whisper'
-                and (fallback_whisper or content_block or empty_out or quota_out)):
+                and (fallback_whisper or content_block or empty_out or quota_out
+                     # 只转一段的不走读画面那条，引擎回空文本（报的是普通错误）时跟白卷一样落 Whisper
+                     or ((extra_meta or {}).get('clip') and _no_speech(e)))):
             try:
                 why = ('Content-blocked by Gemini (deterministic)' if content_block
                        else f'{engine} 额度用完' if quota_out

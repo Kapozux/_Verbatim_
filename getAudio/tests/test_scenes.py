@@ -316,13 +316,33 @@ A.run_transcription(TID8, src8, 'openrouter', 'clip.mp4', A.tasks[TID8], None, F
                     extra_meta={'source_url': 'https://example.com/v', 'clip': '*600-900'}, summarize=False)
 _tw.transcribe_audio, A._on_battery = real_tw, real_batt
 print('10c 片段白卷：', taskdb.get(TID8)['status'], len(calls) - n_calls, whisper_ran)
-t.check('只转一段的白卷：不读整个视频的画面', len(calls) == n_calls
-        and not os.path.exists(scenes.scenes_path(A.config.RESULTS_FOLDER, TID8)))
+t.check('只转一段的白卷：不读整个视频的画面，照旧落本机 Whisper，都没转出来就记失败', len(calls) == n_calls
+        and not os.path.exists(scenes.scenes_path(A.config.RESULTS_FOLDER, TID8))
+        and whisper_ran == [1] and taskdb.get(TID8)['status'] == 'failed', (whisper_ran, taskdb.get(TID8)['status']))
+# 引擎回空文本（普通错误，不是白卷那个异常）的片段：也落 Whisper，不直接判失败
+TID9 = '66666666-2222-3333-4444-555555555555'
+src9 = os.path.join(A.config.UPLOAD_FOLDER, f'{TID9}.mp4')
+with open(CAPV, 'rb') as fi, open(src9, 'wb') as fo:
+    fo.write(fi.read())
+transcribe_openrouter.transcribe_audio = raise_empty
+taskdb.create(TID9, 'clip.mp4', 'openrouter', None, src9)
+A.tasks[TID9] = _q.Queue()
+whisper_ran.clear()
+_tw.transcribe_audio = lambda *a, **k: whisper_ran.append(1) or [{'start': 0.0, 'end': 2.0, 'text': '片段里有人说话'}]
+A._on_battery = lambda: False
+n_calls = len(calls)
+A.run_transcription(TID9, src9, 'openrouter', 'clip.mp4', A.tasks[TID9], None, False, False, offset_sec=600,
+                    extra_meta={'source_url': 'https://example.com/v', 'clip': '*600-900'}, summarize=False)
+_tw.transcribe_audio, A._on_battery = real_tw, real_batt
+m9 = json.load(open(os.path.join(A.config.RESULTS_FOLDER, TID9, 'meta.json'))) if taskdb.get(TID9)['status'] == 'done' else {}
+t.check('片段回空文本：落 Whisper 转出来，不读画面', whisper_ran == [1] and m9.get('engine') == 'whisper' and len(calls) == n_calls,
+        (whisper_ran, taskdb.get(TID9)['status'], taskdb.get(TID9).get('error')))
 
 # 10d 模型回的 JSON 形状不对（根不是对象 / 条目不是对象）：跳过，不让整期失败
 real_call = frames._call
 one = [{'i': 0, 'start': 0, 'end': 1, 'img': b''}]
-for bad in ('[1, 2]', '{"scenes": "nope"}', '{"scenes": [3, null, {"n": 1, "text": "ok"}]}'):
+for bad in ('[1, 2]', '{"scenes": "nope"}', '{"scenes": [3, null, {"n": 1, "text": "ok"}]}',
+            '{"scenes": [{"n": 1e999, "text": "x"}, {"n": 1, "text": "ok"}]}'):
     frames._call = lambda prompt, images, bad=bad: bad
     try:
         got = scenes._read_batch(one, 'zh')
@@ -422,6 +442,17 @@ def summ_down(text):
 _summ.summarize_transcript = summ_down
 ok13b = scenes.use_captions_as_body(RD, T13b)
 _summ.summarize_transcript = lambda text: {'overview': 'OV:' + text[:20], 'sections': []}
+# 摘要那边不抛错、只回 None（接口错 / 解析不了）：一样删掉旧摘要，不能写一个 null 进去还标成有摘要
+T13c = make_transcript(RD, love, title='旧摘要2', engine='openrouter')
+mc = json.load(open(os.path.join(RD, T13c, 'meta.json'))); mc.update(duration_seconds=476, has_summary=True)
+json.dump(mc, open(os.path.join(RD, T13c, 'meta.json'), 'w'))
+json.dump({'overview': '一段情话'}, open(os.path.join(RD, T13c, 'summary.json'), 'w'), ensure_ascii=False)
+scenes_doc(T13c, 476)
+_summ.summarize_transcript = lambda text: None
+ok13c = scenes.use_captions_as_body(RD, T13c)
+_summ.summarize_transcript = lambda text: {'overview': 'OV:' + text[:20], 'sections': []}
+t.check('编的话：摘要回 None 也删掉旧摘要', ok13c and not os.path.exists(os.path.join(RD, T13c, 'summary.json'))
+        and json.load(open(os.path.join(RD, T13c, 'meta.json'))).get('has_summary') is False)
 t.check('编的话：摘要重写失败就删掉旧摘要', ok13b and not os.path.exists(os.path.join(RD, T13b, 'summary.json'))
         and json.load(open(os.path.join(RD, T13b, 'meta.json'))).get('has_summary') is False)
 

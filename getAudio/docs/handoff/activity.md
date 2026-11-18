@@ -31,7 +31,7 @@
 - **共用读图池** `frames.read_all`：所有期的读图请求（证据卡的分拣、读原图；画面描述普通 + 字幕模式）进同一个池子，最多 `VISION_CALLS`（默认 32）个同时读。画面描述的批之间不再接上一批的最后一句（才能一起读）。
 - `VISION_EPISODES`（默认 2）：同时几期在**下视频、取帧**（B 站风控，别开太大）。
 - 取帧并行（`frames.grab_many`，8 个 ffmpeg）。
-- 真正的上限还有两道闸：`CLAUDE_PARALLEL`（代码默认 20）和三个应用共用的 `claude_gate`（`CLAUDE_GATE_CAP` 默认 24、留 4 给交互）——**不调大这两个，VISION_CALLS 开多少都只有 ~20**。本机 `.env` 11-16 已调成 64 / 72（见上面「现状」），所以这里实际上限是 `VISION_CALLS=64`。`visual` 是 batch 优先级，给提问让路。
+- 真正的上限还有两道闸：`CLAUDE_PARALLEL`（`claude_cli.py` 默认 6）和三个应用共用的 `claude_gate`（`CLAUDE_GATE_CAP` 默认 24、留 4 给交互）——**不调大这两个，VISION_CALLS 开多少都只有 `CLAUDE_PARALLEL` 那么多**（默认 6）。本机 `.env` 11-16 已调成 64 / 72（见上面「现状」），所以这里实际上限是 `VISION_CALLS=64`。`visual` 是 batch 优先级，给提问让路。
 - 线程池里的调用用 `usage.bound` 带上记账归属。
 
 ### 实测（11-16，scratch `.claude/scratch-data/vision-conc/`）

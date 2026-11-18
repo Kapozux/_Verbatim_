@@ -168,7 +168,7 @@ def _read_batch(batch, lang):
             continue
         try:
             k = int(c.get('n'))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):      # 1e999 解析成 inf，int(inf) 抛 OverflowError
             continue
         if not 1 <= k <= len(batch):
             continue
@@ -387,7 +387,10 @@ def use_captions_as_body(results_dir, tid):
     try:
         from summarize import summarize_transcript
         with usage.scope(ref=tid):
-            write('summary.json', summarize_transcript(full))
+            summary = summarize_transcript(full)
+        if not summary:                     # 接口错 / 解析不了时它返回 None，不抛错
+            raise RuntimeError('no summary returned')
+        write('summary.json', summary)
         meta['has_summary'] = True
         write('meta.json', meta)
     except Exception as e:  # noqa: BLE001
