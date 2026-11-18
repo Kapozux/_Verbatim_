@@ -628,7 +628,10 @@ function connectBatchSSE(taskId, row) {
 
         switch (msg.type) {
             case 'queued':
-                setRowStatus(row, T('rowStatus.queued'), 'queued');
+                // 等电源（开跑前在用电池 / 转到一半拔了电）：说清楚在等什么，别只写「排队中」
+                setRowStatus(row, msg.reason === 'battery' ? T('rowStatus.waitingPower')
+                    : msg.reason === 'battery_paused' ? T('rowStatus.pausedOnBattery')
+                    : T('rowStatus.queued'), 'queued');
                 break;
 
             // 服务器抽完音频、知道时长后，按同引擎历史速度给的预估；null = 样本不够，不猜

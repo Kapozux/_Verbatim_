@@ -1032,6 +1032,13 @@ def _on_battery():
     return "'Battery Power'" in out
 
 
+# 本地 Whisper 转写过程中隔多久再查一次电源（GitHub #4：以前只在开跑前查一次，插着电开一个
+# 几小时的长文件、中途拔掉，会一直满载跑到完）。拔了就原地暂停等插电，最多等 _POWER_WAIT_S。
+_BATTERY_RECHECK_S = 60
+_POWER_POLL_S = 30
+_POWER_WAIT_S = 12 * 3600
+
+
 def run_transcription(task_id, filepath, engine, original_filename, q,
                       speaker_count=None, fallback_whisper=False,
                       model_review=False, offset_sec=0, extra_meta=None,
@@ -1243,27 +1250,41 @@ def _run_transcription(task_id, filepath, engine, original_filename, q,
             except Exception:
                 pass
 
-        def _whisper_transcribe():
-            """本地 Whisper 转写（主路径 + 云引擎失败时的兜底路径共用）。"""
+        def _wait_for_power(message, reason):
             # 用电池时原地等插电，不直接判失败：以前一拔电，几百期的 Whisper 链几秒内
             # 全部被标成失败，插电后还得手动 Continue。等久了（12 小时）或链被停了才放弃。
-            if _on_battery():
-                q.put(json.dumps({'type': 'queued',
-                                  'message': 'On battery — waiting for power before running local Whisper…'}))
-                deadline = time.monotonic() + 12 * 3600
-                while _on_battery():
-                    if time.monotonic() > deadline or _chain_stopped(chain_id, task_id):
-                        raise _OnBattery('电脑正在用电池供电，本地 Whisper 会把 CPU 全部性能核心跑满——'
-                                         '插上电源再转，或者这条改用云端引擎（Gemini 等）')
-                    time.sleep(30)
+            if not _on_battery():
+                return
+            q.put(json.dumps({'type': 'queued', 'message': message, 'reason': reason}))
+            deadline = time.monotonic() + _POWER_WAIT_S
+            while _on_battery():
+                if time.monotonic() >= deadline or _chain_stopped(chain_id, task_id):
+                    raise _OnBattery('电脑正在用电池供电，本地 Whisper 会把 CPU 全部性能核心跑满——'
+                                     '插上电源再转，或者这条改用云端引擎（Gemini 等）')
+                time.sleep(_POWER_POLL_S)
+
+        def _whisper_transcribe():
+            """本地 Whisper 转写（主路径 + 云引擎失败时的兜底路径共用）。"""
+            _wait_for_power('On battery — waiting for power before running local Whisper…', 'battery')
             from transcribe_whisper import transcribe_audio
+
+            # 转写过程中也查：进度回调里隔 _BATTERY_RECHECK_S 秒看一次，拔了电就停在这里
+            # （Whisper 解码循环跟着停住）等插电，等不到就抛 _OnBattery 让这期失败。
+            last_check = [time.monotonic()]
+
+            def whisper_progress(percent):
+                if time.monotonic() - last_check[0] >= _BATTERY_RECHECK_S:
+                    _wait_for_power('Unplugged mid-transcription (on battery) — paused until power is back…',
+                                    'battery_paused')
+                    last_check[0] = time.monotonic()
+                progress_cb(percent)
 
             q.put(json.dumps({
                 'type': 'progress',
                 'percent': 0,
                 'message': 'Loading Whisper model (first run may download)...',
             }))
-            raw_segments = transcribe_audio(input_path, progress_callback=progress_cb)
+            raw_segments = transcribe_audio(input_path, progress_callback=whisper_progress)
             segs = []
             for seg in raw_segments:
                 item = {
