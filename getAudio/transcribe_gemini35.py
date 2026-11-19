@@ -21,6 +21,7 @@ diarization 链路因为是单次调用处理整个文件，没有这个问题�
 （绝大多数单集播客/会议录音）完全不受影响。
 """
 
+import math
 import mimetypes
 import os
 import re
@@ -53,19 +54,42 @@ _rate_lock = threading.Lock()
 _rate_until = 0.0
 
 
-def _wait_rate_gate():
+def _wait_rate_gate(deadline=None):
+    """等限流的闸放开。闸要到 deadline（这次调用的耐心上限）之后才开 → 不等了，返回 False。"""
     while True:
         with _rate_lock:
-            left = _rate_until - time.time()
+            until = _rate_until
+        left = until - time.time()
         if left <= 0:
-            return
+            return True
+        if deadline is not None and until > deadline:
+            return False
         time.sleep(min(left, 30))
 
 
-def _push_rate_gate(text):
+# 服务端没说等多久时的默认：限的是每分钟的量，等满一分钟窗口才肯定过得去（GitHub #7）
+_RATE_DEFAULT_WAIT_SECONDS = 60.0
+_RETRY_IN = re.compile(r'retry in (?:(\d+)h)?(?:(\d+)m)?(\d+(?:\.\d+)?)s', re.I)
+
+
+def _rate_wait_seconds(text, retry_after=None):
+    """429 之后该等几秒：先看报错正文里的 "retry in 45s" / "retry in 1m5.5s"，
+    没有再看 Retry-After 响应头（秒数），都没有就等一个完整的每分钟窗口。"""
+    m = _RETRY_IN.search(text or '')
+    if m:
+        return int(m.group(1) or 0) * 3600 + int(m.group(2) or 0) * 60 + float(m.group(3))
+    try:
+        ra = float(retry_after)
+        if ra >= 0 and math.isfinite(ra):          # 0 = 现在就能再试
+            return ra
+    except (TypeError, ValueError):
+        pass
+    return _RATE_DEFAULT_WAIT_SECONDS
+
+
+def _push_rate_gate(text, retry_after=None):
     global _rate_until
-    m = re.search(r'retry in (\d+(?:\.\d+)?)s', text or '')
-    wait = float(m.group(1)) if m else 30.0
+    wait = _rate_wait_seconds(text, retry_after)
     with _rate_lock:
         _rate_until = max(_rate_until, time.time() + wait + 2)
 
@@ -171,7 +195,8 @@ def _call_with_retry(client, uploaded, chunk_path, offset_sec, chunk_seconds):
     rate_deadline = time.time() + _RATE_LIMIT_PATIENCE_SECONDS
     while attempt < _MAX_ATTEMPTS:
         attempt += 1
-        _wait_rate_gate()
+        if not _wait_rate_gate(rate_deadline):
+            raise RuntimeError(f'Gemini 3.5 Transcribe 调用失败: 限流要等的时间超过上限（{last_err}）')
         try:
             resp = requests.post(
                 _INTERACTIONS_URL,
@@ -196,7 +221,7 @@ def _call_with_retry(client, uploaded, chunk_path, offset_sec, chunk_seconds):
                 timeout=180,
             )
             if resp.status_code == 429 and time.time() < rate_deadline:
-                _push_rate_gate(resp.text)
+                _push_rate_gate(resp.text, resp.headers.get('Retry-After'))
                 last_err = RuntimeError(f'HTTP 429: {resp.text[:300]}')
                 attempt -= 1                     # 限流等待不占重试次数
                 continue
