@@ -754,7 +754,7 @@ def start(cdir, chain_id, kind, focus='', n=None, scope=None, outline=None, lang
                 pool = pool + [c for c in corpus['cards'] if c['id'] not in have and outline in
                                (corpus['episodes'][c['ep']].get('doc_id'), corpus['episodes'][c['ep']].get('task_id'))]
             if not pool:
-                raise RuntimeError('Nothing to work from in the selected sources')
+                raise ask.empty_error(cdir, 'Nothing to work from in the selected sources', out['scope'])
             lng = _lang(corpus, lang, focus)
             pinfo = {}
             if kind == 'coverage':

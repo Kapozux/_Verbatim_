@@ -130,6 +130,14 @@ const STRINGS = {
 
         "src.st.converting": "Converting",
         "src.allFailed": "All {n} failed",
+        "src.notIndexed": "Transcripts not searchable yet ({n}): chat and Studio can't use them.",
+        "src.makeSearchable": "Make searchable (about {usd})",
+        "src.makeSearchableCheap": "Make searchable (under $0.01)",
+        "nb.notIndexedT": "Nothing to ask about yet",
+        "nb.notIndexedD": "Transcripts from {names} aren't searchable yet, and there are no evidence cards. Make them searchable and you can ask about them here.",
+        "src.indexingCreator": "Making transcripts searchable…",
+        "src.indexStarted": "Making transcripts searchable. You can ask about them now; meaning-based search catches up in a few minutes.",
+        "ask.notIndexed": "Nothing to search yet. Transcripts from {names} aren't searchable, and there are no evidence cards. In Sources on the left, click \"Make searchable\" under {names}.",
 
         "src.st.ready": "Ready",
 
@@ -1827,6 +1835,14 @@ const STRINGS = {
 
         "src.st.converting": "转换中",
         "src.allFailed": "{n} 期全失败",
+        "src.notIndexed": "{n} 期转写还没加进检索，对话和工作台用不到。",
+        "src.makeSearchable": "加进检索（约 {usd}）",
+        "src.makeSearchableCheap": "加进检索（不到 $0.01）",
+        "nb.notIndexedT": "还没有能问的材料",
+        "nb.notIndexedD": "{names} 有转写，但没抽证据卡，转写也还没加进检索。加进检索之后就能在这里问。",
+        "src.indexingCreator": "正在把转写加进检索…",
+        "src.indexStarted": "正在把转写加进检索。现在就能问，按意思找要再等几分钟。",
+        "ask.notIndexed": "还没有能找的材料：{names} 有转写，但没抽证据卡，转写也没加进检索。在左边「来源」里 {names} 那一组下面点「加进检索」。",
 
         "src.st.ready": "已就绪",
 

@@ -730,7 +730,7 @@ def _setup(cdir, scope, focus, lang):
     pool = ask.scope_pool(corpus, scope)
     pool = corpus['cards'] if pool is None else pool
     if not pool:
-        raise RuntimeError('Nothing to work from in the selected sources')
+        raise ask.empty_error(cdir, 'Nothing to work from in the selected sources', scope)
     lng = study._lang(corpus, lang, focus)
     cards, thinned = study._pick(corpus, pool, focus, what='slide deck', lang=lng)
     return corpus, pool, cards, thinned, lng

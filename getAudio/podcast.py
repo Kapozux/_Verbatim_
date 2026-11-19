@@ -713,7 +713,7 @@ def start(cdir, chain_id, fmt='deep_dive', length='default', focus='', scope=Non
         pool = ask.scope_pool(corpus, out['scope'])
         pool = corpus['cards'] if pool is None else pool
         if not pool:
-            raise RuntimeError('Nothing to work from in the selected sources')
+            raise ask.empty_error(cdir, 'Nothing to work from in the selected sources', out['scope'])
         lng = study._lang(corpus, lang, focus)
         hosts = HOSTS['zh' if lng.startswith('Chinese') else 'en']
         pinfo = {}
