@@ -3233,7 +3233,8 @@ button.source-badge:hover { border-color: var(--ink); color: var(--ink); }
   .lib-selects { width: 100%; }
   .lib-select { flex: 1 1 130px; max-width: 100%; min-width: 0; }
   .lib-fold-peek { display: none; }
-  .lib-fold-name { max-width: 60%; }
+  .lib-fold-name { max-width: 60%; flex-shrink: 1; min-width: 0; }
+  .lib-fold-meta { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .lib-fold-body { padding-left: 10px; padding-right: 10px; }
   .lib-fold-only { display: none; }
 }

@@ -2442,9 +2442,23 @@ def _chain_author_for(task_id, filename, cm=None):
     return None
 
 
+_VID_AT_END = re.compile(r'\[([A-Za-z0-9_-]{6,20})\](?:\.\w{1,5})?$')
+
+
+def _name_has_video_id(filename):
+    """文件名是不是 yt-dlp 起的「标题 [视频 id].扩展名」。方括号要在最后，里面得像个 id：
+    有字母，并且有数字或大小写混着——「讲座 [2024-09-01].m4a」「访谈 [final].mp3」这种自己起的名字不算。"""
+    m = _VID_AT_END.search(filename or '')
+    if not m:
+        return False
+    s = m.group(1)
+    letters = re.sub(r'[^A-Za-z]', '', s)
+    return bool(letters) and (any(ch.isdigit() for ch in s) or (letters != letters.lower() and letters != letters.upper()))
+
+
 def _origin(meta):
     """资料库的两大类：'web' 贴链接下的 / 博主频道里的（有原链接或视频 id）；'local' 自己录的、从电脑传上来的文件。"""
-    if meta.get('source_url') or meta.get('video_id') or _VID_IN_NAME.search(meta.get('filename') or ''):
+    if meta.get('source_url') or meta.get('video_id') or _name_has_video_id(meta.get('filename')):
         return 'web'
     return 'local'
 

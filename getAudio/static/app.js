@@ -1231,6 +1231,10 @@ function libHours(seconds) {
     return T('library.minutes', { n: Math.max(1, Math.round(seconds / 60)) });
 }
 
+function libCountLabel(n) {
+    return T(n === 1 ? 'library.dayCountOne' : 'library.dayCount', { n });
+}
+
 async function renderHistory() {
     // 资料库没打开就不拉：全表 4000 多条、5 MB，转写页上转完一条也会调到这里；切到资料库时 switchTab 会再画
     const lib = document.getElementById('tab-library');
@@ -1241,8 +1245,9 @@ async function renderHistory() {
             ? `/api/search?q=${encodeURIComponent(query)}`
             : '/api/history';
         const resp = await fetch(url);
-        libEntries = await resp.json();
-        if (query !== (searchInput.value || '').trim()) return;   // 等的时候又打了字：这次的结果作废
+        const entries = await resp.json();
+        if (query !== (searchInput.value || '').trim()) return;   // 等的时候又打了字：这次的结果作废，也不能存下来（后面换筛选会拿它重画）
+        libEntries = entries;
         drawLibrary();
     } catch {
         historyList.innerHTML = `<p class="history-empty">${T('library.failedToLoad')}</p>`;
@@ -1367,7 +1372,7 @@ function buildDayHeader(row) {
     }
     const n = document.createElement('span');
     n.className = 'lib-day-n';
-    n.textContent = T('library.dayCount', { n: row.n });
+    n.textContent = libCountLabel(row.n);
     h.appendChild(n);
     return h;
 }
@@ -1386,7 +1391,7 @@ function buildFold(row) {
     toggle.querySelector('.lib-fold-name').textContent = row.creator;
     toggle.querySelector('.lib-fold-meta').textContent = total
         ? T('library.foldMeta', { n: row.items.length, dur: libHours(total) })
-        : T('library.dayCount', { n: row.items.length });
+        : libCountLabel(row.items.length);
     toggle.querySelector('.lib-fold-peek').textContent = row.items.slice(0, 3).map(e => e.ai_title || e.filename).join(' · ');
     const only = document.createElement('button');
     only.type = 'button';
