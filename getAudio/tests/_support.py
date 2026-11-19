@@ -71,6 +71,9 @@ def isolate(prefix, cheap_route=False, real_moye=False):
     os.environ['ASK_ENGINE'] = ''
     os.environ['TEXT_ENGINE'] = ''
     os.environ['CARDS_ENGINE'] = ''
+    # GPT（codex exec，CODEX_ENGINE=on）也一样是子进程：.env 开着时 test_llmroute / test_custom_llm 会真去起 codex、
+    # 卡住还花订阅额度（GitHub #8）。要测它的测试在 isolate() 之后自己设、并打桩
+    os.environ['CODEX_ENGINE'] = ''
     os.environ['AGY_QUOTA_WAIT'] = ''          # 作者 .env 开着「等额度」：测试里不能真等
     os.environ['VOICES_AUTO'] = ''
     os.environ["CLAUDE_GATE"] = ""
