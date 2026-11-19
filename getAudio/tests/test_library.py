@@ -120,7 +120,7 @@ open(os.path.join(broken, 'meta.json'), 'w').write('{坏的')
 
 library.sync()
 new, old = c.get('/api/history').get_json(), old_history()
-t.check('列表跟逐个读文件一样（内容、从新到旧）', [{k: v for k, v in x.items() if k != 'source'} for x in new] == old,
+t.check('列表跟逐个读文件一样（内容、从新到旧）', [{k: v for k, v in x.items() if k not in ('source', 'origin')} for x in new] == old,
         f'{[x["id"][:6] for x in new]} vs {[x["id"][:6] for x in old]}')
 same_as_files('搜索结果、命中片段跟逐个读文件一样')
 

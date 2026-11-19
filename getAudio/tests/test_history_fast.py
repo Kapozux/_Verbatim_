@@ -96,4 +96,29 @@ r = c.get('/api/history?limit=12').get_json()
 t.check('limit=12 只给最新的 12 条，顺序跟完整列表一样', [e['id'] for e in r] == [e['id'] for e in full2[:12]],
         f'拿到 {len(r)} 条')
 t.check('完整列表按时间从新到旧', [e['date'] for e in full2] == sorted((e['date'] for e in full2), reverse=True))
+
+# 资料库把「本地文件」（自己录的、从电脑传的）跟「网上的」（贴链接下的、博主频道里的）分开：每条带 origin
+linked = make_transcript(R, [('00:00:01', '贴链接下的。')], title='单条链接', url='https://www.bilibili.com/video/BV1xx411c7mD')
+by_id = {e['id']: e for e in c.get('/api/history').get_json()}
+t.check('没有链接的是本地文件', all(by_id[tid].get('origin') == 'local' for tid in own))
+t.check('贴链接下的是网上的', by_id[linked].get('origin') == 'web')
+t.check('文件名里带视频 id 的旧结果也算网上的', by_id[orphan].get('origin') == 'web')
+found = {e['id']: e for e in c.get('/api/search?q=' + '单条链接').get_json()}
+t.check('搜索结果也带 origin', found.get(linked, {}).get('origin') == 'web', str(found)[:200])
+
+# 只有 video_id（下载器写的）、没有原链接、文件名里也没有 id：也是网上的
+only_vid = make_transcript(R, [('00:00:01', '只有视频编号。')], title='只有视频编号')
+mp = os.path.join(R, only_vid, 'meta.json')
+m = json.load(open(mp, encoding='utf-8'))
+m['video_id'] = 'dQw4w9WgXcQ'
+write_json(mp, m)
+# 自己起的名字里带方括号（日期、普通单词）：还是本地文件
+dated = make_transcript(R, [('00:00:01', '讲座录音。')], title='lecture [2024-09-01]')
+worded = make_transcript(R, [('00:00:01', '访谈录音。')], title='interview [final]')
+by_id = {e['id']: e for e in c.get('/api/history').get_json()}
+t.check('只有 video_id 的也算网上的', by_id[only_vid].get('origin') == 'web', by_id[only_vid].get('origin'))
+t.check('文件名带 [日期] 的是本地文件', by_id[dated].get('origin') == 'local', by_id[dated].get('origin'))
+t.check('文件名带 [普通单词] 的是本地文件', by_id[worded].get('origin') == 'local', by_id[worded].get('origin'))
+found = {e['id']: e for e in c.get('/api/search?q=' + '只有视频编号').get_json()}
+t.check('搜索里只有 video_id 的也算网上的', found.get(only_vid, {}).get('origin') == 'web', str(found)[:200])
 t.finish()

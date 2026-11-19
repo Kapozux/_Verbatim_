@@ -33,7 +33,6 @@ const clearHistoryBtn = document.getElementById('clear-history-btn');
 const historyList = document.getElementById('history-list');
 const historyCount = document.getElementById('history-count');
 const searchInput = document.getElementById('search-input');
-const engineFilters = document.getElementById('engine-filters');
 const enrichBtn = document.getElementById('enrich-btn');
 
 // ========== DOM: Detail view ==========
@@ -1147,8 +1146,6 @@ function transcriptDownloadName(record, ext) {
 
 // ========== History (server API) ==========
 // 搜索 + 引擎筛选状态
-let activeEngineFilter = '';
-let activeSourceFilter = '';    // '' | 'mine' | 'pipeline'
 let searchTimer = null;
 
 // 转写页右栏「最近转写」：最新 12 条，复用资料库的卡片，整卡可点进详情
@@ -1173,8 +1170,73 @@ async function renderRecent() {
     } catch { box.innerHTML = `<p class="history-empty">${T('library.failedToLoad')}</p>`; }
 }
 
+// ---------- 资料库列表：来源（本地 / 网上）→ 博主 / 合集 → 转写时间 → 引擎，按天分组，同一天同一博主的一批折成一行 ----------
+const libF = { origin: '', creator: '', when: '', engine: '' };
+const LIB_NONE = '\u0000none';      // 「没有博主的单条」
+const LIB_FOLD_MIN = 4;             // 同一天同一博主到这个数就折起来
+const LIB_CHUNK = 120;              // 一次画多少行，滚到底再画下一批（全库 4000 多条，一次全画要卡一下）
+let libEntries = [];
+let libRows = [];
+let libDrawn = 0;
+const libOpenFolds = new Set();
+const libSentinel = document.createElement('div');
+libSentinel.className = 'lib-sentinel';
+const libObserver = new IntersectionObserver(es => { if (es.some(e => e.isIntersecting)) drawMoreRows(); });
+
+const libCreatorOf = e => e.creator || LIB_NONE;
+const libDay = e => String(e.date || '').slice(0, 10);
+function libLocalDay(offset) {
+    const d = new Date(Date.now() - offset * 86400000);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+function libWhenMatch(e, when) {
+    const day = libDay(e);
+    if (when === 'today') return day === libLocalDay(0);
+    if (when === '7d') return day >= libLocalDay(6);
+    return day.startsWith(when);
+}
+function libCount(list, keyOf) {
+    const m = new Map();
+    list.forEach(e => { const k = keyOf(e); m.set(k, (m.get(k) || 0) + 1); });
+    return m;
+}
+function libFillSelect(sel, options, value) {
+    sel.innerHTML = '';
+    options.forEach(([v, label]) => {
+        const o = document.createElement('option');
+        o.value = v; o.textContent = label;
+        sel.appendChild(o);
+    });
+    sel.value = options.some(([v]) => v === value) ? value : '';
+    sel.classList.toggle('on', !!sel.value);
+    return sel.value;
+}
+function libMonthLabel(ym) {
+    const d = new Date(+ym.slice(0, 4), +ym.slice(5, 7) - 1, 1);
+    return isNaN(d) ? ym : d.toLocaleDateString(document.documentElement.lang || 'en', { year: 'numeric', month: 'long' });
+}
+function libDayLabel(day) {
+    const d = new Date(+day.slice(0, 4), +day.slice(5, 7) - 1, +day.slice(8, 10));
+    if (isNaN(d)) return { name: day || '?', sub: '' };
+    const opt = { month: 'long', day: 'numeric', weekday: 'short' };
+    if (d.getFullYear() !== new Date().getFullYear()) opt.year = 'numeric';
+    const full = d.toLocaleDateString(document.documentElement.lang || 'en', opt);
+    if (day === libLocalDay(0)) return { name: T('library.whenToday'), sub: full };
+    if (day === libLocalDay(1)) return { name: T('library.whenYesterday'), sub: full };
+    return { name: full, sub: '' };
+}
+function libHours(seconds) {
+    const h = seconds / 3600;
+    if (h >= 1) return T('library.hours', { n: h >= 10 ? Math.round(h) : h.toFixed(1) });
+    return T('library.minutes', { n: Math.max(1, Math.round(seconds / 60)) });
+}
+
+function libCountLabel(n) {
+    return T(n === 1 ? 'library.dayCountOne' : 'library.dayCount', { n });
+}
+
 async function renderHistory() {
-    // 资料库没打开就不拉：全表 3000 多条、3 MB，转写页上转完一条也会调到这里；切到资料库时 switchTab 会再画
+    // 资料库没打开就不拉：全表 4000 多条、5 MB，转写页上转完一条也会调到这里；切到资料库时 switchTab 会再画
     const lib = document.getElementById('tab-library');
     if (lib && !lib.classList.contains('active')) return;
     const query = (searchInput.value || '').trim();
@@ -1183,29 +1245,177 @@ async function renderHistory() {
             ? `/api/search?q=${encodeURIComponent(query)}`
             : '/api/history';
         const resp = await fetch(url);
-        let entries = await resp.json();
-
-        if (activeEngineFilter) {
-            entries = entries.filter(e => e.engine === activeEngineFilter);
-        }
-        if (activeSourceFilter) {
-            entries = entries.filter(e => (e.source || 'mine') === activeSourceFilter);
-        }
-
-        historyCount.textContent = entries.length ? `(${entries.length})` : '';
-
-        if (entries.length === 0) {
-            historyList.innerHTML = query
-                ? `<p class="history-empty">${T('library.noMatches')}</p>`
-                : `<p class="history-empty">${T('library.noTranscripts')}</p>`;
-            return;
-        }
-
-        historyList.innerHTML = '';
-        entries.forEach(entry => historyList.appendChild(buildHistoryCard(entry, { pick: true })));
+        const entries = await resp.json();
+        if (query !== (searchInput.value || '').trim()) return;   // 等的时候又打了字：这次的结果作废，也不能存下来（后面换筛选会拿它重画）
+        libEntries = entries;
+        drawLibrary();
     } catch {
         historyList.innerHTML = `<p class="history-empty">${T('library.failedToLoad')}</p>`;
     }
+}
+
+// 四层筛选一层套一层：每个下拉里的数字是「前面几层选完以后还剩多少」
+function drawLibrary() {
+    const query = (searchInput.value || '').trim();
+    const sourceFilters = document.getElementById('source-filters');
+    const byOrigin = libCount(libEntries, e => e.origin || 'local');
+    sourceFilters.querySelectorAll('.chip').forEach(chip => {
+        const o = chip.dataset.origin || '';
+        chip.classList.toggle('active', o === libF.origin);
+        chip.querySelector('.chip-n').textContent = o ? (byOrigin.get(o) || 0) : libEntries.length;
+    });
+    let list = libF.origin ? libEntries.filter(e => (e.origin || 'local') === libF.origin) : libEntries;
+
+    const creators = [...libCount(list, libCreatorOf)].sort((a, b) => (a[0] === LIB_NONE) - (b[0] === LIB_NONE) || b[1] - a[1]);
+    const named = creators.filter(([k]) => k !== LIB_NONE).length;
+    libF.creator = libFillSelect(document.getElementById('lib-creator'),
+        [['', T('library.creatorAll', { n: named })],
+         ...creators.map(([k, n]) => [k, `${k === LIB_NONE ? T('library.creatorNone') : k} (${n})`])], libF.creator);
+    if (libF.creator) list = list.filter(e => libCreatorOf(e) === libF.creator);
+
+    const months = [...libCount(list, e => libDay(e).slice(0, 7))].sort((a, b) => b[0].localeCompare(a[0]));
+    const today = list.filter(e => libWhenMatch(e, 'today')).length;
+    const week = list.filter(e => libWhenMatch(e, '7d')).length;
+    libF.when = libFillSelect(document.getElementById('lib-when'),
+        [['', T('library.whenAll')],
+         ...(today ? [['today', `${T('library.whenToday')} (${today})`]] : []),
+         ...(week ? [['7d', `${T('library.when7d')} (${week})`]] : []),
+         ...months.map(([ym, n]) => [ym, `${libMonthLabel(ym)} (${n})`])], libF.when);
+    if (libF.when) list = list.filter(e => libWhenMatch(e, libF.when));
+
+    const engines = [...libCount(list, e => e.engine || 'unknown')].sort((a, b) => b[1] - a[1]);
+    libF.engine = libFillSelect(document.getElementById('lib-engine'),
+        [['', T('library.engineAll')], ...engines.map(([k, n]) => [k, `${engineLabel(k)} (${n})`])], libF.engine);
+    if (libF.engine) list = list.filter(e => (e.engine || 'unknown') === libF.engine);
+
+    document.getElementById('lib-clear').classList.toggle('hidden',
+        !(libF.origin || libF.creator || libF.when || libF.engine));
+    historyCount.textContent = list.length ? `(${list.length})` : '';
+
+    libObserver.disconnect();
+    historyList.innerHTML = '';
+    historyList.scrollTop = 0;
+    if (!list.length) {
+        const filtered = query || libEntries.length;
+        historyList.innerHTML = `<p class="history-empty">${T(filtered ? 'library.noMatches' : 'library.noTranscripts')}</p>`;
+        return;
+    }
+    // 搜索、或者已经只看一个博主时不折：要找的就是里面的某一条
+    libRows = buildLibRows(list, !query && !libF.creator);
+    libDrawn = 0;
+    historyList.appendChild(libSentinel);
+    drawMoreRows();
+}
+
+// [{day} | {fold, items} | {entry}]：一天一个标题；这一天里同一个博主够 LIB_FOLD_MIN 条的并成一行，放在它最新那条的位置
+function buildLibRows(list, fold) {
+    const rows = [];
+    let i = 0;
+    while (i < list.length) {
+        const day = libDay(list[i]);
+        let j = i;
+        while (j < list.length && libDay(list[j]) === day) j++;
+        const items = list.slice(i, j);
+        rows.push({ day, n: items.length });
+        const groups = new Map();
+        if (fold) {
+            items.forEach(e => {
+                if (!e.creator) return;
+                if (!groups.has(e.creator)) groups.set(e.creator, []);
+                groups.get(e.creator).push(e);
+            });
+        }
+        const done = new Set();
+        items.forEach(e => {
+            const g = e.creator && groups.get(e.creator);
+            if (g && g.length >= LIB_FOLD_MIN) {
+                if (done.has(e.creator)) return;
+                done.add(e.creator);
+                rows.push({ fold: `${day}|${e.creator}`, creator: e.creator, items: g });
+            } else {
+                rows.push({ entry: e });
+            }
+        });
+        i = j;
+    }
+    return rows;
+}
+
+function drawMoreRows() {
+    libObserver.unobserve(libSentinel);
+    const frag = document.createDocumentFragment();
+    const end = Math.min(libRows.length, libDrawn + LIB_CHUNK);
+    for (; libDrawn < end; libDrawn++) {
+        const row = libRows[libDrawn];
+        if (row.day !== undefined) frag.appendChild(buildDayHeader(row));
+        else if (row.fold) frag.appendChild(buildFold(row));
+        else frag.appendChild(buildHistoryCard(row.entry, { pick: true }));
+    }
+    historyList.insertBefore(frag, libSentinel);
+    if (libDrawn < libRows.length) libObserver.observe(libSentinel);   // 重新 observe 会立刻再报一次：还在视野里就接着画
+    else libSentinel.remove();
+}
+
+function buildDayHeader(row) {
+    const h = document.createElement('div');
+    h.className = 'lib-day';
+    const { name, sub } = libDayLabel(row.day);
+    const a = document.createElement('span');
+    a.className = 'lib-day-name';
+    a.textContent = name;
+    h.appendChild(a);
+    if (sub) {
+        const b = document.createElement('span');
+        b.className = 'lib-day-sub';
+        b.textContent = sub;
+        h.appendChild(b);
+    }
+    const n = document.createElement('span');
+    n.className = 'lib-day-n';
+    n.textContent = libCountLabel(row.n);
+    h.appendChild(n);
+    return h;
+}
+
+function buildFold(row) {
+    const wrap = document.createElement('div');
+    wrap.className = 'lib-fold';
+    const head = document.createElement('div');
+    head.className = 'lib-fold-head';
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'lib-fold-toggle';
+    const total = row.items.reduce((s, e) => s + (+e.duration_seconds || 0), 0);
+    toggle.innerHTML = '<svg class="lib-fold-chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>'
+        + '<span class="lib-fold-name"></span><span class="lib-fold-meta"></span><span class="lib-fold-peek"></span>';
+    toggle.querySelector('.lib-fold-name').textContent = row.creator;
+    toggle.querySelector('.lib-fold-meta').textContent = total
+        ? T('library.foldMeta', { n: row.items.length, dur: libHours(total) })
+        : libCountLabel(row.items.length);
+    toggle.querySelector('.lib-fold-peek').textContent = row.items.slice(0, 3).map(e => e.ai_title || e.filename).join(' · ');
+    const only = document.createElement('button');
+    only.type = 'button';
+    only.className = 'btn-secondary btn-small lib-fold-only';
+    only.textContent = T('library.foldOnly');
+    only.title = T('library.onlyCreatorTitle', { name: row.creator });
+    only.addEventListener('click', () => { libF.creator = row.creator; drawLibrary(); });
+    head.appendChild(toggle);
+    head.appendChild(only);
+    wrap.appendChild(head);
+    const body = document.createElement('div');
+    body.className = 'lib-fold-body';
+    wrap.appendChild(body);
+    const set = open => {
+        wrap.classList.toggle('open', open);
+        toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+        if (open && !body.childElementCount) {
+            row.items.forEach(e => body.appendChild(buildHistoryCard(e, { pick: true })));
+        }
+        if (open) libOpenFolds.add(row.fold); else libOpenFolds.delete(row.fold);
+    };
+    toggle.addEventListener('click', () => set(!wrap.classList.contains('open')));
+    set(libOpenFolds.has(row.fold));
+    return wrap;
 }
 
 function buildSourceLink(url) {
@@ -1259,11 +1469,16 @@ function buildHistoryCard(entry, { pick = false } = {}) {
     titleRow.appendChild(badge);
 
     // Pipeline 跑出来的挂上博主名，一眼看出这条不是我自己传的
-    if (entry.source === 'pipeline') {
-        const src = document.createElement('span');
+    if (entry.source === 'pipeline' || entry.creator) {
+        const src = document.createElement(pick && entry.creator ? 'button' : 'span');
         src.className = 'source-badge';
         src.textContent = entry.creator || T('nav.creators');
         src.title = T('library.fromPipelineRun');
+        if (pick && entry.creator) {          // 资料库里点博主名：只看这个博主
+            src.type = 'button';
+            src.title = T('library.onlyCreatorTitle', { name: entry.creator });
+            src.addEventListener('click', e => { e.stopPropagation(); libF.creator = entry.creator; drawLibrary(); });
+        }
         titleRow.appendChild(src);
     }
 
@@ -1338,26 +1553,21 @@ searchInput.addEventListener('input', () => {
     searchTimer = setTimeout(renderHistory, 300);
 });
 
-// 引擎筛选 chips
-engineFilters.addEventListener('click', (e) => {
+// 来源：全部 / 本地文件 / 网上的
+document.getElementById('source-filters').addEventListener('click', (e) => {
     const chip = e.target.closest('.chip');
     if (!chip) return;
-    engineFilters.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
-    chip.classList.add('active');
-    activeEngineFilter = chip.dataset.engine || '';
-    renderHistory();
+    libF.origin = chip.dataset.origin || '';
+    drawLibrary();
 });
-
-// 来源筛选 chips：我自己弄的 vs Creators 流水线跑的
-const sourceFilters = document.getElementById('source-filters');
-if (sourceFilters) sourceFilters.addEventListener('click', (e) => {
-    const chip = e.target.closest('.chip');
-    if (!chip) return;
-    sourceFilters.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
-    chip.classList.add('active');
-    activeSourceFilter = chip.dataset.source || '';
-    renderHistory();
+[['lib-creator', 'creator'], ['lib-when', 'when'], ['lib-engine', 'engine']].forEach(([id, key]) => {
+    document.getElementById(id).addEventListener('change', (e) => { libF[key] = e.target.value; drawLibrary(); });
 });
+document.getElementById('lib-clear').addEventListener('click', () => {
+    libF.origin = libF.creator = libF.when = libF.engine = '';
+    drawLibrary();
+});
+document.addEventListener('langchange', () => { if (libEntries.length) drawLibrary(); });
 
 // ========== AI 整理（批量生成标题/标签） ==========
 enrichBtn.addEventListener('click', async () => {

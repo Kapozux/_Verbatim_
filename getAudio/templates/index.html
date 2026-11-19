@@ -343,22 +343,18 @@
                                         <span data-i18n="find.btn">Ask</span>
                                     </button>
                                 </div>
-                                <div id="source-filters" class="filter-chips">
-                                    <button class="chip active" data-source="" data-i18n="library.allSources">All sources</button>
-                                    <button class="chip" data-source="mine" data-i18n="library.mine">Mine</button>
-                                    <button class="chip" data-source="pipeline" data-i18n="library.fromCreators">From Creators</button>
-                                </div>
-                                <div id="engine-filters" class="filter-chips">
-                                    <button class="chip active" data-engine="" data-i18n="library.allEngines">All</button>
-                                    <button class="chip" data-engine="openrouter" data-i18n="engine.openrouter">OpenRouter</button>
-                                    <button class="chip" data-engine="gemini" data-i18n="engine.gemini">Gemini</button>
-                                    <button class="chip" data-engine="gemini35" data-i18n="engine.gemini35">Gemini 3.5 Transcribe</button>
-                                    <button class="chip" data-engine="agy_flash" data-i18n="engine.agy_flash">Gemini Flash (subscription)</button>
-                                    <button class="chip" data-engine="agy_argon" data-i18n="engine.agy_argon">Gemini Argon (subscription)</button>
-                                    <button class="chip" data-engine="qwenasr" data-i18n="engine.qwenasr">Qwen-ASR</button>
-                                    <button class="chip" data-engine="dashscope" data-i18n="engine.dashscope">DashScope</button>
-                                    <button class="chip" data-engine="precise" data-i18n="engine.precise">Precise</button>
-                                    <button class="chip" data-engine="whisper" data-i18n="engine.whisper">Whisper</button>
+                                <div class="lib-filters">
+                                    <div id="source-filters" class="filter-chips">
+                                        <button class="chip active" data-origin=""><span data-i18n="library.originAll">All</span><span class="chip-n"></span></button>
+                                        <button class="chip" data-origin="local" data-i18n-title="library.originLocalTitle" title="Recordings and files you uploaded from this computer"><span data-i18n="library.originLocal">Local files</span><span class="chip-n"></span></button>
+                                        <button class="chip" data-origin="web" data-i18n-title="library.originWebTitle" title="Downloaded from a link, or part of a creator channel or playlist"><span data-i18n="library.originWeb">From the web</span><span class="chip-n"></span></button>
+                                    </div>
+                                    <div class="lib-selects">
+                                        <select id="lib-creator" class="lib-select" data-i18n-aria-label="library.creatorLabel" aria-label="Creator or collection"></select>
+                                        <select id="lib-when" class="lib-select" data-i18n-aria-label="library.whenLabel" aria-label="Transcribed"></select>
+                                        <select id="lib-engine" class="lib-select" data-i18n-aria-label="library.engineLabel" aria-label="Engine"></select>
+                                        <button id="lib-clear" class="lib-clear hidden" type="button" data-i18n="library.clearFilters">Clear filters</button>
+                                    </div>
                                 </div>
                             </div>
                             <section id="find-panel" class="find-panel hidden" aria-live="polite"></section>

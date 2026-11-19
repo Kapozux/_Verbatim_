@@ -2442,6 +2442,27 @@ def _chain_author_for(task_id, filename, cm=None):
     return None
 
 
+_VID_AT_END = re.compile(r'\[([A-Za-z0-9_-]{6,20})\](?:\.\w{1,5})?$')
+
+
+def _name_has_video_id(filename):
+    """文件名是不是 yt-dlp 起的「标题 [视频 id].扩展名」。方括号要在最后，里面得像个 id：
+    有字母，并且有数字或大小写混着——「讲座 [2024-09-01].m4a」「访谈 [final].mp3」这种自己起的名字不算。"""
+    m = _VID_AT_END.search(filename or '')
+    if not m:
+        return False
+    s = m.group(1)
+    letters = re.sub(r'[^A-Za-z]', '', s)
+    return bool(letters) and (any(ch.isdigit() for ch in s) or (letters != letters.lower() and letters != letters.upper()))
+
+
+def _origin(meta):
+    """资料库的两大类：'web' 贴链接下的 / 博主频道里的（有原链接或视频 id）；'local' 自己录的、从电脑传上来的文件。"""
+    if meta.get('source_url') or meta.get('video_id') or _name_has_video_id(meta.get('filename')):
+        return 'web'
+    return 'local'
+
+
 @app.route('/api/task/<task_id>')
 def api_task_status(task_id):
     """单个转写任务的状态快照（普通 JSON，不是 SSE）。
@@ -2478,6 +2499,7 @@ def api_history():
     for name, e in library.entries(limit if limit and limit > 0 else None):   # SQLite 索引，见 library.py
         author = _chain_author_for(e.get('id') or name, e.get('filename'), cm)
         e['source'] = 'pipeline' if author else 'mine'
+        e['origin'] = _origin(e)
         if author:
             e['creator'] = author
         entries.append(e)
@@ -2753,7 +2775,7 @@ def api_search():
     for name, meta, snippet in found:
         author = _chain_author_for(meta.get('id') or name, meta.get('filename'), cm)
         hits.append({**meta, 'snippet': snippet,
-                     'source': 'pipeline' if author else 'mine',
+                     'source': 'pipeline' if author else 'mine', 'origin': _origin(meta),
                      **({'creator': author} if author else {})})
     hits.sort(key=lambda e: e.get('date', ''), reverse=True)
     return jsonify(hits)

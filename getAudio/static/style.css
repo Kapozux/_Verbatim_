@@ -3194,3 +3194,47 @@ pre.cc-quote.repo-quote { font-family: var(--mono); font-size: 13px; line-height
 .cm-limits input { width: 96px; }
 .cm-capnote { margin-top: 6px; font-size: 13px; }
 .cm-stale { margin: 2px 0 8px; font-size: 13px; color: var(--coral-deep); }
+
+/* === 资料库：来源 / 博主 / 时间 / 引擎筛选，按天分组，同一天同一博主的一批折成一行 === */
+.lib-filters { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; }
+.lib-selects { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; min-width: 0; }
+.chip-n { margin-left: 6px; font-size: 13px; opacity: .65; font-variant-numeric: tabular-nums; }
+.lib-select { font: inherit; font-size: 14.5px; color: var(--muted); background: var(--card); border: 1px solid var(--line-2);
+  border-radius: 999px; padding: 5px 12px; min-height: 32px; max-width: 250px; cursor: pointer; text-overflow: ellipsis; }
+.lib-select:hover { border-color: var(--ink); color: var(--ink); }
+.lib-select.on { border-color: var(--ink); color: var(--ink); font-weight: 600; }
+.lib-clear { background: none; border: 0; padding: 4px 6px; font: inherit; font-size: 14px; color: var(--muted); text-decoration: underline; cursor: pointer; }
+.lib-clear:hover { color: var(--ink); }
+.lib-day { position: sticky; top: 0; z-index: 2; display: flex; align-items: baseline; gap: 10px; flex-shrink: 0;
+  padding: 8px 2px 7px; background: var(--card); border-bottom: 1px solid var(--line); font-size: 14.5px; }
+.lib-day:not(:first-child) { margin-top: 10px; }
+.lib-day-name { font-weight: 650; color: var(--ink); }
+.lib-day-sub { color: var(--muted); }
+.lib-day-n { margin-left: auto; color: var(--faint); font-size: 13px; font-variant-numeric: tabular-nums; }
+.lib-sentinel { flex-shrink: 0; height: 1px; }
+.lib-fold { flex-shrink: 0; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--card); }
+.lib-fold.open { border-color: var(--line-2); }
+.lib-fold-head { display: flex; align-items: center; gap: 8px; padding-right: 14px; }
+.lib-fold-toggle { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 13px 8px 13px 15px;
+  background: none; border: 0; font: inherit; color: var(--ink); text-align: left; cursor: pointer; }
+.lib-fold-chev { flex-shrink: 0; color: var(--muted); transition: transform .15s ease; }
+.lib-fold.open .lib-fold-chev { transform: rotate(90deg); }
+.lib-fold-name { font-size: 16px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-shrink: 0; max-width: 45%; }
+.lib-fold-meta { font-size: 13.5px; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.lib-fold-peek { flex: 1; min-width: 0; font-size: 13.5px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lib-fold-only { flex-shrink: 0; opacity: 0; transition: opacity .12s ease; }
+.lib-fold-head:hover .lib-fold-only, .lib-fold-only:focus-visible, .lib-fold.open .lib-fold-only { opacity: 1; }
+@media (hover: none) { .lib-fold-only { opacity: 1; } }
+.lib-fold-body { display: none; flex-direction: column; gap: 9px; padding: 2px 12px 12px 30px; }
+.lib-fold.open .lib-fold-body { display: flex; }
+button.source-badge { cursor: pointer; line-height: inherit; }
+button.source-badge:hover { border-color: var(--ink); color: var(--ink); }
+@media (max-width: 640px) {
+  .lib-selects { width: 100%; }
+  .lib-select { flex: 1 1 130px; max-width: 100%; min-width: 0; }
+  .lib-fold-peek { display: none; }
+  .lib-fold-name { max-width: 60%; flex-shrink: 1; min-width: 0; }
+  .lib-fold-meta { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .lib-fold-body { padding-left: 10px; padding-right: 10px; }
+  .lib-fold-only { display: none; }
+}
