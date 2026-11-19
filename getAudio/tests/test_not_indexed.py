@@ -79,7 +79,7 @@ names = [p['chain_id'] for p in err.get('not_indexed') or []]
 t.check('按范围问：点名范围里的人', names == [U], err or evs[-1:])
 t.check('按范围问：不捎上范围外的人', 'Gamma' not in err.get('error', ''), err)
 err, evs = ask_err({'type': 'docs'})
-t.check('只勾文档：不点博主的名', not err.get('not_indexed'), err or evs[-1:])
+t.check('只勾文档：照样报错，但不点博主的名', err.get('type') == 'error' and not err.get('not_indexed'), err or evs[-1:])
 
 # 项目里只有他（拿掉 Beta 和 Gamma）→ 整个笔记本没材料
 c.delete(f'/api/chain/{P}/sources/{V}')
