@@ -21,6 +21,7 @@ diarization 链路因为是单次调用处理整个文件，没有这个问题�
 （绝大多数单集播客/会议录音）完全不受影响。
 """
 
+import math
 import mimetypes
 import os
 import re
@@ -53,12 +54,16 @@ _rate_lock = threading.Lock()
 _rate_until = 0.0
 
 
-def _wait_rate_gate():
+def _wait_rate_gate(deadline=None):
+    """等限流的闸放开。闸要到 deadline（这次调用的耐心上限）之后才开 → 不等了，返回 False。"""
     while True:
         with _rate_lock:
-            left = _rate_until - time.time()
+            until = _rate_until
+        left = until - time.time()
         if left <= 0:
-            return
+            return True
+        if deadline is not None and until > deadline:
+            return False
         time.sleep(min(left, 30))
 
 
@@ -75,7 +80,7 @@ def _rate_wait_seconds(text, retry_after=None):
         return int(m.group(1) or 0) * 3600 + int(m.group(2) or 0) * 60 + float(m.group(3))
     try:
         ra = float(retry_after)
-        if ra > 0:
+        if ra >= 0 and math.isfinite(ra):          # 0 = 现在就能再试
             return ra
     except (TypeError, ValueError):
         pass
@@ -190,7 +195,8 @@ def _call_with_retry(client, uploaded, chunk_path, offset_sec, chunk_seconds):
     rate_deadline = time.time() + _RATE_LIMIT_PATIENCE_SECONDS
     while attempt < _MAX_ATTEMPTS:
         attempt += 1
-        _wait_rate_gate()
+        if not _wait_rate_gate(rate_deadline):
+            raise RuntimeError(f'Gemini 3.5 Transcribe 调用失败: 限流要等的时间超过上限（{last_err}）')
         try:
             resp = requests.post(
                 _INTERACTIONS_URL,

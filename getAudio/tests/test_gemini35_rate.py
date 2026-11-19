@@ -90,6 +90,8 @@ t.check('"retry in 1m5s" → 65', G._rate_wait_seconds(LIMIT % '1m5s') == 65, G.
 t.check('正文没说、有 Retry-After 头 → 用头里的', G._rate_wait_seconds('quota exceeded', '50') == 50)
 t.check('正文说了就以正文为准', G._rate_wait_seconds(LIMIT % '45s', '5') == 45)
 t.check('都没有 → 等一个完整的每分钟窗口（60 秒）', G._rate_wait_seconds('quota exceeded') == 60)
+t.check('Retry-After: 0 → 现在就能再试', G._rate_wait_seconds('quota exceeded', '0') == 0)
+t.check('Retry-After: inf / 负数 → 60', G._rate_wait_seconds('', 'inf') == 60 and G._rate_wait_seconds('', '-5') == 60)
 t.check('Retry-After 不是数字 → 也是 60', G._rate_wait_seconds('', 'Wed, 21 Oct 2026 07:28:00 GMT') == 60)
 
 out, clock, sent = run([Resp(429, 'quota exceeded', {'Retry-After': '50'}), Resp(200)])
@@ -110,6 +112,11 @@ t.check('别的请求也等到闸放开', clock.now - before >= 45, clock.now - 
 out, clock, sent = run([Resp(500, 'boom')] * 3)
 t.check('5xx 试 3 次后失败', isinstance(out, Exception) and len(sent) == 3, (out, len(sent)))
 t.check('5xx 的间隔是 2、5 秒', [round(b - a) for a, b in zip(sent, sent[1:])] == [2, 5], sent)
+
+# 服务端让等的时间比耐心上限（一小时）还长：马上判失败，不让所有线程干等两小时
+out, clock, sent = run([Resp(429, 'quota exceeded', {'Retry-After': '7200'}), Resp(200)])
+t.check('要等两小时：判失败', isinstance(out, Exception) and '429' in str(out), out)
+t.check('没有真去等', clock.now - sent[0] < 60 and len(sent) == 1, (clock.now - sent[0], len(sent)))
 
 # 5. 一直 429：有耐心上限，不会永远等
 G._RATE_LIMIT_PATIENCE_SECONDS = 200
